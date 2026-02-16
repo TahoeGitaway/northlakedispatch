@@ -1,19 +1,30 @@
 import pandas as pd
+import sqlite3
 import folium
 
-INPUT_FILE = "data/properties_geocoded.csv"
+DB_FILE = "data/properties.db"
 OUTPUT_MAP = "map.html"
 
 def main():
-    df = pd.read_csv(INPUT_FILE)
+    # Load data from SQLite
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM properties", conn)
+    conn.close()
 
     # Drop rows without coordinates
     df = df.dropna(subset=["Latitude", "Longitude"])
 
-    # Center map roughly on Tahoe
-    start_location = [39.3279, -120.1833]
-    m = folium.Map(location=start_location, zoom_start=11)
+    if df.empty:
+        print("No valid coordinates found.")
+        return
 
+    # Center map on the average location of properties
+    center_lat = df["Latitude"].mean()
+    center_lng = df["Longitude"].mean()
+
+    m = folium.Map(location=[center_lat, center_lng], zoom_start=11)
+
+    # Add markers
     for _, row in df.iterrows():
         lat = row["Latitude"]
         lng = row["Longitude"]
@@ -24,6 +35,7 @@ def main():
             popup=str(address)
         ).add_to(m)
 
+    # Save map
     m.save(OUTPUT_MAP)
     print(f"Map saved to {OUTPUT_MAP}")
 
