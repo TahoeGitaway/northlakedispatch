@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tahoe Getaways Routing</title>
+
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+        }
+
+        #controls {
+            padding: 12px;
+            background: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+        }
+
+        #searchBox {
+            width: 300px;
+            padding: 6px;
+            font-size: 14px;
+        }
+
+        #results li {
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        #results li:hover {
+            background: #eee;
+        }
+
+        #selectedStopsList li {
+            padding: 4px;
+        }
+
+        #map {
+            height: 80vh;
+        }
+    </style>
+</head>
+
+<body>
+
+<div id="controls">
+    <h3>Tahoe Properties ({{ property_count }})</h3>
+
+    <input id="searchBox" placeholder="Type property name..." />
+    <ul id="results"></ul>
+
+    <h4>Selected Stops</h4>
+    <ul id="selectedStopsList"></ul>
+</div>
+
+<div id="map"></div>
+
+<script>
+    // Map setup
+    var map = L.map('map').setView([39.3279, -120.1833], 11);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18
+    }).addTo(map);
+
+    // Load data from Flask
+    const properties = {{ properties | tojson }};
+    console.log("Loaded properties:", properties);
+
+    // Store markers by property name
+    const markersByName = {};
+
+    // Selected stops array
+    let selectedStops = [];
+
+    // Add markers
+    properties.forEach(function(p) {
+        if (p.lat && p.lng) {
+
+            const marker = L.marker([p.lat, p.lng])
+                .addTo(map)
+                .bindPopup("<b>" + p.name + "</b><br>" + p.address);
+
+            markersByName[p.name] = marker;
+        }
+    });
+
+    // Search UI
+    const searchBox = document.getElementById("searchBox");
+    const resultsList = document.getElementById("results");
+    const selectedList = document.getElementById("selectedStopsList");
+
+    searchBox.addEventListener("input", function () {
+        const query = this.value.toLowerCase();
+        resultsList.innerHTML = "";
+
+        if (query.length < 2) return;
+
+        const matches = properties.filter(p =>
+            p.name.toLowerCase().includes(query)
+        );
+
+        matches.slice(0, 10).forEach(p => {
+            const li = document.createElement("li");
+            li.textContent = p.name;
+
+            li.onclick = function () {
+
+                // Add to selected stops
+                selectedStops.push(p);
+
+                const selectedItem = document.createElement("li");
+                selectedItem.textContent = p.name;
+                selectedList.appendChild(selectedItem);
+
+                // Zoom to marker
+                const marker = markersByName[p.name];
+                if (marker) {
+                    map.setView(marker.getLatLng(), 14);
+                    marker.openPopup();
+                }
+
+                console.log("Selected stops:", selectedStops);
+
+                resultsList.innerHTML = "";
+                searchBox.value = "";
+            };
+
+            resultsList.appendChild(li);
+        });
+    });
+
+</script>
+
+</body>
+</html>
