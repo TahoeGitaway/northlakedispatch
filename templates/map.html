@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Tahoe Getaways Routing</title>
+    <title>Tahoe Routing</title>
 
     <link rel="stylesheet"
           href="https://unpkg.com/leaflet/dist/leaflet.css"/>
@@ -11,128 +11,227 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 0;
+            margin:0;
+            display:flex;
         }
 
-        #controls {
-            padding: 12px;
-            background: #f5f5f5;
-            border-bottom: 1px solid #ddd;
-        }
-
-        #searchBox {
-            width: 300px;
-            padding: 6px;
-            font-size: 14px;
-        }
-
-        #results li {
-            cursor: pointer;
-            padding: 4px;
-        }
-
-        #results li:hover {
-            background: #eee;
-        }
-
-        #selectedStopsList li {
-            padding: 4px;
+        #sidebar {
+            width:340px;
+            padding:15px;
+            background:#f7f7f7;
+            border-right:1px solid #ddd;
+            height:100vh;
+            overflow:auto;
         }
 
         #map {
-            height: 80vh;
+            flex:1;
+            height:100vh;
+        }
+
+        input {
+            width:100%;
+            padding:8px;
+            margin-bottom:8px;
+        }
+
+        button {
+            width:100%;
+            padding:10px;
+            margin-top:10px;
+            background:#e91e63;
+            color:white;
+            border:none;
+            border-radius:6px;
+            cursor:pointer;
+        }
+
+        .suggestion {
+            padding:6px;
+            cursor:pointer;
+            border-bottom:1px solid #ddd;
+        }
+
+        .suggestion:hover {
+            background:#eee;
+        }
+
+        .stopRow {
+            margin-bottom:6px;
+            padding:6px;
+            background:white;
+            border-radius:6px;
         }
     </style>
 </head>
-
 <body>
 
-<div id="controls">
-    <h3>Tahoe Properties ({{ property_count }})</h3>
+<div id="sidebar">
+    <h3>Tahoe Routing</h3>
 
-    <input id="searchBox" placeholder="Type property name..." />
-    <ul id="results"></ul>
+    <input id="searchBox" placeholder="Type property name...">
+    <div id="suggestions"></div>
 
     <h4>Selected Stops</h4>
-    <ul id="selectedStopsList"></ul>
+    <div id="selectedStops"></div>
+
+    <button onclick="optimizeRoute()">Optimize Route</button>
+
+    <h3>Route Order</h3>
+    <ol id="routeList"></ol>
+
+    <p><b>Drive Time:</b> <span id="driveTime">—</span></p>
+    <p><b>Distance:</b> <span id="distance">—</span></p>
 </div>
 
 <div id="map"></div>
 
 <script>
-    // Map setup
+    // Map
     var map = L.map('map').setView([39.3279, -120.1833], 11);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 18
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+        maxZoom:18
     }).addTo(map);
 
-    // Load data from Flask
-    const properties = {{ properties | tojson }};
-    console.log("Loaded properties:", properties);
+    const properties = {{ properties|tojson }};
 
-    // Store markers by property name
-    const markersByName = {};
-
-    // Selected stops array
     let selectedStops = [];
+    let routeLayer = null;
 
-    // Add markers
-    properties.forEach(function(p) {
-        if (p.lat && p.lng) {
+    // Default start location (TG Office)
+    let startLocation = {
+        name: "Tahoe Getaways Office",
+        lat: 39.3279,
+        lng: -120.1833
+    };
 
-            const marker = L.marker([p.lat, p.lng])
+    // Markers
+    properties.forEach(p => {
+        if(p.lat && p.lng){
+            L.marker([p.lat, p.lng])
                 .addTo(map)
-                .bindPopup("<b>" + p.name + "</b><br>" + p.address);
-
-            markersByName[p.name] = marker;
+                .bindPopup(`<b>${p.name}</b><br>${p.address}`);
         }
     });
 
-    // Search UI
+    // Predictive Search
     const searchBox = document.getElementById("searchBox");
-    const resultsList = document.getElementById("results");
-    const selectedList = document.getElementById("selectedStopsList");
+    const suggestions = document.getElementById("suggestions");
 
-    searchBox.addEventListener("input", function () {
-        const query = this.value.toLowerCase();
-        resultsList.innerHTML = "";
+    searchBox.addEventListener("input", function(){
+        let text = this.value.toLowerCase();
+        suggestions.innerHTML = "";
 
-        if (query.length < 2) return;
+        if(text.length < 2) return;
 
-        const matches = properties.filter(p =>
-            p.name.toLowerCase().includes(query)
-        );
+        let matches = properties
+            .filter(p => p.name.toLowerCase().includes(text))
+            .slice(0,10);
 
-        matches.slice(0, 10).forEach(p => {
-            const li = document.createElement("li");
-            li.textContent = p.name;
-
-            li.onclick = function () {
-
-                // Add to selected stops
-                selectedStops.push(p);
-
-                const selectedItem = document.createElement("li");
-                selectedItem.textContent = p.name;
-                selectedList.appendChild(selectedItem);
-
-                // Zoom to marker
-                const marker = markersByName[p.name];
-                if (marker) {
-                    map.setView(marker.getLatLng(), 14);
-                    marker.openPopup();
-                }
-
-                console.log("Selected stops:", selectedStops);
-
-                resultsList.innerHTML = "";
-                searchBox.value = "";
-            };
-
-            resultsList.appendChild(li);
+        matches.forEach(p => {
+            let div = document.createElement("div");
+            div.className = "suggestion";
+            div.innerText = p.name;
+            div.onclick = () => addStop(p);
+            suggestions.appendChild(div);
         });
     });
+
+    function addStop(property){
+
+        if(selectedStops.find(s => s.name === property.name)) return;
+
+        selectedStops.push({
+            name: property.name,
+            lat: property.lat,
+            lng: property.lng,
+            arrival:false
+        });
+
+        renderStops();
+        suggestions.innerHTML="";
+        searchBox.value="";
+    }
+
+    function renderStops(){
+        const container = document.getElementById("selectedStops");
+        container.innerHTML="";
+
+        selectedStops.forEach((s,i)=>{
+            let div = document.createElement("div");
+            div.className="stopRow";
+
+            div.innerHTML = `
+                <b>${s.name}</b><br>
+                Arrival <input type="checkbox" onchange="toggleArrival(${i})">
+                <button onclick="removeStop(${i})">Remove</button>
+            `;
+
+            container.appendChild(div);
+        });
+    }
+
+    function toggleArrival(index){
+        selectedStops[index].arrival =
+            !selectedStops[index].arrival;
+    }
+
+    function removeStop(index){
+        selectedStops.splice(index,1);
+        renderStops();
+    }
+
+    function optimizeRoute(){
+
+        fetch("/optimize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                stops: selectedStops,
+                start: startLocation
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+
+            if (routeLayer) {
+                map.removeLayer(routeLayer);
+            }
+
+            routeLayer = L.geoJSON(data.geometry, {
+                style: {
+                    color: "#ff2da0",
+                    weight: 5
+                }
+            }).addTo(map);
+
+            document.getElementById("driveTime").innerText =
+                (data.duration / 60).toFixed(1) + " minutes";
+
+            document.getElementById("distance").innerText =
+                (data.distance / 1609).toFixed(1) + " miles";
+
+            const list = document.getElementById("routeList");
+            list.innerHTML = "";
+
+            data.ordered_stops.forEach((stop, index) => {
+                const li = document.createElement("li");
+                li.textContent = (index + 1) + ". " + stop.name;
+                list.appendChild(li);
+            });
+
+        })
+        .catch(err => {
+            console.error("Routing error:", err);
+            alert("Routing failed.");
+        });
+    }
 
 </script>
 
