@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 
+
 <div class="flex h-[calc(100vh-72px)]">
 
   <!-- SIDEBAR -->
   <div class="w-96 bg-white shadow-xl p-6 overflow-y-auto">
 
-    <h2 class="text-xl font-bold mb-4">Tahoe Routing</h2>
+    <h2 class="text-xl font-bold mb-4">Tahoe Dispatch</h2>
 
     <!-- START LOCATION -->
     <div class="mb-4 p-3 bg-gray-100 rounded-lg">
@@ -35,7 +36,7 @@
 
     <!-- SEARCH -->
     <input id="searchBox"
-           placeholder="Type property name..."
+           placeholder="Add property..."
            class="w-full border rounded-lg p-2 mb-2">
 
     <div id="suggestions"
@@ -53,6 +54,9 @@
             class="bg-green-600 text-white px-4 py-2 rounded-lg w-full">
       Open in Google Maps
     </button>
+
+    <!-- WARNINGS -->
+    <div id="warningBox" class="mt-4 text-sm hidden p-2 rounded"></div>
 
     <!-- ROUTE OUTPUT -->
     <div class="mt-6">
@@ -80,11 +84,34 @@
 var map = L.map('map').setView([39.3279, -120.1833], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
 
+let routeLayer = null;
+let activeRouteMarkers = [];
+let markers = {};
 const properties = {{ properties|tojson }};
 let selectedStops = [];
-let routeLayer = null;
-let optimizedOrder = [];
-let markers = {};
+
+/* ================= ICONS ================= */
+
+let regularIcon = new L.Icon({
+  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+  iconSize: [25,41],
+  iconAnchor: [12,41]
+});
+
+let checkinIcon = new L.Icon({
+  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+  iconSize: [25,41],
+  iconAnchor: [12,41]
+});
+
+let nearDeadlineIcon = new L.Icon({
+  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+  iconSize: [25,41],
+  iconAnchor: [12,41]
+});
 
 /* ================= START LOCATION ================= */
 
@@ -103,12 +130,6 @@ properties.forEach(p => {
     option.value = p.name;
     option.textContent = p.name;
     startProperty.appendChild(option);
-
-    let marker = L.marker([p.lat, p.lng])
-      .addTo(map)
-      .bindPopup(`<b>${p.name}</b><br>${p.address}`);
-
-    markers[p.name] = marker;
   }
 });
 
@@ -137,31 +158,105 @@ startProperty.addEventListener("change", function(){
 
 /* ================= SEARCH ================= */
 
+/* ================= SEARCH ================= */
+
 const searchBox = document.getElementById("searchBox");
 const suggestions = document.getElementById("suggestions");
 
+let currentSuggestions = [];
+let activeIndex = -1;
+
 searchBox.addEventListener("input", function(){
-  let text = this.value.toLowerCase();
+
+  const text = this.value.toLowerCase().trim();
   suggestions.innerHTML = "";
+  currentSuggestions = [];
+  activeIndex = -1;
 
   if(text.length < 2) return;
 
-  properties
-    .filter(p => p.name.toLowerCase().includes(text))
-    .slice(0,10)
-    .forEach(p => {
-      let div = document.createElement("div");
-      div.className = "p-2 cursor-pointer border-b hover:bg-indigo-100";
-      div.innerText = p.name;
-      div.onclick = () => addStop(p);
-      suggestions.appendChild(div);
-    });
+  currentSuggestions = properties
+    .filter(p => p.name && p.name.toLowerCase().includes(text))
+    .slice(0,10);
+
+  renderSuggestions();
 });
 
-/* ================= STOP MANAGEMENT ================= */
+searchBox.addEventListener("keydown", function(e){
+
+  if(currentSuggestions.length === 0) return;
+
+  if(e.key === "ArrowDown"){
+    e.preventDefault();
+    activeIndex = (activeIndex + 1) % currentSuggestions.length;
+    updateHighlight();
+  }
+
+  else if(e.key === "ArrowUp"){
+    e.preventDefault();
+    activeIndex = (activeIndex - 1 + currentSuggestions.length) % currentSuggestions.length;
+    updateHighlight();
+  }
+
+  else if(e.key === "Enter"){
+    e.preventDefault();
+    if(activeIndex >= 0){
+      addStop(currentSuggestions[activeIndex]);
+      closeSuggestions();
+    }
+  }
+
+  else if(e.key === "Escape"){
+    closeSuggestions();
+  }
+});
+
+function renderSuggestions(){
+  suggestions.innerHTML = "";
+
+  currentSuggestions.forEach((p, index) => {
+
+    const div = document.createElement("div");
+    div.className = "p-2 cursor-pointer border-b hover:bg-indigo-100";
+    div.innerText = p.name;
+
+    div.addEventListener("mouseenter", function(){
+      activeIndex = index;
+      updateHighlight();
+    });
+
+    div.addEventListener("click", function(){
+      addStop(p);
+      closeSuggestions();
+    });
+
+    suggestions.appendChild(div);
+  });
+}
+
+function updateHighlight(){
+
+  const items = suggestions.children;
+
+  for(let i = 0; i < items.length; i++){
+    items[i].classList.remove("bg-indigo-200");
+  }
+
+  if(activeIndex >= 0 && items[activeIndex]){
+    items[activeIndex].classList.add("bg-indigo-200");
+  }
+}
+
+function closeSuggestions(){
+  suggestions.innerHTML = "";
+  searchBox.value = "";
+  currentSuggestions = [];
+  activeIndex = -1;
+}
+
+/* ================= STOPS ================= */
 
 function addStop(property){
-
   if(property.name === startLocation.name) return;
   if(selectedStops.find(s => s.name === property.name)) return;
 
@@ -181,28 +276,24 @@ function renderStops(){
   container.innerHTML = "";
 
   selectedStops.forEach((s,i)=>{
-
     let div = document.createElement("div");
     div.className = "bg-gray-50 p-2 rounded shadow-sm";
 
     div.innerHTML = `
       <div class="font-medium">${s.name}</div>
-
       <label>
         <input type="checkbox"
-               onchange="toggleArrival(${i})"
+               onchange="selectedStops[${i}].arrival = !selectedStops[${i}].arrival"
                ${s.arrival ? "checked" : ""}>
         Check-in
       </label>
-
       <div class="mt-1">
         Service Time:
-        <select onchange="updateServiceTime(${i}, this.value)">
+        <select onchange="selectedStops[${i}].serviceMinutes = parseInt(this.value)">
           ${generateTimeOptions(s.serviceMinutes)}
         </select>
       </div>
-
-      <button onclick="removeStop(${i})"
+      <button onclick="selectedStops.splice(${i},1); renderStops();"
               class="text-red-500 text-sm mt-1">
         Remove
       </button>
@@ -220,20 +311,12 @@ function generateTimeOptions(selected){
   return html;
 }
 
-function updateServiceTime(index, value){
-  selectedStops[index].serviceMinutes = parseInt(value);
-}
+/* ================= ROUTE ================= */
 
-function removeStop(index){
-  selectedStops.splice(index,1);
-  renderStops();
+function clearRouteMarkers(){
+  activeRouteMarkers.forEach(m => map.removeLayer(m));
+  activeRouteMarkers = [];
 }
-
-function toggleArrival(index){
-  selectedStops[index].arrival = !selectedStops[index].arrival;
-}
-
-/* ================= OPTIMIZE ================= */
 
 function optimizeRoute(){
 
@@ -254,13 +337,12 @@ function optimizeRoute(){
       return;
     }
 
+    clearRouteMarkers();
     if(routeLayer) map.removeLayer(routeLayer);
 
-    if(data.geometry){
-      routeLayer = L.geoJSON(data.geometry,{
-        style:{color:"#6366f1",weight:5}
-      }).addTo(map);
-    }
+    routeLayer = L.geoJSON(data.geometry,{
+      style:{color:"#6366f1",weight:5}
+    }).addTo(map);
 
     document.getElementById("totalTime").innerText =
       (data.total_duration/3600).toFixed(2)+" hrs";
@@ -277,49 +359,81 @@ function optimizeRoute(){
     const list = document.getElementById("routeList");
     list.innerHTML = "";
 
-    data.schedule.forEach(stop => {
+    let warningBox = document.getElementById("warningBox");
+    warningBox.className = "mt-4 text-sm hidden p-2 rounded";
+    warningBox.innerHTML = "";
 
-      const li = document.createElement("li");
-      li.className = "p-2 border rounded hover:bg-gray-100 cursor-pointer";
+    if(data.total_duration > 10 * 3600){
+      warningBox.classList.remove("hidden");
+      warningBox.classList.add("shift-warning");
+      warningBox.innerHTML = "⚠ Route exceeds 10-hour shift.";
+    }
+
+    data.schedule.forEach((stop,index)=>{
 
       let departureMinutes = stop.eta_minutes + stop.serviceMinutes;
-      let departureHH = Math.floor(departureMinutes / 60) % 24;
-      let departureMM = departureMinutes % 60;
+      let departureHH = Math.floor(departureMinutes/60)%24;
+      let departureMM = departureMinutes%60;
       let departure = 
         String(departureHH).padStart(2,'0') + ":" +
         String(departureMM).padStart(2,'0');
 
+      const li = document.createElement("li");
+      li.className = "p-2 border rounded cursor-pointer";
+
+      let badge = stop.arrival ? 
+        `<span class="checkin-badge">CHECK-IN</span>` : "";
+
       li.innerHTML = `
-        <div class="font-medium">${stop.name}</div>
+        <div class="font-medium flex items-center">
+          ${index+1}. ${stop.name} ${badge}
+        </div>
         <div class="text-xs text-gray-600">
-          Arrive: ${stop.eta} |
-          Depart: ${departure}
+          Arrive: ${stop.eta} | Depart: ${departure}
         </div>
       `;
 
-      li.addEventListener("mouseenter", function(){
-        if(markers[stop.name]){
-          markers[stop.name].openPopup();
-          map.panTo(markers[stop.name].getLatLng());
+      list.appendChild(li);
+
+      let iconToUse = regularIcon;
+      if(stop.arrival){
+        iconToUse = checkinIcon;
+        if(stop.eta_minutes >= 16*60 - 30){
+          iconToUse = nearDeadlineIcon;
         }
+      }
+
+      let marker = L.marker([stop.lat, stop.lng], {icon: iconToUse})
+        .addTo(map)
+        .bindPopup(`<b>${stop.name}</b><br>
+                    Arrive: ${stop.eta}<br>
+                    Depart: ${departure}`);
+
+      marker.bindTooltip(`${index+1}`,{
+        permanent:true,
+        direction:"top",
+        className:"route-number"
+      });
+
+      activeRouteMarkers.push(marker);
+      markers[stop.name] = marker;
+
+      li.addEventListener("mouseenter", function(){
+        marker.openPopup();
+        map.panTo(marker.getLatLng());
       });
 
       li.addEventListener("mouseleave", function(){
-        if(markers[stop.name]){
-          markers[stop.name].closePopup();
-        }
+        marker.closePopup();
       });
 
-      list.appendChild(li);
     });
 
   });
 }
 
-/* ================= GOOGLE MAPS ================= */
-
 function exportToGoogleMaps(){
-  alert("Optimize route first to export.");
+  alert("Optimize route first.");
 }
 
 </script>

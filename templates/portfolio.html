@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2 class="text-xl font-bold mb-4 p-4">All Properties Map</h2>
+
+<div id="map" style="height:80vh;"></div>
+
+<script>
+var map = L.map('map').setView([39.3279, -120.1833], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
+
+const properties = {{ properties|tojson }};
+
+properties.forEach(p => {
+    L.marker([p.lat, p.lng])
+        .addTo(map)
+        .bindPopup(`<b>${p.name}</b><br>${p.address}`);
+});
+</script>
+
+{% endblock %}

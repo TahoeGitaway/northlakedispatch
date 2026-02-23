@@ -1,0 +1,27 @@
+.route-number {
+  background: white;
+  border: 2px solid #333;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  text-align: center;
+  font-weight: bold;
+  line-height: 18px;
+  font-size: 12px;
+}
+.checkin-badge {
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 10px;
+  border-radius: 4px;
+  background: #16a34a;
+  color: white;
+}
+.deadline-warning {
+  background: #fef2f2;
+  border: 1px solid #dc2626;
+}
+.shift-warning {
+  background: #fff7ed;
+  border: 1px solid #ea580c;
+}
