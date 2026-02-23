@@ -1,3 +1,4 @@
+/* ---------- ROUTE NUMBER ON MAP ---------- */
 .route-number {
   background: white;
   border: 2px solid #333;
@@ -9,19 +10,43 @@
   line-height: 18px;
   font-size: 12px;
 }
+
+/* ---------- CHECK-IN BADGE ---------- */
 .checkin-badge {
   margin-left: 8px;
   padding: 2px 6px;
-  font-size: 10px;
-  border-radius: 4px;
-  background: #16a34a;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  background: #16a34a;   /* green */
   color: white;
 }
+
+/* ---------- LATE BADGE ---------- */
+.late-badge {
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  background: #dc2626;   /* red */
+  color: white;
+}
+
+/* ---------- DEADLINE WARNING BOX ---------- */
 .deadline-warning {
   background: #fef2f2;
   border: 1px solid #dc2626;
+  color: #7f1d1d;
+  padding: 8px;
+  border-radius: 6px;
 }
+
+/* ---------- SHIFT WARNING BOX ---------- */
 .shift-warning {
   background: #fff7ed;
   border: 1px solid #ea580c;
+  color: #9a3412;
+  padding: 8px;
+  border-radius: 6px;
 }

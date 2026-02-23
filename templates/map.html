@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
 
-
 <div class="flex h-[calc(100vh-72px)]">
 
   <!-- SIDEBAR -->
@@ -158,8 +157,6 @@ startProperty.addEventListener("change", function(){
 
 /* ================= SEARCH ================= */
 
-/* ================= SEARCH ================= */
-
 const searchBox = document.getElementById("searchBox");
 const suggestions = document.getElementById("suggestions");
 
@@ -283,7 +280,7 @@ function renderStops(){
       <div class="font-medium">${s.name}</div>
       <label>
         <input type="checkbox"
-               onchange="selectedStops[${i}].arrival = !selectedStops[${i}].arrival"
+               onchange="selectedStops[${i}].arrival = this.checked"
                ${s.arrival ? "checked" : ""}>
         Check-in
       </label>
@@ -369,20 +366,32 @@ function optimizeRoute(){
       warningBox.innerHTML = "⚠ Route exceeds 10-hour shift.";
     }
 
+    // OPTIONAL: if your backend includes late_checkins list, show a warning
+    if(data.late_checkins && data.late_checkins.length > 0){
+      warningBox.classList.remove("hidden");
+      warningBox.classList.add("deadline-warning");
+      warningBox.innerHTML = `⚠ Late check-ins: ${data.late_checkins.join(", ")}`;
+    }
+
     data.schedule.forEach((stop,index)=>{
 
       let departureMinutes = stop.eta_minutes + stop.serviceMinutes;
       let departureHH = Math.floor(departureMinutes/60)%24;
       let departureMM = departureMinutes%60;
-      let departure = 
+      let departure =
         String(departureHH).padStart(2,'0') + ":" +
         String(departureMM).padStart(2,'0');
 
       const li = document.createElement("li");
       li.className = "p-2 border rounded cursor-pointer";
 
-      let badge = stop.arrival ? 
-        `<span class="checkin-badge">CHECK-IN</span>` : "";
+      // ✅ BADGE FIX: use stop.late
+      let badge = "";
+      if(stop.arrival && stop.late){
+        badge = `<span class="late-badge">LATE</span>`;
+      } else if(stop.arrival){
+        badge = `<span class="checkin-badge">CHECK-IN</span>`;
+      }
 
       li.innerHTML = `
         <div class="font-medium flex items-center">
@@ -395,19 +404,20 @@ function optimizeRoute(){
 
       list.appendChild(li);
 
+      // ✅ ICON FIX: use stop.late
       let iconToUse = regularIcon;
-      if(stop.arrival){
-        iconToUse = checkinIcon;
-        if(stop.eta_minutes >= 16*60 - 30){
-          iconToUse = nearDeadlineIcon;
-        }
+      if(stop.arrival && stop.late){
+        iconToUse = nearDeadlineIcon; // red
+      } else if(stop.arrival){
+        iconToUse = checkinIcon;      // green
       }
 
       let marker = L.marker([stop.lat, stop.lng], {icon: iconToUse})
         .addTo(map)
         .bindPopup(`<b>${stop.name}</b><br>
                     Arrive: ${stop.eta}<br>
-                    Depart: ${departure}`);
+                    Depart: ${departure}<br>
+                    ${stop.arrival ? (stop.late ? "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>" : "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>") : ""}`);
 
       marker.bindTooltip(`${index+1}`,{
         permanent:true,
