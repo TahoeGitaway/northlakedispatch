@@ -368,3 +368,10 @@ def optimize():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+
+    # IMPORTANT:
+# If properties_geocoded.csv is updated,
+# you must run: py reload_db.py
+# before running this app.
