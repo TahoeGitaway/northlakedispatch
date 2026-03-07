@@ -88,6 +88,7 @@ let activeRouteMarkers = [];
 let markers = {};
 const properties = {{ properties|tojson }};
 let selectedStops = [];
+let optimizedSchedule = [];
 
 /* ================= ICONS ================= */
 
@@ -116,8 +117,8 @@ let nearDeadlineIcon = new L.Icon({
 
 let startLocation = {
   name: "Tahoe Getaways Office",
-  lat: 39.3279,
-  lng: -120.1833
+  lat: 39.34207,
+  lng: -120.21422
 };
 
 const startMode = document.getElementById("startMode");
@@ -132,14 +133,13 @@ properties.forEach(p => {
   }
 });
 
-// initialize start location from UI
-//if(startMode.value === "office"){
-  //startLocation = {
-    //name: "Tahoe Getaways Office",
-    //lat: 39.3279,
-    //lng: -120.1833
-  //};
-//}
+  if(startMode.value === "office"){
+    startLocation = {
+      name: "Tahoe Getaways Office",
+      lat: 39.34207,
+      lng: -120.21422
+    };
+  }
 
 startMode.addEventListener("change", function(){
   startProperty.classList.toggle("hidden", this.value !== "property");
@@ -147,8 +147,8 @@ startMode.addEventListener("change", function(){
   if(this.value === "office"){
     startLocation = {
       name: "Tahoe Getaways Office",
-      lat: 39.3279,
-      lng: -120.1833
+      lat: 39.34207,
+      lng: -120.21422
     };
   }
 });
@@ -338,6 +338,8 @@ function optimizeRoute(){
   .then(res => res.json())
   .then(data => {
 
+    optimizedSchedule = data.schedule;
+
     if(data.error){
       alert(data.error);
       return;
@@ -460,7 +462,24 @@ function optimizeRoute(){
 }
 
 function exportToGoogleMaps(){
-  alert("Optimize route first.");
+
+  if(!optimizedSchedule.length){
+    alert("Optimize route first.");
+    return;
+  }
+
+  let coords = [];
+  coords.push(`${startLocation.lat},${startLocation.lng}`);
+
+  optimizedSchedule.forEach(stop=>{
+    coords.push(`${stop.lat},${stop.lng}`);
+  });
+
+  const url =
+    "https://www.google.com/maps/dir/" +
+    coords.join("/");
+
+  window.open(url, "_blank");
 }
 
 </script>
