@@ -233,7 +233,7 @@ def optimize():
 
     duration_matrix = resp.json().get("durations")
     if not duration_matrix:
-        return jsonify({"error": "Invalid matrix response"}), 500
+            return jsonify({"error": "Invalid matrix response"}), 500
 
     # SERVICE TIMES (seconds); node 0 is start
     service_times_sec = [0]
@@ -247,8 +247,8 @@ def optimize():
     enforce_deadline = start_minutes < deadline_minutes
     deadline_offset_sec = (deadline_minutes - start_minutes) * 60 if enforce_deadline else None
 
-    # Option 3 behavior:
-    # 1) Try HARD completion-by-4PM for check-ins.
+
+    # 1) HARD completion-by-4PM for check-ins.
     # 2) If infeasible, fallback to SOFT penalties (minimize lateness as much as possible).
     ordered_nodes, arrival_times_sec = None, None
     used_deadline_constraints = False
@@ -280,7 +280,7 @@ def optimize():
             used_soft_penalties = True
 
     if ordered_nodes is None:
-        # final fallback: no deadline logic at all (should be rare)
+        # final fallback: no deadline logic at all 
         ordered_nodes, arrival_times_sec = _solve_route(
             duration_matrix=duration_matrix,
             service_times_sec=service_times_sec,

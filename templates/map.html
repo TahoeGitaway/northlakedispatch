@@ -54,6 +54,11 @@
       Open in Google Maps
     </button>
 
+    <button onclick="reverseStops()"
+        class="bg-gray-600 text-white px-4 py-2 rounded-lg w-full mb-2">
+        Reverse Stops Add the logic for this.
+      </button>
+
     <!-- WARNINGS -->
     <div id="warningBox" class="mt-4 text-sm hidden p-2 rounded"></div>
 
@@ -412,10 +417,18 @@ function optimizeRoute(){
         badge = `<span class="checkin-badge">CHECK-IN</span>`;
       }
 
+
+// MOVE UP OR DOWN MANUALLY, gotta add logic to do manual override in the optimize function
       li.innerHTML = `
         <div class="font-medium flex items-center">
           ${index+1}. ${stop.name} ${badge}
         </div>
+
+        <div class="flex gap-2 text-sm">
+              <button onclick="moveRouteUp(this)">▲</button>
+              <button onclick="moveRouteDown(this)">▼</button>
+            </div>
+
         <div class="text-xs text-gray-600">
           Arrive: ${stop.eta} | Depart: ${departure}
         </div>
