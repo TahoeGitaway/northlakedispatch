@@ -337,6 +337,28 @@ def admin_reset_password(user_id):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  PORTFOLIO  (public — no login required)
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/portfolio")
+def portfolio():
+    conn   = get_db()
+    cursor = conn.execute(
+        'SELECT "Property Name", "Unit Address", Latitude, Longitude FROM properties '
+        'WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL '
+        'ORDER BY "Property Name" ASC'
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    properties = [
+        {"name": r[0], "address": r[1], "lat": float(r[2]), "lng": float(r[3])}
+        for r in rows
+    ]
+    return render_template("portfolio.html", properties=properties)
+
+
+# ══════════════════════════════════════════════════════════════════
 #  HOME
 # ══════════════════════════════════════════════════════════════════
 
@@ -730,19 +752,31 @@ def optimize():
 
 
 # ══════════════════════════════════════════════════════════════════
+#  PORTFOLIO  (public — no login required)
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/portfolio")
+def portfolio():
+    conn   = get_db()
+    cursor = conn.execute(
+        'SELECT "Property Name", "Unit Address", Latitude, Longitude FROM properties '
+        'WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL '
+        'ORDER BY "Property Name" ASC'
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    properties = [
+        {"name": r[0], "address": r[1], "lat": float(r[2]), "lng": float(r[3])}
+        for r in rows
+    ]
+    return render_template("portfolio.html", properties=properties)
+
+
+# ══════════════════════════════════════════════════════════════════
 #  RUN
 # ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    app.run(debug=True)
-
-
-# ── IMPORTANT ────────────────────────────────────────────────────
-# Set these environment variables before running in production:
-#   SECRET_KEY          — random secret string
-#   SENDGRID_API_KEY    — your SendGrid API key
-#   APP_BASE_URL        — e.g. https://yourdomain.com
-#
-# If properties_geocoded.csv is updated, run:
-#   py reload_db.py
-# before running this app.
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
