@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Saved Routes — Tahoe Dispatch{% endblock %}
+{% block content %}
+
+<div class="max-w-4xl mx-auto px-6 py-8">
+    <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
+        <a href="{{ url_for('home') }}"
+           class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                  px-4 py-2 rounded-lg transition-colors">
+            + New Route
+        </a>
+    </div>
+
+    {% if routes %}
+    <div class="space-y-3">
+        {% for route in routes %}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4
+                    flex items-center justify-between gap-4">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="font-semibold text-gray-800 truncate">{{ route.name }}</span>
+                    <span class="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium shrink-0">
+                        {{ route.route_date }}
+                    </span>
+                </div>
+                <div class="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1">
+                    <span>📍 Created by {{ route.created_by_name }}</span>
+                    {% if route.last_edited_by_name and route.last_edited_by_name != route.created_by_name %}
+                    <span>✏️ Last edited by {{ route.last_edited_by_name }}</span>
+                    {% endif %}
+                    <span>🕐 {{ route.updated_at[:16].replace('T', ' ') }} UTC</span>
+                    {% if route.total_duration %}
+                    <span>⏱ {{ "%.1f"|format(route.total_duration / 3600) }} hrs</span>
+                    {% endif %}
+                    {% if route.distance %}
+                    <span>🛣 {{ "%.1f"|format(route.distance / 1609) }} mi</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 shrink-0">
+                <a href="{{ url_for('home') }}?load={{ route.id }}"
+                   class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                          px-3 py-1.5 rounded-lg transition-colors">
+                    Load
+                </a>
+                {% if current_user.is_admin %}
+                <form method="POST"
+                      action="{{ url_for('delete_route', route_id=route.id) }}"
+                      onsubmit="return confirm('Delete \'{{ route.name }}\'? This cannot be undone.')">
+                    <button type="submit"
+                            class="text-red-400 hover:text-red-600 text-sm px-2 py-1.5
+                                   rounded-lg hover:bg-red-50 transition-colors">
+                        Delete
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% else %}
+    <div class="text-center py-20 text-gray-400">
+        <div class="text-5xl mb-4">🗺</div>
+        <p class="text-lg font-medium">No saved routes yet</p>
+        <p class="text-sm mt-1">Optimize a route on the map and save it to see it here.</p>
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}

@@ -1,6 +1,9 @@
+Map · HTML
+Copy
+
 {% extends "base.html" %}
 {% block content %}
-
+ 
 <style>
   /* ── BANANA LOADER ── */
   #loadingOverlay {
@@ -15,19 +18,11 @@
     gap: 12px;
   }
   #loadingOverlay.active { display: flex; }
-
-  #loadingOverlay .banana {
-    font-size: 3.5rem;
-    animation: bananaSpin 0.55s linear infinite;
-    transform-origin: center;
-    filter: drop-shadow(0 4px 12px rgba(0,0,0,0.4));
-  }
-  @keyframes bananaSpin {
-    0%   { transform: rotate(-20deg) scale(1); }
-    25%  { transform: rotate(10deg)  scale(1.15); }
-    50%  { transform: rotate(-20deg) scale(1); }
-    75%  { transform: rotate(10deg)  scale(0.9); }
-    100% { transform: rotate(-20deg) scale(1); }
+ 
+  #loadingOverlay .banana img {
+    width: 120px;
+    image-rendering: pixelated;
+    filter: drop-shadow(0 4px 16px rgba(0,0,0,0.5));
   }
   #loadingOverlay p {
     color: #fff;
@@ -36,7 +31,7 @@
     letter-spacing: 0.04em;
     text-shadow: 0 1px 4px rgba(0,0,0,0.6);
   }
-
+ 
   /* ── BADGES ── */
   .checkin-badge {
     display: inline-block;
@@ -60,11 +55,11 @@
     margin-left: 6px;
     vertical-align: middle;
   }
-
+ 
   /* ── WARNINGS ── */
   .shift-warning    { background:#fef9c3; border:1px solid #ca8a04; color:#92400e; }
   .deadline-warning { background:#fee2e2; border:1px solid #dc2626; color:#991b1b; }
-
+ 
   /* ── ROUTE NUMBER TOOLTIP ── */
   .route-number {
     background: #4f46e5;
@@ -80,11 +75,11 @@
     font-weight: 700;
     box-shadow: 0 1px 4px rgba(0,0,0,0.3);
   }
-
+ 
   /* ── STOP CARD DRAG HINT ── */
   .stop-card { transition: box-shadow 0.15s; }
   .stop-card:hover { box-shadow: 0 2px 8px rgba(99,102,241,0.18); }
-
+ 
   /* ── MOVE BUTTONS ── */
   .move-btn {
     padding: 2px 7px;
@@ -99,26 +94,26 @@
   .move-btn:hover { background: #c7d2fe; }
   .move-btn:disabled { opacity: 0.35; cursor: default; }
 </style>
-
+ 
 <!-- LOADING OVERLAY -->
 <div id="loadingOverlay">
-  <div class="banana">🍌</div>
-  <p>Optimizing your route…</p>
+  <div class="banana"><img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="It's peanut butter jelly time!"></div>
+  <p>It's optimizing time!!</p>
 </div>
-
+ 
 <div class="flex h-[calc(100vh-72px)]">
-
+ 
   <!-- ═══════════════ SIDEBAR ═══════════════ -->
   <div class="w-96 bg-white shadow-xl p-6 overflow-y-auto flex flex-col gap-4">
-
+ 
     <h2 class="text-xl font-bold">Tahoe Dispatch</h2>
-
+ 
     <!-- START LOCATION (office-only for now) -->
     <div class="p-3 bg-gray-100 rounded-lg text-sm text-gray-600">
       <span class="font-medium text-gray-800">Start &amp; End:</span>
       Tahoe Getaways Office
     </div>
-
+ 
     <!-- START TIME -->
     <div>
       <label class="text-sm text-gray-600">Start Time</label>
@@ -126,7 +121,7 @@
              class="w-full border rounded-lg p-2 mt-1">
       <div class="text-xs text-gray-400 mt-1">Check-ins must finish by 4:00 PM</div>
     </div>
-
+ 
     <!-- SEARCH -->
     <div class="relative">
       <input id="searchBox" placeholder="Add property…"
@@ -137,7 +132,7 @@
                   max-h-48 overflow-y-auto shadow-lg hidden">
       </div>
     </div>
-
+ 
     <!-- STOPS LIST -->
     <div>
       <h4 class="font-semibold text-sm mb-2">
@@ -146,7 +141,7 @@
       </h4>
       <div id="selectedStops" class="space-y-2"></div>
     </div>
-
+ 
     <!-- ACTION BUTTONS -->
     <div class="flex flex-col gap-2 pt-2">
       <button id="optimizeBtn" onclick="optimizeRoute()"
@@ -154,7 +149,7 @@
                      rounded-lg w-full font-medium transition-colors">
         Optimize Route
       </button>
-
+ 
       <div class="flex gap-2">
         <button onclick="reverseStops()"
                 class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-3 py-2
@@ -167,16 +162,22 @@
           📍 Google Maps
         </button>
       </div>
+ 
+      <button id="saveRouteBtn" onclick="openSaveModal()"
+              class="hidden bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2
+                     rounded-lg w-full font-medium transition-colors">
+        💾 Save Route
+      </button>
     </div>
-
+ 
     <!-- WARNINGS -->
     <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
-
+ 
     <!-- ROUTE SCHEDULE (shown after optimization) -->
     <div id="scheduleSection" class="hidden">
       <h3 class="font-semibold mb-2">Route Schedule</h3>
       <ol id="routeList" class="space-y-2"></ol>
-
+ 
       <div class="mt-4 text-sm space-y-1 bg-gray-50 rounded-lg p-3">
         <div><b>Total:</b>   <span id="totalTime">—</span></div>
         <div><b>Driving:</b> <span id="drivingTime">—</span></div>
@@ -184,44 +185,83 @@
         <div><b>Distance:</b> <span id="distance">—</span></div>
       </div>
     </div>
-
+ 
   </div><!-- /sidebar -->
-
+ 
   <!-- MAP -->
   <div id="map" class="flex-1"></div>
-
+ 
 </div><!-- /flex -->
-
+ 
+<!-- ═══ SAVE ROUTE MODAL ═══ -->
+<div id="saveModal"
+     class="hidden fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+    <h3 class="font-bold text-lg text-gray-800 mb-4">Save Route</h3>
+ 
+    <div id="saveError" class="hidden mb-3 px-3 py-2 bg-red-100 text-red-700 rounded text-sm"></div>
+    <div id="saveSuccess" class="hidden mb-3 px-3 py-2 bg-green-100 text-green-700 rounded text-sm"></div>
+ 
+    <div class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Route Name</label>
+        <input id="saveRouteName" type="text" placeholder="e.g. Friday Cleans – North Shore"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Route Date</label>
+        <input id="saveRouteDate" type="date"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+    </div>
+ 
+    <div class="flex gap-2 mt-5">
+      <button onclick="submitSaveRoute()"
+              class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                     py-2 rounded-lg text-sm transition-colors">
+        Save
+      </button>
+      <button onclick="closeSaveModal()"
+              class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium
+                     py-2 rounded-lg text-sm transition-colors">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+ 
 <script>
 /* ================================================================
    STATE
 ================================================================ */
 const properties = {{ properties|tojson }};
-
+ 
 let selectedStops     = [];   // pre-optimization stop objects
 let optimizedSchedule = [];   // post-optimization schedule (drives exports)
 let isOptimized       = false;
-
+ 
 let routeLayer        = null;
 let activeRouteMarkers = [];
 let markers           = {};
-
+ 
 let currentSuggestions = [];
 let activeIndex        = -1;
-
+ 
 const startLocation = {
   name: "Tahoe Getaways Office",
   lat:  39.34207,
   lng: -120.21422
 };
-
+ 
 /* ================================================================
    MAP INIT
 ================================================================ */
 const map = L.map('map').setView([39.3279, -120.1833], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
             { maxZoom: 18 }).addTo(map);
-
+ 
 const regularIcon = new L.Icon({
   iconUrl:   "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png",
   shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
@@ -237,38 +277,38 @@ const nearDeadlineIcon = new L.Icon({
   shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
   iconSize: [25,41], iconAnchor: [12,41]
 });
-
+ 
 /* ================================================================
    UNIQUE ID HELPER  (fix for index-based handler bug)
 ================================================================ */
 let _stopIdCounter = 0;
 function makeStopId() { return "stop_" + (++_stopIdCounter); }
-
+ 
 /* ================================================================
    SEARCH
 ================================================================ */
 const searchBox  = document.getElementById("searchBox");
 const suggestions = document.getElementById("suggestions");
-
+ 
 searchBox.addEventListener("input", function () {
   const text = this.value.toLowerCase().trim();
   currentSuggestions = [];
   activeIndex = -1;
-
-  if (text.length < 2) { closeSuggestions(); return; }
-
+ 
+  if (text.length < 2) { closeSuggestions(false); return; }
+ 
   const alreadySelected = new Set(selectedStops.map(s => s.name));
   currentSuggestions = properties
     .filter(p => p.name && p.name.toLowerCase().includes(text)
                         && !alreadySelected.has(p.name))
     .slice(0, 10);
-
+ 
   renderSuggestions();
 });
-
+ 
 searchBox.addEventListener("keydown", function (e) {
   if (!currentSuggestions.length) return;
-
+ 
   if (e.key === "ArrowDown") {
     e.preventDefault();
     activeIndex = (activeIndex + 1) % currentSuggestions.length;
@@ -279,50 +319,50 @@ searchBox.addEventListener("keydown", function (e) {
     updateHighlight();
   } else if (e.key === "Enter") {
     e.preventDefault();
-    if (activeIndex >= 0) { addStop(currentSuggestions[activeIndex]); closeSuggestions(); }
+    if (activeIndex >= 0) { addStop(currentSuggestions[activeIndex]); closeSuggestions(true); }
   } else if (e.key === "Escape") {
-    closeSuggestions();
+    closeSuggestions(false);
   }
 });
-
+ 
 document.addEventListener("click", function (e) {
   if (!suggestions.contains(e.target) && e.target !== searchBox) closeSuggestions();
 });
-
+ 
 function renderSuggestions() {
   suggestions.innerHTML = "";
   if (!currentSuggestions.length) { suggestions.classList.add("hidden"); return; }
   suggestions.classList.remove("hidden");
-
+ 
   currentSuggestions.forEach((p, idx) => {
     const div = document.createElement("div");
     div.className = "p-2 cursor-pointer border-b text-sm hover:bg-indigo-50";
     div.textContent = p.name;
     div.addEventListener("mouseenter", () => { activeIndex = idx; updateHighlight(); });
-    div.addEventListener("click", () => { addStop(p); closeSuggestions(); });
+    div.addEventListener("click", () => { addStop(p); closeSuggestions(true); });
     suggestions.appendChild(div);
   });
 }
-
+ 
 function updateHighlight() {
   [...suggestions.children].forEach((el, i) =>
     el.classList.toggle("bg-indigo-100", i === activeIndex));
 }
-
-function closeSuggestions() {
+ 
+function closeSuggestions(clearInput = false) {
   suggestions.classList.add("hidden");
   suggestions.innerHTML = "";
-  searchBox.value = "";
+  if (clearInput) searchBox.value = "";
   currentSuggestions = [];
   activeIndex = -1;
 }
-
+ 
 /* ================================================================
    STOPS  (stable ID-based, no index baked into handlers)
 ================================================================ */
 function addStop(property) {
   if (selectedStops.find(s => s.name === property.name)) return;
-
+ 
   selectedStops.push({
     _id:            makeStopId(),   // stable identity
     name:           property.name,
@@ -331,11 +371,11 @@ function addStop(property) {
     arrival:        false,
     serviceMinutes: 60
   });
-
+ 
   isOptimized = false;
   renderStops();
 }
-
+ 
 function removeStop(id) {
   selectedStops = selectedStops.filter(s => s._id !== id);
   if (isOptimized) {
@@ -344,7 +384,7 @@ function removeStop(id) {
   isOptimized = false;
   renderStops();
 }
-
+ 
 function setArrival(id, val) {
   const s = selectedStops.find(s => s._id === id);
   if (s) s.arrival = val;
@@ -352,31 +392,31 @@ function setArrival(id, val) {
   const os = optimizedSchedule.find(s => s._id === id);
   if (os) os.arrival = val;
 }
-
+ 
 function setServiceMinutes(id, val) {
   const s = selectedStops.find(s => s._id === id);
   if (s) s.serviceMinutes = val;
   const os = optimizedSchedule.find(s => s._id === id);
   if (os) os.serviceMinutes = val;
 }
-
+ 
 /* Renders the pre-optimization add/edit list */
 function renderStops() {
   const container = document.getElementById("selectedStops");
   const countEl   = document.getElementById("stopCount");
   container.innerHTML = "";
   countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
-
+ 
   if (!selectedStops.length) {
     container.innerHTML = '<p class="text-sm text-gray-400">No stops added yet.</p>';
     return;
   }
-
+ 
   selectedStops.forEach(s => {
     const div = document.createElement("div");
     div.className = "stop-card bg-gray-50 p-2 rounded shadow-sm text-sm";
     div.dataset.id = s._id;
-
+ 
     div.innerHTML = `
       <div class="font-medium text-gray-800 truncate mb-1">${s.name}</div>
       <div class="flex items-center gap-3 flex-wrap">
@@ -397,7 +437,7 @@ function renderStops() {
     container.appendChild(div);
   });
 }
-
+ 
 function generateTimeOptions(selected) {
   let html = "";
   for (let m = 15; m <= 240; m += 15) {
@@ -405,7 +445,7 @@ function generateTimeOptions(selected) {
   }
   return html;
 }
-
+ 
 /* ================================================================
    REVERSE STOPS
    Works on whichever list is "active":
@@ -422,7 +462,7 @@ function reverseStops() {
     renderStops();
   }
 }
-
+ 
 /* ================================================================
    MANUAL MOVE (post-optimization only)
 ================================================================ */
@@ -435,7 +475,7 @@ function moveRouteUp(btn) {
   renderSchedule();
   redrawRouteOnMap();
 }
-
+ 
 function moveRouteDown(btn) {
   const li   = btn.closest("li");
   const list = document.getElementById("routeList");
@@ -446,7 +486,7 @@ function moveRouteDown(btn) {
   renderSchedule();
   redrawRouteOnMap();
 }
-
+ 
 /* ================================================================
    ROUTE MARKERS
 ================================================================ */
@@ -455,23 +495,23 @@ function clearRouteMarkers() {
   activeRouteMarkers = [];
   markers = {};
 }
-
+ 
 /* Redraws the OSRM polyline + numbered markers from optimizedSchedule */
 async function redrawRouteOnMap() {
   clearRouteMarkers();
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-
+ 
   // Start marker
   const startMarker = L.marker([startLocation.lat, startLocation.lng], { icon: regularIcon })
     .addTo(map)
     .bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
   activeRouteMarkers.push(startMarker);
-
+ 
   // Re-fetch OSRM geometry for current order
   const locs = [startLocation, ...optimizedSchedule];
   const coordStr = locs.map(s => `${s.lng},${s.lat}`).join(";");
   const routeUrl = `http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
-
+ 
   try {
     const resp  = await fetch(routeUrl);
     const rdata = await resp.json();
@@ -480,16 +520,16 @@ async function redrawRouteOnMap() {
       routeLayer = L.geoJSON(geo, { style: { color: "#6366f1", weight: 5 } }).addTo(map);
     }
   } catch (_) { /* map still usable without polyline */ }
-
+ 
   // Stop markers
   optimizedSchedule.forEach((stop, index) => {
     let icon = regularIcon;
     if (stop.arrival && stop.late)    icon = nearDeadlineIcon;
     else if (stop.arrival)            icon = checkinIcon;
-
+ 
     const depMin = stop.eta_minutes + stop.serviceMinutes;
     const departure = `${String(Math.floor(depMin/60)%24).padStart(2,'0')}:${String(depMin%60).padStart(2,'0')}`;
-
+ 
     const marker = L.marker([stop.lat, stop.lng], { icon })
       .addTo(map)
       .bindPopup(`<b>${stop.name}</b><br>
@@ -500,36 +540,36 @@ async function redrawRouteOnMap() {
               ? "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>"
               : "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>")
           : ""}`);
-
+ 
     marker.bindTooltip(`${index + 1}`, {
       permanent: true, direction: "top", className: "route-number"
     });
-
+ 
     activeRouteMarkers.push(marker);
     markers[stop.name] = marker;
   });
 }
-
+ 
 /* ================================================================
    RENDER SCHEDULE  (the post-optimization stop list)
 ================================================================ */
 function renderSchedule() {
   const list = document.getElementById("routeList");
   list.innerHTML = "";
-
+ 
   optimizedSchedule.forEach((stop, index) => {
     const depMin  = stop.eta_minutes + stop.serviceMinutes;
     const depHH   = String(Math.floor(depMin / 60) % 24).padStart(2, '0');
     const depMM   = String(depMin % 60).padStart(2, '0');
     const departure = `${depHH}:${depMM}`;
-
+ 
     let badge = "";
     if (stop.arrival && stop.late)  badge = `<span class="late-badge">LATE</span>`;
     else if (stop.arrival)          badge = `<span class="checkin-badge">CHECK-IN</span>`;
-
+ 
     const li = document.createElement("li");
     li.className = "p-2 border rounded bg-white hover:bg-indigo-50 transition-colors cursor-pointer";
-
+ 
     li.innerHTML = `
       <div class="flex items-center justify-between">
         <div class="font-medium text-sm flex items-center gap-1">
@@ -548,7 +588,7 @@ function renderSchedule() {
         Arrive: ${stop.eta} &nbsp;|&nbsp; Depart: ${departure}
       </div>
     `;
-
+ 
     // Hover → pan map & open popup
     li.addEventListener("mouseenter", () => {
       const m = markers[stop.name];
@@ -558,21 +598,21 @@ function renderSchedule() {
       const m = markers[stop.name];
       if (m) m.closePopup();
     });
-
+ 
     list.appendChild(li);
   });
 }
-
+ 
 /* ================================================================
    OPTIMIZE  (calls backend, populates optimizedSchedule)
 ================================================================ */
 function optimizeRoute() {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
-
+ 
   // Show banana 🍌
   document.getElementById("loadingOverlay").classList.add("active");
   document.getElementById("optimizeBtn").disabled = true;
-
+ 
   // Convert selectedStops to the payload shape backend expects
   const payload = {
     stops: selectedStops.map(s => ({
@@ -585,7 +625,7 @@ function optimizeRoute() {
     start:     startLocation,
     startTime: document.getElementById("startTime").value
   };
-
+ 
   fetch("/optimize", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
@@ -593,71 +633,76 @@ function optimizeRoute() {
   })
   .then(res => res.json())
   .then(data => {
-
+ 
     // Hide banana
     document.getElementById("loadingOverlay").classList.remove("active");
     document.getElementById("optimizeBtn").disabled = false;
-
+ 
     if (data.error) { alert(data.error); return; }
-
+ 
     // Attach stable _id to each schedule entry by matching name
     // (backend returns stops in optimized order)
     optimizedSchedule = data.schedule.map(entry => {
       const original = selectedStops.find(s => s.name === entry.name);
       return { ...entry, _id: original?._id || makeStopId() };
     });
-
+ 
     isOptimized = true;
-
+ 
     // Stats
     document.getElementById("totalTime").textContent   = (data.total_duration  / 3600).toFixed(2) + " hrs";
     document.getElementById("drivingTime").textContent = (data.driving_duration / 3600).toFixed(2) + " hrs";
     document.getElementById("serviceTime").textContent = (data.service_duration / 3600).toFixed(2) + " hrs";
     document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
-
+ 
     // Warnings
     const warningBox = document.getElementById("warningBox");
     warningBox.className = "text-sm hidden p-2 rounded";
     warningBox.innerHTML = "";
-
+ 
     const warnings = [];
     if (data.total_duration > 10 * 3600)
       warnings.push("⚠ Route exceeds 10-hour shift.");
     if (data.late_checkins?.length)
       warnings.push(`⚠ Late check-ins: ${data.late_checkins.join(", ")}`);
-
+ 
     if (warnings.length) {
       warningBox.classList.remove("hidden");
       warningBox.classList.add(data.late_checkins?.length ? "deadline-warning" : "shift-warning");
       warningBox.innerHTML = warnings.join("<br>");
     }
-
-    // Show schedule panel
+ 
+    // Show schedule panel + save button
     document.getElementById("scheduleSection").classList.remove("hidden");
-
+    document.getElementById("saveRouteBtn").classList.remove("hidden");
+    // Default the date picker to today for convenience (user can change)
+    if (!document.getElementById("saveRouteDate").value) {
+      document.getElementById("saveRouteDate").value = new Date().toISOString().split("T")[0];
+    }
+ 
     // Draw map
     clearRouteMarkers();
     if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-
+ 
     routeLayer = L.geoJSON(data.geometry, {
       style: { color: "#6366f1", weight: 5 }
     }).addTo(map);
-
+ 
     // Start marker
     const startMarker = L.marker([startLocation.lat, startLocation.lng], { icon: regularIcon })
       .addTo(map)
       .bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
     activeRouteMarkers.push(startMarker);
-
+ 
     // Stop markers
     optimizedSchedule.forEach((stop, index) => {
       let icon = regularIcon;
       if (stop.arrival && stop.late)  icon = nearDeadlineIcon;
       else if (stop.arrival)          icon = checkinIcon;
-
+ 
       const depMin    = stop.eta_minutes + stop.serviceMinutes;
       const departure = `${String(Math.floor(depMin/60)%24).padStart(2,'0')}:${String(depMin%60).padStart(2,'0')}`;
-
+ 
       const marker = L.marker([stop.lat, stop.lng], { icon })
         .addTo(map)
         .bindPopup(`<b>${stop.name}</b><br>
@@ -668,15 +713,15 @@ function optimizeRoute() {
                 ? "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>"
                 : "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>")
             : ""}`);
-
+ 
       marker.bindTooltip(`${index + 1}`, {
         permanent: true, direction: "top", className: "route-number"
       });
-
+ 
       activeRouteMarkers.push(marker);
       markers[stop.name] = marker;
     });
-
+ 
     // Render sidebar list
     renderSchedule();
   })
@@ -686,27 +731,152 @@ function optimizeRoute() {
     alert("Request failed: " + err.message);
   });
 }
-
+ 
 /* ================================================================
-   GOOGLE MAPS EXPORT  (always uses current optimizedSchedule order)
+   SAVE ROUTE MODAL
 ================================================================ */
+let currentRouteId = null;  // set when a saved route is loaded
+ 
+function openSaveModal() {
+  if (!optimizedSchedule.length) { alert("Optimize a route first."); return; }
+  document.getElementById("saveError").classList.add("hidden");
+  document.getElementById("saveSuccess").classList.add("hidden");
+  document.getElementById("saveModal").classList.remove("hidden");
+}
+ 
+function closeSaveModal() {
+  document.getElementById("saveModal").classList.add("hidden");
+}
+ 
+async function submitSaveRoute() {
+  const name      = document.getElementById("saveRouteName").value.trim();
+  const routeDate = document.getElementById("saveRouteDate").value;
+  const errorEl   = document.getElementById("saveError");
+  const successEl = document.getElementById("saveSuccess");
+ 
+  errorEl.classList.add("hidden");
+  successEl.classList.add("hidden");
+ 
+  if (!name)      { errorEl.textContent = "Please enter a route name."; errorEl.classList.remove("hidden"); return; }
+  if (!routeDate) { errorEl.textContent = "Please choose a date.";      errorEl.classList.remove("hidden"); return; }
+ 
+  const stats = {
+    total_duration:   parseFloat(document.getElementById("totalTime").textContent)   * 3600 || 0,
+    driving_duration: parseFloat(document.getElementById("drivingTime").textContent) * 3600 || 0,
+    service_duration: parseFloat(document.getElementById("serviceTime").textContent) * 3600 || 0,
+    distance:         parseFloat(document.getElementById("distance").textContent)    * 1609 || 0,
+  };
+ 
+  const url    = currentRouteId ? `/routes/${currentRouteId}/update` : "/routes/save";
+  const body   = currentRouteId
+    ? { schedule: optimizedSchedule, stats }
+    : { name, route_date: routeDate, schedule: optimizedSchedule, stats };
+ 
+  try {
+    const resp = await fetch(url, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(body),
+    });
+    const data = await resp.json();
+ 
+    if (data.error) {
+      errorEl.textContent = data.error;
+      errorEl.classList.remove("hidden");
+    } else {
+      if (data.id) currentRouteId = data.id;
+      successEl.textContent = "Route saved!";
+      successEl.classList.remove("hidden");
+      setTimeout(closeSaveModal, 1200);
+    }
+  } catch (e) {
+    errorEl.textContent = "Save failed: " + e.message;
+    errorEl.classList.remove("hidden");
+  }
+}
+ 
+/* ================================================================
+   LOAD SAVED ROUTE  (from ?load=<id> query param)
+================================================================ */
+(async function checkLoadParam() {
+  const params  = new URLSearchParams(window.location.search);
+  const loadId  = params.get("load");
+  if (!loadId) return;
+ 
+  // Clean URL without reload
+  window.history.replaceState({}, "", window.location.pathname);
+ 
+  try {
+    const resp = await fetch(`/routes/${loadId}`);
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+ 
+    currentRouteId = data.id;
+ 
+    // Restore optimizedSchedule — attach stable _ids
+    _stopIdCounter = 0;
+    optimizedSchedule = data.schedule.map(s => ({ ...s, _id: makeStopId() }));
+ 
+    // Also populate selectedStops so reverse/re-optimize works
+    selectedStops = optimizedSchedule.map(s => ({
+      _id:            s._id,
+      name:           s.name,
+      lat:            s.lat,
+      lng:            s.lng,
+      arrival:        s.arrival,
+      serviceMinutes: s.serviceMinutes,
+    }));
+ 
+    isOptimized = true;
+ 
+    // Restore stats display
+    if (data.total_duration)
+      document.getElementById("totalTime").textContent   = (data.total_duration   / 3600).toFixed(2) + " hrs";
+    if (data.driving_duration)
+      document.getElementById("drivingTime").textContent = (data.driving_duration / 3600).toFixed(2) + " hrs";
+    if (data.service_duration)
+      document.getElementById("serviceTime").textContent = (data.service_duration / 3600).toFixed(2) + " hrs";
+    if (data.distance)
+      document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
+ 
+    // Show UI panels
+    document.getElementById("scheduleSection").classList.remove("hidden");
+    document.getElementById("saveRouteBtn").classList.remove("hidden");
+    document.getElementById("saveRouteName").value = data.name;
+    document.getElementById("saveRouteDate").value = data.route_date;
+ 
+    renderStops();
+    renderSchedule();
+    await redrawRouteOnMap();
+ 
+  } catch (e) {
+    alert("Could not load route: " + e.message);
+  }
+})();
+ 
+/* Close modal on backdrop click */
+document.getElementById("saveModal").addEventListener("click", function(e) {
+  if (e.target === this) closeSaveModal();
+});
+ 
 function exportToGoogleMaps() {
   if (!optimizedSchedule.length) { alert("Optimize route first."); return; }
-
+ 
   // Google Maps supports max 10 waypoints (origin + dest + 8 stops)
   if (optimizedSchedule.length > 10) {
     alert(`Google Maps supports up to 10 waypoints. You have ${optimizedSchedule.length} stops — the first 10 will be used.`);
   }
-
+ 
   const stops = optimizedSchedule.slice(0, 10);
   const coords = [
     `${startLocation.lat},${startLocation.lng}`,
     ...stops.map(s => `${s.lat},${s.lng}`),
     `${startLocation.lat},${startLocation.lng}` // return to office
   ];
-
+ 
   window.open("https://www.google.com/maps/dir/" + coords.join("/"), "_blank");
 }
 </script>
-
+ 
 {% endblock %}
+ 
