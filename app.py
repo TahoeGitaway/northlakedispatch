@@ -223,6 +223,7 @@ def optimize():
 
     all_locations = [start] + cleaned_stops
 
+
     # OSRM MATRIX
     coords = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
     matrix_url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
