@@ -43,17 +43,20 @@ py app.py
 
 (or however the app is normally launched)
 
+
 ⚠ Important Rules
 
 The CSV is the source of truth.
 
 The SQLite DB is derived from the CSV.
 
-Never manually edit the SQLite database.
+Don't manually edit the SQLite database.
 
 Always reload using reload_db.py.
 
 Keep only one database file: data/properties.db.
+
+
 
 🧠 Why This Architecture
 
@@ -71,12 +74,15 @@ This keeps the system clean, modular, and reproducible.
 To verify DB integrity:
 
 py -c "import sqlite3; c=sqlite3.connect('data/properties.db'); print(c.execute('select count(*) from properties').fetchone()); c.close()"
-🔮 Future Improvements (Optional)
 
-Add timestamp validation (warn if CSV newer than DB)
 
-Automate reload on app startup
+Future Improvements 
+
+Add timestamp validation, add option to upload a new csv rather than do it from the backend to update DB
+
+Change UI saved route area 
+
+Create app by switching app structure entirely 
 
 Migrate to Postgres for production scale
 
-Add route optimization module
