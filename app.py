@@ -12,10 +12,13 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-load_dotenv()  # reads .env from project root into os.environ
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-in-production")
+
+# ── Session lifetime: 12 hours so users don't get kicked mid-shift ──
+app.permanent_session_lifetime = timedelta(hours=12)
 
 # ── Flask-Login setup ──────────────────────────────────────────────
 login_manager = LoginManager(app)
@@ -35,7 +38,8 @@ DEFAULT_START = {
     "lng": -120.1833,
 }
 
-CHECKIN_DEADLINE_HHMM = "16:00"
+CHECKIN_DEADLINE_HHMM          = "16:00"
+PRIORITY_CHECKIN_DEADLINE_HHMM = "12:00"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -74,9 +78,6 @@ def init_db():
         created_at TEXT,
         updated_at TEXT
     )""")
-    # Seed admin user if none exists
-    from werkzeug.security import generate_password_hash
-    from datetime import datetime
     existing = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
     if not existing:
         admin_password = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")
@@ -98,11 +99,11 @@ with app.app_context():
 
 class User(UserMixin):
     def __init__(self, id, email, name, role, is_active):
-        self.id        = id
-        self.email     = email
-        self.name      = name
-        self.role      = role          # "admin" or "user"
-        self._active   = is_active
+        self.id      = id
+        self.email   = email
+        self.name    = name
+        self.role    = role
+        self._active = is_active
 
     @property
     def is_active(self):
@@ -176,6 +177,8 @@ def login():
 
         user = User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
         login_user(user, remember=remember)
+        # Mark session as permanent so the 12-hour lifetime applies
+        session.permanent = True
         return redirect(request.args.get("next") or url_for("home"))
 
     return render_template("login.html")
@@ -209,7 +212,6 @@ def forgot_password():
             _send_reset_email(email, token)
 
         conn.close()
-        # Always show success to avoid user enumeration
         flash("If that email is in our system, a reset link has been sent.", "info")
         return redirect(url_for("login"))
 
@@ -437,17 +439,33 @@ def home():
 @app.route("/routes")
 @login_required
 def saved_routes():
-    conn   = get_db()
-    routes = conn.execute(
-        """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
-                  r.total_duration, r.driving_duration, r.distance,
-                  u.name AS created_by_name,
-                  lu.name AS last_edited_by_name
-           FROM saved_routes r
-           JOIN users u  ON r.created_by  = u.id
-           LEFT JOIN users lu ON r.last_edited_by = lu.id
-           ORDER BY r.route_date DESC, r.updated_at DESC"""
-    ).fetchall()
+    conn = get_db()
+
+    if current_user.is_admin:
+        routes = conn.execute(
+            """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
+                      r.total_duration, r.driving_duration, r.distance,
+                      u.name AS created_by_name,
+                      lu.name AS last_edited_by_name
+               FROM saved_routes r
+               JOIN users u  ON r.created_by      = u.id
+               LEFT JOIN users lu ON r.last_edited_by = lu.id
+               ORDER BY r.route_date DESC, r.updated_at DESC"""
+        ).fetchall()
+    else:
+        routes = conn.execute(
+            """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
+                      r.total_duration, r.driving_duration, r.distance,
+                      u.name AS created_by_name,
+                      lu.name AS last_edited_by_name
+               FROM saved_routes r
+               JOIN users u  ON r.created_by      = u.id
+               LEFT JOIN users lu ON r.last_edited_by = lu.id
+               WHERE r.created_by = ?
+               ORDER BY r.route_date DESC, r.updated_at DESC""",
+            (current_user.id,)
+        ).fetchall()
+
     conn.close()
     return render_template("routes.html", routes=routes)
 
@@ -499,32 +517,53 @@ def save_route():
 @app.route("/routes/<int:route_id>/update", methods=["POST"])
 @login_required
 def update_route(route_id):
-    data     = request.json or {}
-    schedule = data.get("schedule", [])
-    stats    = data.get("stats", {})
+    data       = request.json or {}
+    name       = (data.get("name") or "").strip()
+    route_date = (data.get("route_date") or "").strip()
+    schedule   = data.get("schedule", [])
+    stats      = data.get("stats", {})
 
     if not schedule:
         return jsonify({"error": "No stops to save."}), 400
 
     now  = datetime.utcnow().isoformat()
     conn = get_db()
-    conn.execute(
-        """UPDATE saved_routes SET
-           stops_json = ?, total_duration = ?, driving_duration = ?,
-           service_duration = ?, distance = ?,
-           last_edited_by = ?, updated_at = ?
-           WHERE id = ?""",
-        (
-            json.dumps(schedule),
-            stats.get("total_duration", 0),
-            stats.get("driving_duration", 0),
-            stats.get("service_duration", 0),
-            stats.get("distance", 0),
-            current_user.id,
-            now,
-            route_id,
+
+    if name and route_date:
+        conn.execute(
+            """UPDATE saved_routes SET
+               name = ?, route_date = ?,
+               stops_json = ?, total_duration = ?, driving_duration = ?,
+               service_duration = ?, distance = ?,
+               last_edited_by = ?, updated_at = ?
+               WHERE id = ?""",
+            (
+                name, route_date,
+                json.dumps(schedule),
+                stats.get("total_duration", 0),
+                stats.get("driving_duration", 0),
+                stats.get("service_duration", 0),
+                stats.get("distance", 0),
+                current_user.id, now, route_id,
+            )
         )
-    )
+    else:
+        conn.execute(
+            """UPDATE saved_routes SET
+               stops_json = ?, total_duration = ?, driving_duration = ?,
+               service_duration = ?, distance = ?,
+               last_edited_by = ?, updated_at = ?
+               WHERE id = ?""",
+            (
+                json.dumps(schedule),
+                stats.get("total_duration", 0),
+                stats.get("driving_duration", 0),
+                stats.get("service_duration", 0),
+                stats.get("distance", 0),
+                current_user.id, now, route_id,
+            )
+        )
+
     conn.commit()
     conn.close()
     return jsonify({"success": True})
@@ -576,7 +615,9 @@ def _solve_route(
     duration_matrix,
     service_times_sec,
     checkin_flags,
+    priority_flags,
     deadline_offset_sec=None,
+    priority_deadline_offset_sec=None,
     hard_deadline=False,
     soft_deadline_penalty=False,
 ):
@@ -596,16 +637,23 @@ def _solve_route(
     routing.AddDimension(transit_cb, horizon, horizon, True, "Time")
     time_dim = routing.GetDimensionOrDie("Time")
 
-    if deadline_offset_sec is not None and deadline_offset_sec >= 0:
-        PENALTY = 5000
-        for node_idx in range(1, size):
-            if not bool(checkin_flags[node_idx]):
-                continue
-            idx             = manager.NodeToIndex(node_idx)
-            service_here    = int(service_times_sec[node_idx] or 0)
-            latest_arrival  = int(deadline_offset_sec - service_here)
-            if latest_arrival < 0:
-                latest_arrival = 0
+    PENALTY = 5000
+
+    for node_idx in range(1, size):
+        idx          = manager.NodeToIndex(node_idx)
+        service_here = int(service_times_sec[node_idx] or 0)
+        is_checkin   = bool(checkin_flags[node_idx])
+        is_priority  = bool(priority_flags[node_idx])
+
+        if is_priority and priority_deadline_offset_sec is not None:
+            latest_arrival = max(0, int(priority_deadline_offset_sec - service_here))
+            if hard_deadline:
+                time_dim.CumulVar(idx).SetRange(0, latest_arrival)
+            if soft_deadline_penalty:
+                time_dim.SetCumulVarSoftUpperBound(idx, latest_arrival, PENALTY * 2)
+
+        elif is_checkin and deadline_offset_sec is not None:
+            latest_arrival = max(0, int(deadline_offset_sec - service_here))
             if hard_deadline:
                 time_dim.CumulVar(idx).SetRange(0, latest_arrival)
             if soft_deadline_penalty:
@@ -624,9 +672,9 @@ def _solve_route(
     if not solution:
         return None, None
 
-    index              = routing.Start(0)
-    ordered_nodes      = []
-    arrival_times_sec  = []
+    index             = routing.Start(0)
+    ordered_nodes     = []
+    arrival_times_sec = []
 
     while True:
         node = manager.IndexToNode(index)
@@ -659,7 +707,8 @@ def optimize():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
-    deadline_minutes = hhmm_to_minutes(CHECKIN_DEADLINE_HHMM)
+    deadline_minutes          = hhmm_to_minutes(CHECKIN_DEADLINE_HHMM)
+    priority_deadline_minutes = hhmm_to_minutes(PRIORITY_CHECKIN_DEADLINE_HHMM)
 
     try:
         start = {
@@ -674,11 +723,12 @@ def optimize():
     for s in stops:
         try:
             cleaned_stops.append({
-                "name":           s.get("name"),
-                "lat":            float(s.get("lat")),
-                "lng":            float(s.get("lng")),
-                "arrival":        bool(s.get("arrival", False)),
-                "serviceMinutes": int(s.get("serviceMinutes", 60)),
+                "name":             s.get("name"),
+                "lat":              float(s.get("lat")),
+                "lng":              float(s.get("lng")),
+                "arrival":          bool(s.get("arrival", False)),
+                "priority_checkin": bool(s.get("priority_checkin", False)),
+                "serviceMinutes":   int(s.get("serviceMinutes", 60)),
             })
         except Exception:
             continue
@@ -688,9 +738,9 @@ def optimize():
 
     all_locations = [start] + cleaned_stops
 
-    coords      = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
-    matrix_url  = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
-    resp        = requests.get(matrix_url, timeout=30)
+    coords     = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
+    matrix_url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+    resp       = requests.get(matrix_url, timeout=30)
     if resp.status_code != 200:
         return jsonify({"error": "OSRM matrix request failed"}), 500
 
@@ -700,26 +750,33 @@ def optimize():
 
     service_times_sec = [0] + [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
     checkin_flags     = [False] + [bool(s.get("arrival", False)) for s in cleaned_stops]
+    priority_flags    = [False] + [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
 
-    enforce_deadline    = start_minutes < deadline_minutes
-    deadline_offset_sec = (deadline_minutes - start_minutes) * 60 if enforce_deadline else None
+    enforce_deadline          = start_minutes < deadline_minutes
+    enforce_priority_deadline = start_minutes < priority_deadline_minutes
+
+    deadline_offset_sec          = (deadline_minutes - start_minutes) * 60 if enforce_deadline else None
+    priority_deadline_offset_sec = (priority_deadline_minutes - start_minutes) * 60 if enforce_priority_deadline else None
 
     ordered_nodes, arrival_times_sec = None, None
     used_deadline_constraints = False
     used_soft_penalties       = False
 
-    if enforce_deadline:
+    if enforce_deadline or enforce_priority_deadline:
         ordered_nodes, arrival_times_sec = _solve_route(
-            duration_matrix, service_times_sec, checkin_flags,
-            deadline_offset_sec=deadline_offset_sec, hard_deadline=True
+            duration_matrix, service_times_sec, checkin_flags, priority_flags,
+            deadline_offset_sec=deadline_offset_sec,
+            priority_deadline_offset_sec=priority_deadline_offset_sec,
+            hard_deadline=True
         )
         if ordered_nodes is not None:
             used_deadline_constraints = True
 
     if ordered_nodes is None:
         ordered_nodes, arrival_times_sec = _solve_route(
-            duration_matrix, service_times_sec, checkin_flags,
+            duration_matrix, service_times_sec, checkin_flags, priority_flags,
             deadline_offset_sec=deadline_offset_sec if enforce_deadline else None,
+            priority_deadline_offset_sec=priority_deadline_offset_sec if enforce_priority_deadline else None,
             soft_deadline_penalty=True
         )
         if ordered_nodes is not None:
@@ -727,12 +784,12 @@ def optimize():
 
     if ordered_nodes is None:
         ordered_nodes, arrival_times_sec = _solve_route(
-            duration_matrix, service_times_sec, checkin_flags
+            duration_matrix, service_times_sec, checkin_flags, priority_flags
         )
         if ordered_nodes is None:
             return jsonify({"error": "No solution found"}), 500
 
-    node_arrival_sec      = {}
+    node_arrival_sec = {}
     for pos, node in enumerate(ordered_nodes):
         if node not in node_arrival_sec:
             node_arrival_sec[node] = arrival_times_sec[pos]
@@ -754,29 +811,36 @@ def optimize():
     service_duration = sum(int(s.get("serviceMinutes", 60)) * 60 for s in ordered_stops)
     total_duration   = driving_duration + service_duration
 
-    schedule      = []
-    late_checkins = []
+    schedule               = []
+    late_checkins          = []
+    late_priority_checkins = []
 
     for node in ordered_stop_nodes:
-        stop         = all_locations[node]
-        eta_minutes  = start_minutes + int(node_arrival_sec.get(node, 0) // 60)
-        service_min  = int(stop.get("serviceMinutes", 60))
-        finish_min   = eta_minutes + service_min
-        is_checkin   = bool(stop.get("arrival", False))
-        is_late      = is_checkin and finish_min > deadline_minutes
+        stop             = all_locations[node]
+        eta_minutes      = start_minutes + int(node_arrival_sec.get(node, 0) // 60)
+        service_min      = int(stop.get("serviceMinutes", 60))
+        finish_min       = eta_minutes + service_min
+        is_checkin       = bool(stop.get("arrival", False))
+        is_priority      = bool(stop.get("priority_checkin", False))
+        is_late          = is_checkin and finish_min > deadline_minutes
+        is_priority_late = is_priority and finish_min > priority_deadline_minutes
 
         if is_late:
             late_checkins.append(stop.get("name"))
+        if is_priority_late:
+            late_priority_checkins.append(stop.get("name"))
 
         schedule.append({
-            "name":           stop.get("name"),
-            "arrival":        is_checkin,
-            "late":           is_late,
-            "serviceMinutes": service_min,
-            "eta":            minutes_to_hhmm(eta_minutes),
-            "eta_minutes":    eta_minutes,
-            "lat":            float(stop.get("lat")),
-            "lng":            float(stop.get("lng")),
+            "name":             stop.get("name"),
+            "arrival":          is_checkin,
+            "priority_checkin": is_priority,
+            "late":             is_late,
+            "priority_late":    is_priority_late,
+            "serviceMinutes":   service_min,
+            "eta":              minutes_to_hhmm(eta_minutes),
+            "eta_minutes":      eta_minutes,
+            "lat":              float(stop.get("lat")),
+            "lng":              float(stop.get("lng")),
         })
 
     return jsonify({
@@ -788,17 +852,13 @@ def optimize():
         "ordered_stops":              ordered_stops,
         "start_time":                 start_time_hhmm,
         "checkin_deadline":           CHECKIN_DEADLINE_HHMM,
+        "priority_checkin_deadline":  PRIORITY_CHECKIN_DEADLINE_HHMM,
         "schedule":                   schedule,
         "late_checkins":              late_checkins,
+        "late_priority_checkins":     late_priority_checkins,
         "deadline_constraints_used":  used_deadline_constraints,
         "soft_penalties_used":        used_soft_penalties,
     })
-
-
-# ══════════════════════════════════════════════════════════════════
-#  PORTFOLIO  (public — no login required)
-# ══════════════════════════════════════════════════════════════════
-
 
 
 # ══════════════════════════════════════════════════════════════════

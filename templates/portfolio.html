@@ -1,21 +1,135 @@
 {% extends "base.html" %}
+{% block title %}Properties — Tahoe Dispatch{% endblock %}
 {% block content %}
 
-<h2 class="text-xl font-bold mb-4 p-4">All Properties Map</h2>
+<style>
+  /* Property count badge */
+  .prop-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #e0e7ff;
+    color: #3730a3;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 999px;
+    vertical-align: middle;
+    margin-left: 8px;
+  }
 
-<div id="map" style="height:80vh;"></div>
+  /* Sidebar list items */
+  .prop-item {
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.1s, border-color 0.1s;
+    font-size: 0.82rem;
+  }
+  .prop-item:hover {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+  }
+  .prop-item.active {
+    background: #e0e7ff;
+    border-color: #818cf8;
+  }
+  .prop-item .prop-name {
+    font-weight: 600;
+    color: #1e1b4b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .prop-item .prop-addr {
+    color: #6b7280;
+    font-size: 0.75rem;
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+</style>
+
+<div class="flex h-[calc(100vh-72px)]">
+
+  <!-- ── SIDEBAR ── -->
+  <div class="w-80 bg-white shadow-xl flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <div class="p-4 border-b">
+      <h2 class="text-lg font-bold text-gray-800">
+        All Properties
+        <span class="prop-count">{{ properties|length }}</span>
+      </h2>
+      <!-- Search filter -->
+      <input id="propSearch" type="text" placeholder="Filter properties…"
+             class="mt-3 w-full border rounded-lg px-3 py-1.5 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400"
+             oninput="filterProps(this.value)">
+    </div>
+
+    <!-- List -->
+    <div id="propList" class="flex-1 overflow-y-auto p-2 space-y-1">
+      {% for p in properties %}
+      <div class="prop-item"
+           onclick="focusProp({{ p.lat }}, {{ p.lng }}, '{{ p.name|e }}', '{{ p.address|e }}')"
+           data-name="{{ p.name|lower }}" data-addr="{{ p.address|lower }}">
+        <div class="prop-name">{{ p.name }}</div>
+        <div class="prop-addr">{{ p.address }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+  </div>
+
+  <!-- ── MAP ── -->
+  <div id="map" class="flex-1"></div>
+
+</div>
 
 <script>
-var map = L.map('map').setView([39.3279, -120.1833], 11);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
-
 const properties = {{ properties|tojson }};
+let activeMarker = null;
+let markers      = {};
 
+// Init map
+const map = L.map('map').setView([39.3279, -120.1833], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+
+// Add all markers
 properties.forEach(p => {
-    L.marker([p.lat, p.lng])
-        .addTo(map)
-        .bindPopup(`<b>${p.name}</b><br>${p.address}`);
+  const m = L.marker([p.lat, p.lng])
+    .addTo(map)
+    .bindPopup(`<b>${p.name}</b><br><span style="color:#6b7280;font-size:0.85em">${p.address}</span>`);
+  markers[p.name] = m;
 });
+
+// Click a sidebar item → pan + open popup + highlight row
+function focusProp(lat, lng, name, address) {
+  map.flyTo([lat, lng], 15, { duration: 0.8 });
+  if (markers[name]) {
+    markers[name].openPopup();
+  }
+  // Highlight active row
+  document.querySelectorAll('.prop-item').forEach(el => el.classList.remove('active'));
+  const row = [...document.querySelectorAll('.prop-item')]
+    .find(el => el.dataset.name === name.toLowerCase());
+  if (row) {
+    row.classList.add('active');
+    row.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Filter sidebar list
+function filterProps(query) {
+  const q = query.toLowerCase().trim();
+  document.querySelectorAll('.prop-item').forEach(el => {
+    const match = !q || el.dataset.name.includes(q) || el.dataset.addr.includes(q);
+    el.style.display = match ? '' : 'none';
+  });
+}
 </script>
 
 {% endblock %}
