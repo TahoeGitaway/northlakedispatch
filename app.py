@@ -80,6 +80,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         route_date TEXT,
+        assigned_to TEXT,
         stops_json TEXT,
         total_duration REAL,
         driving_duration REAL,
@@ -90,6 +91,11 @@ def init_db():
         created_at TEXT,
         updated_at TEXT
     )""")
+    # Safe migration: add assigned_to column if it doesn't exist yet
+    try:
+        conn.execute("ALTER TABLE saved_routes ADD COLUMN assigned_to TEXT")
+    except Exception:
+        pass  # column already exists — fine
 
     existing = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
     if not existing:
@@ -671,10 +677,11 @@ def saved_routes():
 def save_route():
     data = request.json or {}
 
-    name       = (data.get("name") or "").strip()
-    route_date = (data.get("route_date") or "").strip()
-    schedule   = data.get("schedule", [])
-    stats      = data.get("stats", {})
+    name        = (data.get("name") or "").strip()
+    assigned_to = (data.get("assigned_to") or "").strip()
+    route_date  = (data.get("route_date") or "").strip()
+    schedule    = data.get("schedule", [])
+    stats       = data.get("stats", {})
 
     if not name:
         return jsonify({"error": "Route name is required."}), 400
@@ -687,11 +694,11 @@ def save_route():
     conn = get_db()
     cursor = conn.execute(
         """INSERT INTO saved_routes
-           (name, route_date, stops_json, total_duration, driving_duration,
+           (name, assigned_to, route_date, stops_json, total_duration, driving_duration,
             service_duration, distance, created_by, last_edited_by, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            name, route_date, json.dumps(schedule),
+            name, assigned_to or None, route_date, json.dumps(schedule),
             stats.get("total_duration", 0), stats.get("driving_duration", 0),
             stats.get("service_duration", 0), stats.get("distance", 0),
             current_user.id, current_user.id, now, now,
@@ -707,10 +714,11 @@ def save_route():
 @login_required
 def update_route(route_id):
     data       = request.json or {}
-    name       = (data.get("name") or "").strip()
-    route_date = (data.get("route_date") or "").strip()
-    schedule   = data.get("schedule", [])
-    stats      = data.get("stats", {})
+    name        = (data.get("name") or "").strip()
+    assigned_to = (data.get("assigned_to") or "").strip()
+    route_date  = (data.get("route_date") or "").strip()
+    schedule    = data.get("schedule", [])
+    stats       = data.get("stats", {})
 
     if not schedule:
         return jsonify({"error": "No stops to save."}), 400
@@ -721,12 +729,12 @@ def update_route(route_id):
     if name and route_date:
         conn.execute(
             """UPDATE saved_routes SET
-               name = ?, route_date = ?,
+               name = ?, assigned_to = ?, route_date = ?,
                stops_json = ?, total_duration = ?, driving_duration = ?,
                service_duration = ?, distance = ?,
                last_edited_by = ?, updated_at = ?
                WHERE id = ?""",
-            (name, route_date, json.dumps(schedule),
+            (name, assigned_to or None, route_date, json.dumps(schedule),
              stats.get("total_duration", 0), stats.get("driving_duration", 0),
              stats.get("service_duration", 0), stats.get("distance", 0),
              current_user.id, now, route_id)
@@ -766,6 +774,7 @@ def load_route(route_id):
     return jsonify({
         "id":               row["id"],
         "name":             row["name"],
+        "assigned_to":      row["assigned_to"] or "",
         "route_date":       row["route_date"],
         "schedule":         schedule,
         "total_duration":   row["total_duration"],
@@ -1076,7 +1085,7 @@ def view_route(route_id):
     """Public read-only route view. No login needed — safe to share via URL."""
     conn = get_db()
     row  = conn.execute(
-        """SELECT r.id, r.name, r.route_date, r.stops_json,
+        """SELECT r.id, r.name, r.assigned_to, r.route_date, r.stops_json,
                   r.total_duration, r.driving_duration, r.distance,
                   u.name AS created_by_name
            FROM saved_routes r
@@ -1091,16 +1100,30 @@ def view_route(route_id):
 
     schedule = json.loads(row["stops_json"])
     return render_template("view_route.html",
-        route_id       = row["id"],
-        route_name     = row["name"],
-        route_date     = row["route_date"],
-        schedule       = schedule,
-        total_duration = row["total_duration"],
+        route_id         = row["id"],
+        route_name       = row["name"],
+        assigned_to      = row["assigned_to"] or "",
+        route_date       = row["route_date"],
+        schedule         = schedule,
+        total_duration   = row["total_duration"],
         driving_duration = row["driving_duration"],
-        distance       = row["distance"],
-        created_by     = row["created_by_name"],
-        error          = None,
+        distance         = row["distance"],
+        created_by       = row["created_by_name"],
+        error            = None,
     )
+
+# ══════════════════════════════════════════════════════════════════
+#  DEBUG — TEMPORARY DB DOWNLOAD (admin only, remove if needed)
+# ══════════════════════════════════════════════════════════════════
+
+from flask import send_file as _send_file
+
+@app.route("/admin/download-db")
+@login_required
+@admin_required
+def download_db():
+    return _send_file(DB_PATH, as_attachment=True, download_name="properties.db")
+
 
 # ══════════════════════════════════════════════════════════════════
 #  RUN

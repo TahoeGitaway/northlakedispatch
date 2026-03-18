@@ -143,6 +143,24 @@
       <span class="font-medium text-gray-800">Start &amp; End:</span> Tahoe Getaways Office
     </div>
 
+    <!-- ROUTE INFO — filled early, carries through to save and public view -->
+    <div class="space-y-2">
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Name</label>
+        <input id="routeNameField" type="text"
+               placeholder="e.g. Friday Cleans – North Shore"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Assigned To</label>
+        <input id="assignedToField" type="text"
+               placeholder="e.g. Sarah"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+    </div>
+
     <div>
       <label class="text-sm text-gray-600">Start Time</label>
       <input type="time" id="startTime" value="09:00" class="w-full border rounded-lg p-2 mt-1">
@@ -261,9 +279,16 @@
     <div id="saveError"   class="hidden mb-3 px-3 py-2 bg-red-100 text-red-700 rounded text-sm"></div>
     <div id="saveSuccess" class="hidden mb-3 px-3 py-2 bg-green-100 text-green-700 rounded text-sm"></div>
     <div class="space-y-3">
+      <!-- Route name is pre-filled from the sidebar field -->
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Route Name</label>
         <input id="saveRouteName" type="text" placeholder="e.g. Friday Cleans – North Shore"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Assigned To</label>
+        <input id="saveAssignedTo" type="text" placeholder="e.g. Sarah"
                class="w-full border rounded-lg px-3 py-2 text-sm
                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
       </div>
@@ -765,8 +790,11 @@ function restartRoute() {
   document.getElementById("scheduleSection").classList.add("hidden");
   document.getElementById("saveRouteBtn").classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
-  document.getElementById("saveRouteName").value = "";
-  document.getElementById("saveRouteDate").value = "";
+  document.getElementById("saveRouteName").value  = "";
+  document.getElementById("saveAssignedTo").value  = "";
+  document.getElementById("saveRouteDate").value   = "";
+  document.getElementById("routeNameField").value  = "";
+  document.getElementById("assignedToField").value = "";
   ["totalTime","drivingTime","serviceTime","distance"].forEach(id =>
     document.getElementById(id).textContent = "—");
 }
@@ -1054,13 +1082,21 @@ function openSaveModal() {
   if (!optimizedSchedule.filter(s => !s.isLunch).length) { alert("Optimize a route first."); return; }
   document.getElementById("saveError").classList.add("hidden");
   document.getElementById("saveSuccess").classList.add("hidden");
+  // Pre-fill from sidebar fields
+  const sidebarName = document.getElementById("routeNameField").value.trim();
+  const sidebarAssigned = document.getElementById("assignedToField").value.trim();
+  if (sidebarName && !document.getElementById("saveRouteName").value)
+    document.getElementById("saveRouteName").value = sidebarName;
+  if (sidebarAssigned && !document.getElementById("saveAssignedTo").value)
+    document.getElementById("saveAssignedTo").value = sidebarAssigned;
   document.getElementById("saveModal").classList.remove("hidden");
 }
 function closeSaveModal() { document.getElementById("saveModal").classList.add("hidden"); }
 
 async function submitSaveRoute() {
-  const name      = document.getElementById("saveRouteName").value.trim();
-  const routeDate = document.getElementById("saveRouteDate").value;
+  const name       = document.getElementById("saveRouteName").value.trim();
+  const assignedTo = document.getElementById("saveAssignedTo").value.trim();
+  const routeDate  = document.getElementById("saveRouteDate").value;
   const errorEl   = document.getElementById("saveError");
   const successEl = document.getElementById("saveSuccess");
   errorEl.classList.add("hidden"); successEl.classList.add("hidden");
@@ -1074,7 +1110,7 @@ async function submitSaveRoute() {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, route_date:routeDate, schedule:real, stats:lastStats })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats })
     });
     const ct = res.headers.get("content-type") || "";
     if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
@@ -1134,8 +1170,11 @@ async function submitSaveRoute() {
 
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
-    document.getElementById("saveRouteName").value = data.name;
-    document.getElementById("saveRouteDate").value = data.route_date;
+    document.getElementById("saveRouteName").value  = data.name;
+    document.getElementById("saveAssignedTo").value  = data.assigned_to || "";
+    document.getElementById("saveRouteDate").value   = data.route_date;
+    document.getElementById("routeNameField").value  = data.name;
+    document.getElementById("assignedToField").value = data.assigned_to || "";
 
     // Recalculate applies lunch shift correctly on load too
     await recalculateTimesFromOrder();
