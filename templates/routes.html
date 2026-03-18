@@ -2,72 +2,175 @@
 {% block title %}Saved Routes — Tahoe Dispatch{% endblock %}
 {% block content %}
 
-<div class="max-w-4xl mx-auto px-6 py-8">
-    <div class="flex items-center justify-between mb-6">
-        <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
-        <a href="{{ url_for('home') }}"
-           class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
-                  px-4 py-2 rounded-lg transition-colors">
-            + New Route
-        </a>
-    </div>
+<div class="max-w-3xl mx-auto px-6 py-8">
 
-    {% if routes %}
-    <div class="space-y-3">
-        {% for route in routes %}
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4
-                    flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                    <span class="font-semibold text-gray-800 truncate">{{ route.name }}</span>
-                    <span class="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium shrink-0">
-                        {{ route.route_date }}
-                    </span>
-                </div>
-                <div class="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1">
-                    <span>📍 Created by {{ route.created_by_name }}</span>
-                    {% if route.last_edited_by_name and route.last_edited_by_name != route.created_by_name %}
-                    <span>✏️ Last edited by {{ route.last_edited_by_name }}</span>
-                    {% endif %}
-                    <span>🕐 {{ route.updated_at[:16].replace('T', ' ') }} UTC</span>
-                    {% if route.total_duration %}
-                    <span>⏱ {{ "%.1f"|format(route.total_duration / 3600) }} hrs</span>
-                    {% endif %}
-                    {% if route.distance %}
-                    <span>🛣 {{ "%.1f"|format(route.distance / 1609) }} mi</span>
-                    {% endif %}
-                </div>
-            </div>
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
+    <a href="{{ url_for('home') }}"
+       class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+              px-4 py-2 rounded-lg transition-colors">
+      + New Route
+    </a>
+  </div>
 
-            <div class="flex items-center gap-2 shrink-0">
-                <a href="{{ url_for('home') }}?load={{ route.id }}"
-                   class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
-                          px-3 py-1.5 rounded-lg transition-colors">
-                    Load
-                </a>
-                {% if current_user.is_admin %}
-                <form method="POST"
-                      action="{{ url_for('delete_route', route_id=route.id) }}"
-                      onsubmit="return confirm('Delete \'{{ route.name }}\'? This cannot be undone.')">
-                    <button type="submit"
-                            class="text-red-400 hover:text-red-600 text-sm px-2 py-1.5
-                                   rounded-lg hover:bg-red-50 transition-colors">
-                        Delete
-                    </button>
-                </form>
-                {% endif %}
+  {% if routes %}
+
+  {# ── Group routes by route_date ── #}
+  {% set ns = namespace(current_date=None) %}
+
+  {# Build day groups in Jinja #}
+  {% set day_groups = {} %}
+  {% for route in routes %}
+    {% set d = route.route_date or "No Date" %}
+    {% if d not in day_groups %}
+      {% set _ = day_groups.update({d: []}) %}
+    {% endif %}
+    {% set _ = day_groups[d].append(route) %}
+  {% endfor %}
+
+  <div class="space-y-3" id="dayList">
+    {% for day, day_routes in day_groups.items() %}
+
+    {# Determine if this day should be expanded by default:
+       expand the group that contains today or the nearest future date #}
+    {% set today_str = now_date %}
+    {% set is_today_or_future = day >= today_str %}
+
+    <div class="day-group bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+
+      <!-- Day Header — click to expand/collapse -->
+      <button onclick="toggleDay(this)"
+              class="w-full flex items-center justify-between px-5 py-4
+                     hover:bg-gray-50 transition-colors text-left">
+        <div class="flex items-center gap-3">
+          <span class="text-lg">📅</span>
+          <div>
+            <div class="font-bold text-gray-800 text-base">
+              {% if day == "No Date" %}
+                No Date Set
+              {% else %}
+                {# Format: "Monday, March 18, 2026" #}
+                {{ day }}
+              {% endif %}
             </div>
+            <div class="text-xs text-gray-400 mt-0.5">
+              {{ day_routes|length }} route{{ 's' if day_routes|length != 1 else '' }}
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          {% if day == today_str %}
+          <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">Today</span>
+          {% elif day > today_str %}
+          <span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Upcoming</span>
+          {% else %}
+          <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">Past</span>
+          {% endif %}
+          <svg class="chevron w-5 h-5 text-gray-400 transition-transform duration-200
+                      {% if is_today_or_future %}rotate-0{% else %}rotate-0{% endif %}"
+               fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </div>
+      </button>
+
+      <!-- Routes for this day -->
+      <div class="day-routes {% if not is_today_or_future %}hidden{% endif %}
+                  border-t border-gray-100 divide-y divide-gray-50">
+        {% for route in day_routes %}
+        <div class="px-5 py-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition-colors">
+
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-gray-800 truncate">{{ route.name }}</div>
+            <div class="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1 mt-1">
+              <span>📍 {{ route.created_by_name }}</span>
+              {% if route.last_edited_by_name and route.last_edited_by_name != route.created_by_name %}
+              <span>✏️ {{ route.last_edited_by_name }}</span>
+              {% endif %}
+              {% if route.total_duration %}
+              <span>⏱ {{ "%.1f"|format(route.total_duration / 3600) }} hrs</span>
+              {% endif %}
+              {% if route.distance %}
+              <span>🛣 {{ "%.1f"|format(route.distance / 1609) }} mi</span>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 shrink-0">
+            <a href="{{ url_for('home') }}?load={{ route.id }}"
+               class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                      px-3 py-1.5 rounded-lg transition-colors">
+              Load
+            </a>
+            {% if current_user.is_admin %}
+            <form method="POST"
+                  action="{{ url_for('delete_route', route_id=route.id) }}"
+                  onsubmit="return confirm('Delete \'{{ route.name }}\'? This cannot be undone.')">
+              <button type="submit"
+                      class="text-red-400 hover:text-red-600 text-sm px-2 py-1.5
+                             rounded-lg hover:bg-red-50 transition-colors">
+                Delete
+              </button>
+            </form>
+            {% endif %}
+          </div>
+
         </div>
         {% endfor %}
-    </div>
+      </div>
 
-    {% else %}
-    <div class="text-center py-20 text-gray-400">
-        <div class="text-5xl mb-4">🗺</div>
-        <p class="text-lg font-medium">No saved routes yet</p>
-        <p class="text-sm mt-1">Optimize a route on the map and save it to see it here.</p>
-    </div>
-    {% endif %}
+    </div><!-- /day-group -->
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="text-center py-20 text-gray-400">
+    <div class="text-5xl mb-4">🗺</div>
+    <p class="text-lg font-medium">No saved routes yet</p>
+    <p class="text-sm mt-1">Optimize a route on the map and save it to see it here.</p>
+  </div>
+  {% endif %}
+
 </div>
+
+<script>
+function toggleDay(btn) {
+  const group   = btn.closest(".day-group");
+  const content = group.querySelector(".day-routes");
+  const chevron = btn.querySelector(".chevron");
+  const hidden  = content.classList.contains("hidden");
+  content.classList.toggle("hidden", !hidden);
+  chevron.style.transform = hidden ? "rotate(180deg)" : "rotate(0deg)";
+}
+
+// On load: open the first upcoming/today group, close the rest
+document.addEventListener("DOMContentLoaded", () => {
+  const groups  = document.querySelectorAll(".day-group");
+  let   opened  = false;
+
+  groups.forEach(group => {
+    const content = group.querySelector(".day-routes");
+    const chevron = group.querySelector(".chevron");
+    const isOpen  = !content.classList.contains("hidden");
+
+    if (isOpen && !opened) {
+      // First open group = keep open, set chevron
+      chevron.style.transform = "rotate(180deg)";
+      opened = true;
+    } else {
+      // Everything else starts closed
+      content.classList.add("hidden");
+      chevron.style.transform = "rotate(0deg)";
+    }
+  });
+
+  // If nothing was naturally open (all past), open the most recent one
+  if (!opened && groups.length > 0) {
+    const first   = groups[0];
+    first.querySelector(".day-routes").classList.remove("hidden");
+    first.querySelector(".chevron").style.transform = "rotate(180deg)";
+  }
+});
+</script>
 
 {% endblock %}

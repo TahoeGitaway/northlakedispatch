@@ -467,7 +467,8 @@ def saved_routes():
         ).fetchall()
 
     conn.close()
-    return render_template("routes.html", routes=routes)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    return render_template("routes.html", routes=routes, now_date=today)
 
 
 @app.route("/routes/save", methods=["POST"])

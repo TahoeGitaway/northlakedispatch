@@ -12,7 +12,6 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
   }
   #loadingOverlay.active { display: flex; }
   #loadingOverlay .banana img {
@@ -20,51 +19,12 @@
     image-rendering: pixelated;
     filter: drop-shadow(0 4px 16px rgba(0,0,0,0.5));
   }
-  #loadingOverlay p {
-    color: #fff;
-    font-weight: 600;
-    font-size: 1rem;
-    letter-spacing: 0.04em;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.6);
-  }
 
   /* ── BADGES ── */
-  .checkin-badge {
-    display: inline-block;
-    background: #16a34a;
-    color: #fff;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 999px;
-    margin-left: 4px;
-    vertical-align: middle;
-    white-space: nowrap;
-  }
-  .priority-badge {
-    display: inline-block;
-    background: #7c3aed;
-    color: #fff;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 999px;
-    margin-left: 4px;
-    vertical-align: middle;
-    white-space: nowrap;
-  }
-  .late-badge {
-    display: inline-block;
-    background: #dc2626;
-    color: #fff;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 999px;
-    margin-left: 4px;
-    vertical-align: middle;
-    white-space: nowrap;
-  }
+  .checkin-badge  { display:inline-block; background:#16a34a; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+  .priority-badge { display:inline-block; background:#7c3aed; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+  .late-badge     { display:inline-block; background:#dc2626; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+  .lunch-badge    { display:inline-block; background:#ea580c; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
 
   /* ── WARNINGS ── */
   .shift-warning    { background:#fef9c3; border:1px solid #ca8a04; color:#92400e; }
@@ -72,76 +32,80 @@
 
   /* ── ROUTE NUMBER TOOLTIP ── */
   .route-number {
-    background: #4f46e5;
-    color: #fff;
-    border: none;
-    border-radius: 50%;
-    width: 22px;
-    height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.7rem;
-    font-weight: 700;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    background:#4f46e5; color:#fff; border:none; border-radius:50%;
+    width:22px; height:22px; display:flex; align-items:center; justify-content:center;
+    font-size:0.7rem; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,0.3);
   }
 
-  /* ── STOP CARDS ── */
-  .stop-card { transition: box-shadow 0.15s; }
-  .stop-card:hover { box-shadow: 0 2px 8px rgba(99,102,241,0.18); }
+  /* ── STOP CARDS (pre-optimization list) ── */
+  .stop-card { transition:box-shadow 0.15s; }
+  .stop-card:hover { box-shadow:0 2px 8px rgba(99,102,241,0.18); }
+  .stop-card-row { display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; }
 
-  /* FIX: top-align badge so it doesn't float to vertical center of card */
-  .stop-card-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  /* ── MOVE BUTTONS ── */
+  /* ── MOVE / ACTION BUTTONS ── */
   .move-btn {
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    background: #e0e7ff;
-    color: #3730a3;
-    border: 1px solid #c7d2fe;
-    cursor: pointer;
-    transition: background 0.1s;
+    padding:2px 7px; border-radius:4px; font-size:0.75rem;
+    background:#e0e7ff; color:#3730a3; border:1px solid #c7d2fe;
+    cursor:pointer; transition:background 0.1s;
   }
-  .move-btn:hover { background: #c7d2fe; }
-  .move-btn:disabled { opacity: 0.35; cursor: default; }
+  .move-btn:hover { background:#c7d2fe; }
+  .move-btn:disabled { opacity:0.35; cursor:default; }
+
+  /* ── SUGGESTION ITEMS ── */
+  .sugg-item {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:6px 8px; cursor:pointer; border-bottom:1px solid #f3f4f6;
+    font-size:0.85rem; gap:6px;
+  }
+  .sugg-item:hover, .sugg-item.active { background:#eef2ff; }
+  .sugg-item-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sugg-type-btns { display:flex; gap:4px; flex-shrink:0; }
+  .sugg-type-btn {
+    font-size:0.6rem; font-weight:700; padding:2px 6px; border-radius:999px;
+    border:none; cursor:pointer; white-space:nowrap;
+  }
+  .sugg-type-btn.stop     { background:#e0e7ff; color:#3730a3; }
+  .sugg-type-btn.checkin  { background:#dcfce7; color:#15803d; }
+  .sugg-type-btn.priority { background:#ede9fe; color:#6d28d9; }
+  .sugg-type-btn:hover { opacity:0.75; }
+
+  /* ── KEYBOARD HINT ── */
+  .suggestion-hint {
+    padding:5px 10px; font-size:0.68rem; color:#9ca3af;
+    background:#fafafa; border-top:1px solid #f3f4f6;
+  }
+  .suggestion-hint kbd {
+    display:inline-block; background:#e5e7eb; color:#374151;
+    border-radius:3px; padding:0 4px; font-size:0.65rem;
+    font-family:monospace; border:1px solid #d1d5db;
+  }
+
+  /* ── SERVICE TIME EDITOR IN OUTPUT LIST ── */
+  .service-time-select {
+    border:1px solid #e5e7eb; border-radius:4px; padding:1px 4px;
+    font-size:0.7rem; color:#374151; background:#fff; cursor:pointer;
+  }
+  .service-time-select:focus { outline:none; border-color:#6366f1; }
 
   /* ── SESSION EXPIRED BANNER ── */
   #sessionBanner {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    background: #dc2626;
-    color: #fff;
-    text-align: center;
-    padding: 12px 16px;
-    font-weight: 600;
-    font-size: 0.9rem;
-    z-index: 99999;
+    display:none; position:fixed; top:0; left:0; right:0;
+    background:#dc2626; color:#fff; text-align:center;
+    padding:12px 16px; font-weight:600; font-size:0.9rem; z-index:99999;
   }
-  #sessionBanner a {
-    color: #fef2f2;
-    text-decoration: underline;
-    margin-left: 12px;
-    font-weight: 700;
-  }
+  #sessionBanner a { color:#fef2f2; text-decoration:underline; margin-left:12px; font-weight:700; }
 </style>
 
-<!-- SESSION EXPIRED BANNER (shown instead of cryptic JSON error) -->
+<!-- SESSION EXPIRED BANNER -->
 <div id="sessionBanner">
   Your session has expired. <a href="/login">Log in again →</a>
 </div>
 
-<!-- LOADING OVERLAY -->
+<!-- LOADING OVERLAY — banana only -->
 <div id="loadingOverlay">
-  <div class="banana"><img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="It's peanut butter jelly time!"></div>
-  <p>It's optimizing time!!</p>
+  <div class="banana">
+    <img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="Optimizing...">
+  </div>
 </div>
 
 <div class="flex h-[calc(100vh-72px)]">
@@ -153,76 +117,90 @@
 
     <!-- START LOCATION -->
     <div class="p-3 bg-gray-100 rounded-lg text-sm text-gray-600">
-      <span class="font-medium text-gray-800">Start &amp; End:</span>
-      Tahoe Getaways Office
+      <span class="font-medium text-gray-800">Start &amp; End:</span> Tahoe Getaways Office
     </div>
 
     <!-- START TIME -->
     <div>
       <label class="text-sm text-gray-600">Start Time</label>
-      <input type="time" id="startTime" value="09:00"
-             class="w-full border rounded-lg p-2 mt-1">
-      <div class="text-xs text-gray-400 mt-1">
-        Check-ins by 4:00 PM · Priority check-ins by 12:00 PM
+      <input type="time" id="startTime" value="09:00" class="w-full border rounded-lg p-2 mt-1">
+      <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
+    </div>
+
+    <!-- LUNCH -->
+    <div class="p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium text-orange-800">🍽 Lunch Break (30 min)</span>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="lunchEnabled" class="accent-orange-500" checked>
+          <span class="text-orange-700 text-xs font-medium">Include</span>
+        </label>
+      </div>
+      <div class="flex items-center gap-4">
+        <span class="text-orange-700 text-xs">Time:</span>
+        <label class="flex items-center gap-1 cursor-pointer">
+          <input type="radio" name="lunchTime" value="14:00" checked class="accent-orange-500">
+          <span class="text-xs text-orange-800 font-medium">2:00 PM</span>
+        </label>
+        <label class="flex items-center gap-1 cursor-pointer">
+          <input type="radio" name="lunchTime" value="16:00" class="accent-orange-500">
+          <span class="text-xs text-orange-800 font-medium">4:00 PM</span>
+        </label>
       </div>
     </div>
 
     <!-- SEARCH -->
     <div class="relative">
       <input id="searchBox" placeholder="Add property…"
-             class="w-full border rounded-lg p-2"
-             autocomplete="off">
+             class="w-full border rounded-lg p-2" autocomplete="off">
       <div id="suggestions"
            class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
-                  max-h-48 overflow-y-auto shadow-lg hidden">
+                  shadow-lg hidden overflow-hidden">
       </div>
     </div>
 
-    <!-- STOPS LIST -->
+    <!-- PRE-OPTIMIZATION STOP LIST -->
     <div>
       <h4 class="font-semibold text-sm mb-2">
-        Selected Stops
-        <span id="stopCount" class="text-gray-400 font-normal"></span>
+        Selected Stops <span id="stopCount" class="text-gray-400 font-normal"></span>
       </h4>
       <div id="selectedStops" class="space-y-2"></div>
     </div>
 
-    <!-- ACTION BUTTONS -->
+    <!-- ACTIONS -->
     <div class="flex flex-col gap-2 pt-2">
       <button id="optimizeBtn" onclick="optimizeRoute()"
               class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2
                      rounded-lg w-full font-medium transition-colors">
         Optimize Route
       </button>
-
       <div class="flex gap-2">
         <button onclick="reverseStops()"
                 class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-3 py-2
-                       rounded-lg text-sm font-medium transition-colors">
-          ↕ Reverse
-        </button>
+                       rounded-lg text-sm font-medium transition-colors">↕ Reverse</button>
         <button onclick="exportToGoogleMaps()"
                 class="flex-1 bg-green-600 hover:bg-green-700 text-white px-3 py-2
-                       rounded-lg text-sm font-medium transition-colors">
-          📍 Google Maps
+                       rounded-lg text-sm font-medium transition-colors">📍 Google Maps</button>
+      </div>
+      <div class="flex gap-2">
+        <button id="saveRouteBtn" onclick="openSaveModal()"
+                class="hidden flex-1 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors text-sm">💾 Save Route</button>
+        <button onclick="restartRoute()"
+                class="flex-1 bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2
+                       rounded-lg font-medium transition-colors text-sm border border-red-200">
+          ↺ Restart
         </button>
       </div>
-
-      <button id="saveRouteBtn" onclick="openSaveModal()"
-              class="hidden bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2
-                     rounded-lg w-full font-medium transition-colors">
-        💾 Save Route
-      </button>
     </div>
 
     <!-- WARNINGS -->
     <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
 
-    <!-- ROUTE SCHEDULE (shown after optimization) -->
+    <!-- POST-OPTIMIZATION SCHEDULE -->
     <div id="scheduleSection" class="hidden">
       <h3 class="font-semibold mb-2">Route Schedule</h3>
       <ol id="routeList" class="space-y-2"></ol>
-
       <div class="mt-4 text-sm space-y-1 bg-gray-50 rounded-lg p-3">
         <div><b>Total:</b>     <span id="totalTime">—</span></div>
         <div><b>Driving:</b>   <span id="drivingTime">—</span></div>
@@ -233,20 +211,16 @@
 
   </div><!-- /sidebar -->
 
-  <!-- MAP -->
   <div id="map" class="flex-1"></div>
+</div>
 
-</div><!-- /flex -->
-
-<!-- ═══ SAVE ROUTE MODAL ═══ -->
+<!-- SAVE MODAL -->
 <div id="saveModal"
      class="hidden fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
     <h3 class="font-bold text-lg text-gray-800 mb-4">Save Route</h3>
-
     <div id="saveError"   class="hidden mb-3 px-3 py-2 bg-red-100 text-red-700 rounded text-sm"></div>
     <div id="saveSuccess" class="hidden mb-3 px-3 py-2 bg-green-100 text-green-700 rounded text-sm"></div>
-
     <div class="space-y-3">
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Route Name</label>
@@ -261,18 +235,13 @@
                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
       </div>
     </div>
-
     <div class="flex gap-2 mt-5">
       <button onclick="submitSaveRoute()"
               class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium
-                     py-2 rounded-lg text-sm transition-colors">
-        Save
-      </button>
+                     py-2 rounded-lg text-sm transition-colors">Save</button>
       <button onclick="closeSaveModal()"
               class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium
-                     py-2 rounded-lg text-sm transition-colors">
-        Cancel
-      </button>
+                     py-2 rounded-lg text-sm transition-colors">Cancel</button>
     </div>
   </div>
 </div>
@@ -281,36 +250,25 @@
 /* ================================================================
    STATE
 ================================================================ */
-const properties = {{ properties|tojson }};
-
+const properties   = {{ properties|tojson }};
 let selectedStops     = [];
-let optimizedSchedule = [];
+let optimizedSchedule = [];   // may include lunch sentinel
 let isOptimized       = false;
-
-// Store raw stat values so save doesn't parse from display text
-let lastStats = { total_duration: 0, driving_duration: 0, service_duration: 0, distance: 0 };
-
+let currentRouteId    = null;
+let lastStats = { total_duration:0, driving_duration:0, service_duration:0, distance:0 };
+let _lastLegDurations = [];   // seconds per leg, stored after each OSRM route call
 let routeLayer         = null;
 let activeRouteMarkers = [];
 let markers            = {};
-
 let currentSuggestions = [];
 let activeIndex        = -1;
 
-const startLocation = {
-  name: "Tahoe Getaways Office",
-  lat:   39.34207,
-  lng:  -120.21422
-};
+const startLocation = { name:"Tahoe Getaways Office", lat:39.34207, lng:-120.21422 };
 
 /* ================================================================
-   SESSION EXPIRY HANDLER
-   Any fetch that comes back as HTML (login redirect) instead of
-   JSON shows the red banner rather than a cryptic parse error.
+   SESSION GUARD
 ================================================================ */
 function guardResponse(res) {
-  // Flask-Login redirects to /login — the response URL changes
-  // OR the content-type is text/html instead of application/json
   const ct = res.headers.get("content-type") || "";
   if (res.redirected || res.url.includes("/login") || (!ct.includes("json") && res.status !== 200)) {
     document.getElementById("sessionBanner").style.display = "block";
@@ -320,80 +278,118 @@ function guardResponse(res) {
 }
 
 /* ================================================================
-   MAP INIT
+   MAP
 ================================================================ */
 const map = L.map('map').setView([39.3279, -120.1833], 11);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            { maxZoom: 18 }).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18 }).addTo(map);
 
-const regularIcon = new L.Icon({
-  iconUrl:   "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25,41], iconAnchor: [12,41]
-});
-const checkinIcon = new L.Icon({
-  iconUrl:   "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25,41], iconAnchor: [12,41]
-});
-const priorityIcon = new L.Icon({
-  iconUrl:   "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25,41], iconAnchor: [12,41]
-});
-const nearDeadlineIcon = new L.Icon({
-  iconUrl:   "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-  iconSize: [25,41], iconAnchor: [12,41]
-});
+const regularIcon      = makeIcon("blue");
+const checkinIcon      = makeIcon("green");
+const priorityIcon     = makeIcon("violet");
+const nearDeadlineIcon = makeIcon("red");
+
+function makeIcon(color) {
+  return new L.Icon({
+    iconUrl:   `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
+    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+    iconSize:[25,41], iconAnchor:[12,41]
+  });
+}
 
 /* ================================================================
-   UNIQUE ID HELPER
+   HELPERS
 ================================================================ */
 let _stopIdCounter = 0;
 function makeStopId() { return "stop_" + (++_stopIdCounter); }
 
+function minutesToHHMM(m) {
+  m = Math.max(0, Math.round(m));
+  return `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+}
+function hhmmToMinutes(hhmm) {
+  const [h,m] = hhmm.split(":").map(Number); return h*60+m;
+}
+function pickStopIcon(stop) {
+  if (stop.priority_checkin && stop.priority_late) return nearDeadlineIcon;
+  if (stop.priority_checkin)                        return priorityIcon;
+  if (stop.arrival && stop.late)                    return nearDeadlineIcon;
+  if (stop.arrival)                                 return checkinIcon;
+  return regularIcon;
+}
+function generateTimeOptions(selected) {
+  let html = "";
+  for (let m = 15; m <= 240; m += 15)
+    html += `<option value="${m}" ${m===selected?"selected":""}>${m} min</option>`;
+  return html;
+}
+
 /* ================================================================
-   SEARCH
+   LUNCH SENTINEL
+================================================================ */
+function makeLunchStop(etaMinutes) {
+  return { _id:"lunch", name:"Lunch Break", isLunch:true,
+           arrival:false, priority_checkin:false, serviceMinutes:30,
+           eta_minutes:etaMinutes, eta:minutesToHHMM(etaMinutes), lat:null, lng:null };
+}
+function getLunchSettings() {
+  return {
+    enabled: document.getElementById("lunchEnabled").checked,
+    minutes: hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value)
+  };
+}
+function insertLunchIntoSchedule(lunchMinutes) {
+  optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch);
+  let insertIdx = optimizedSchedule.length;
+  for (let i = 0; i < optimizedSchedule.length; i++) {
+    if (optimizedSchedule[i].eta_minutes >= lunchMinutes) { insertIdx = i; break; }
+  }
+  optimizedSchedule.splice(insertIdx, 0, makeLunchStop(lunchMinutes));
+}
+function reapplyLunch() {
+  const { enabled, minutes } = getLunchSettings();
+  optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch);
+  if (enabled && isOptimized) insertLunchIntoSchedule(minutes);
+}
+
+document.getElementById("lunchEnabled").addEventListener("change", () => { reapplyLunch(); renderSchedule(); });
+document.querySelectorAll('input[name="lunchTime"]').forEach(r =>
+  r.addEventListener("change", () => { reapplyLunch(); renderSchedule(); }));
+
+/* ================================================================
+   SEARCH — type buttons + keyboard shortcuts
 ================================================================ */
 const searchBox   = document.getElementById("searchBox");
 const suggestions = document.getElementById("suggestions");
 
-searchBox.addEventListener("input", function () {
+searchBox.addEventListener("input", function() {
   const text = this.value.toLowerCase().trim();
-  currentSuggestions = [];
-  activeIndex = -1;
-
+  currentSuggestions = []; activeIndex = -1;
   if (text.length < 2) { closeSuggestions(false); return; }
-
-  const alreadySelected = new Set(selectedStops.map(s => s.name));
+  const already = new Set(selectedStops.map(s => s.name));
   currentSuggestions = properties
-    .filter(p => p.name && p.name.toLowerCase().includes(text)
-                        && !alreadySelected.has(p.name))
+    .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
     .slice(0, 10);
-
   renderSuggestions();
 });
 
-searchBox.addEventListener("keydown", function (e) {
+searchBox.addEventListener("keydown", function(e) {
   if (!currentSuggestions.length) return;
-  if (e.key === "ArrowDown") {
+  if (e.key === "ArrowDown") { e.preventDefault(); activeIndex = (activeIndex+1)%currentSuggestions.length; updateHighlight(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); activeIndex = (activeIndex-1+currentSuggestions.length)%currentSuggestions.length; updateHighlight(); }
+  else if (e.key === "Enter") {
     e.preventDefault();
-    activeIndex = (activeIndex + 1) % currentSuggestions.length;
-    updateHighlight();
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    activeIndex = (activeIndex - 1 + currentSuggestions.length) % currentSuggestions.length;
-    updateHighlight();
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    if (activeIndex >= 0) { addStop(currentSuggestions[activeIndex]); closeSuggestions(true); }
-  } else if (e.key === "Escape") {
-    closeSuggestions(false);
-  }
+    const idx = activeIndex >= 0 ? activeIndex : 0;
+    addStop(currentSuggestions[idx], false, false); closeSuggestions(true);
+  } else if (e.key === "c" || e.key === "C") {
+    const idx = activeIndex >= 0 ? activeIndex : (currentSuggestions.length===1?0:-1);
+    if (idx >= 0) { addStop(currentSuggestions[idx], true, false); closeSuggestions(true); }
+  } else if (e.key === "p" || e.key === "P") {
+    const idx = activeIndex >= 0 ? activeIndex : (currentSuggestions.length===1?0:-1);
+    if (idx >= 0) { addStop(currentSuggestions[idx], true, true); closeSuggestions(true); }
+  } else if (e.key === "Escape") { closeSuggestions(false); }
 });
 
-document.addEventListener("click", function (e) {
+document.addEventListener("click", e => {
   if (!suggestions.contains(e.target) && e.target !== searchBox) closeSuggestions();
 });
 
@@ -401,113 +397,114 @@ function renderSuggestions() {
   suggestions.innerHTML = "";
   if (!currentSuggestions.length) { suggestions.classList.add("hidden"); return; }
   suggestions.classList.remove("hidden");
+
   currentSuggestions.forEach((p, idx) => {
     const div = document.createElement("div");
-    div.className = "p-2 cursor-pointer border-b text-sm hover:bg-indigo-50";
-    div.textContent = p.name;
+    div.className = `sugg-item${idx===activeIndex?" active":""}`;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "sugg-item-name";
+    nameSpan.textContent = p.name;
+    nameSpan.addEventListener("click", () => { addStop(p,false,false); closeSuggestions(true); });
+
+    const btnWrap = document.createElement("span");
+    btnWrap.className = "sugg-type-btns";
+
+    [["stop","+ Stop",false,false],["checkin","✓ Check-in",true,false],["priority","★ Priority",true,true]]
+      .forEach(([cls,label,ci,pr]) => {
+        const btn = document.createElement("button");
+        btn.className = `sugg-type-btn ${cls}`;
+        btn.textContent = label;
+        btn.addEventListener("click", e => { e.stopPropagation(); addStop(p,ci,pr); closeSuggestions(true); });
+        btnWrap.appendChild(btn);
+      });
+
     div.addEventListener("mouseenter", () => { activeIndex = idx; updateHighlight(); });
-    div.addEventListener("click", () => { addStop(p); closeSuggestions(true); });
+    div.appendChild(nameSpan);
+    div.appendChild(btnWrap);
     suggestions.appendChild(div);
   });
+
+  const hint = document.createElement("div");
+  hint.className = "suggestion-hint";
+  hint.innerHTML = `<kbd>Enter</kbd> add &nbsp;<kbd>C</kbd> check-in &nbsp;<kbd>P</kbd> priority &nbsp;<kbd>↑↓</kbd> navigate`;
+  suggestions.appendChild(hint);
 }
 
 function updateHighlight() {
-  [...suggestions.children].forEach((el, i) =>
-    el.classList.toggle("bg-indigo-100", i === activeIndex));
+  [...suggestions.querySelectorAll(".sugg-item")].forEach((el,i) =>
+    el.classList.toggle("active", i===activeIndex));
 }
-
-function closeSuggestions(clearInput = false) {
-  suggestions.classList.add("hidden");
-  suggestions.innerHTML = "";
-  if (clearInput) searchBox.value = "";
-  currentSuggestions = [];
-  activeIndex = -1;
+function closeSuggestions(clearInput=false) {
+  suggestions.classList.add("hidden"); suggestions.innerHTML="";
+  if (clearInput) searchBox.value="";
+  currentSuggestions=[]; activeIndex=-1;
 }
 
 /* ================================================================
    STOPS
 ================================================================ */
-function addStop(property) {
-  if (selectedStops.find(s => s.name === property.name)) return;
-
+function addStop(property, asCheckin=false, asPriority=false) {
+  if (selectedStops.find(s => s.name===property.name)) return;
   selectedStops.push({
-    _id:              makeStopId(),
-    name:             property.name,
-    lat:              property.lat,
-    lng:              property.lng,
-    arrival:          false,
-    priority_checkin: false,
-    serviceMinutes:   60
+    _id: makeStopId(), name:property.name, lat:property.lat, lng:property.lng,
+    arrival: asCheckin||asPriority, priority_checkin:asPriority, serviceMinutes:60
   });
-
   isOptimized = false;
   renderStops();
 }
 
-// Remove from either list — keeps both in sync
 function removeStop(id) {
-  selectedStops     = selectedStops.filter(s => s._id !== id);
-  optimizedSchedule = optimizedSchedule.filter(s => s._id !== id);
-
-  // Remove map marker for this stop if it exists
-  const stop = [...selectedStops, ...optimizedSchedule].find(s => s._id === id);
-  // We need the name before filtering, so capture it first
+  const entry = optimizedSchedule.find(s => s._id===id);
+  if (entry && markers[entry.name]) { map.removeLayer(markers[entry.name]); delete markers[entry.name]; }
+  selectedStops     = selectedStops.filter(s => s._id!==id);
+  optimizedSchedule = optimizedSchedule.filter(s => s._id!==id);
   renderStops();
-
-  if (isOptimized && optimizedSchedule.length > 0) {
-    // Re-render the output list and redraw map with stop removed
-    renderSchedule();
-    redrawRouteOnMap();
-  } else if (isOptimized && optimizedSchedule.length === 0) {
-    // All stops removed — reset to clean state
-    isOptimized = false;
-    document.getElementById("scheduleSection").classList.add("hidden");
-    document.getElementById("saveRouteBtn").classList.add("hidden");
-    clearRouteMarkers();
-    if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  if (isOptimized) {
+    const real = optimizedSchedule.filter(s => !s.isLunch);
+    if (!real.length) { restartRoute(); return; }
+    reapplyLunch(); renderSchedule(); redrawRouteOnMap();
   }
 }
-
-// Called from the output list — removes by id, same underlying function
-function removeFromSchedule(id) {
-  // Capture name for marker cleanup before removing
-  const entry = optimizedSchedule.find(s => s._id === id);
-  if (entry && markers[entry.name]) {
-    map.removeLayer(markers[entry.name]);
-    delete markers[entry.name];
-  }
-  removeStop(id);
-}
+function removeFromSchedule(id) { removeStop(id); }
 
 function setArrival(id, val) {
-  const s = selectedStops.find(s => s._id === id);
-  if (s) {
-    s.arrival = val;
-    if (!val) s.priority_checkin = false;
-  }
-  const os = optimizedSchedule.find(s => s._id === id);
-  if (os) {
-    os.arrival = val;
-    if (!val) os.priority_checkin = false;
-  }
+  [selectedStops, optimizedSchedule].forEach(arr => {
+    const s = arr.find(s => s._id===id);
+    if (s) { s.arrival=val; if(!val) s.priority_checkin=false; }
+  });
   renderStops();
 }
-
 function setPriorityCheckin(id, val) {
-  const s = selectedStops.find(s => s._id === id);
-  if (s) s.priority_checkin = val;
-  const os = optimizedSchedule.find(s => s._id === id);
-  if (os) os.priority_checkin = val;
+  [selectedStops, optimizedSchedule].forEach(arr => {
+    const s = arr.find(s => s._id===id);
+    if (s) s.priority_checkin=val;
+  });
 }
 
-function setServiceMinutes(id, val) {
-  const s = selectedStops.find(s => s._id === id);
-  if (s) s.serviceMinutes = val;
-  const os = optimizedSchedule.find(s => s._id === id);
-  if (os) os.serviceMinutes = val;
+// Toggle check-in directly from output list
+function toggleScheduleCheckin(id) {
+  [selectedStops, optimizedSchedule].forEach(arr => {
+    const s = arr.find(s => s._id===id);
+    if (s) { s.arrival=!s.arrival; if(!s.arrival) s.priority_checkin=false; }
+  });
+  renderSchedule();
 }
 
-/* Renders the pre-optimization stop list */
+// Update service time from either list — recalculates times reactively
+async function setServiceMinutes(id, val) {
+  [selectedStops, optimizedSchedule].forEach(arr => {
+    const s = arr.find(s => s._id===id);
+    if (s) s.serviceMinutes=val;
+  });
+  if (isOptimized) {
+    await recalculateTimesFromOrder();
+    renderSchedule();
+    // No need to redraw map — markers and polyline don't change, only times
+  }
+}
+
+/* Pre-optimization stop list */
 function renderStops() {
   const container = document.getElementById("selectedStops");
   const countEl   = document.getElementById("stopCount");
@@ -522,24 +519,20 @@ function renderStops() {
   selectedStops.forEach(s => {
     const div = document.createElement("div");
     div.className = "stop-card bg-gray-50 p-2 rounded shadow-sm text-sm";
-    div.dataset.id = s._id;
 
     const priorityRow = s.arrival ? `
       <label class="flex items-center gap-1 cursor-pointer">
         <input type="checkbox" class="accent-violet-600"
-               onchange="setPriorityCheckin('${s._id}', this.checked)"
-               ${s.priority_checkin ? "checked" : ""}>
+               onchange="setPriorityCheckin('${s._id}', this.checked)" ${s.priority_checkin?"checked":""}>
         <span class="text-violet-700 font-medium text-xs">Priority (by 12PM)</span>
-      </label>
-    ` : "";
+      </label>` : "";
 
     div.innerHTML = `
       <div class="font-medium text-gray-800 truncate mb-1" title="${s.name}">${s.name}</div>
       <div class="stop-card-row">
         <label class="flex items-center gap-1 cursor-pointer">
           <input type="checkbox" class="accent-green-600"
-                 onchange="setArrival('${s._id}', this.checked)"
-                 ${s.arrival ? "checked" : ""}>
+                 onchange="setArrival('${s._id}', this.checked)" ${s.arrival?"checked":""}>
           <span class="text-gray-600">Check-in</span>
         </label>
         ${priorityRow}
@@ -549,234 +542,226 @@ function renderStops() {
         </select>
       </div>
       <button onclick="removeStop('${s._id}')"
-              class="text-red-400 hover:text-red-600 text-xs mt-1">✕ Remove</button>
-    `;
+              class="text-red-400 hover:text-red-600 text-xs mt-1">✕ Remove</button>`;
     container.appendChild(div);
   });
 }
 
-function generateTimeOptions(selected) {
-  let html = "";
-  for (let m = 15; m <= 240; m += 15) {
-    html += `<option value="${m}" ${m === selected ? "selected" : ""}>${m} min</option>`;
-  }
-  return html;
-}
-
 /* ================================================================
-   RECALCULATE TIMES AFTER REORDER
-   After any reorder (reverse or up/down), re-fetch OSRM leg
-   durations for the new order and recompute eta for each stop.
+   RECALCULATE TIMES — robust with fallback
 ================================================================ */
 async function recalculateTimesFromOrder() {
-  if (!optimizedSchedule.length) return;
+  const realStops = optimizedSchedule.filter(s => !s.isLunch);
+  if (!realStops.length) return;
 
   const [hh, mm] = document.getElementById("startTime").value.split(":").map(Number);
-  const startTimeMins = hh * 60 + mm;
-
-  const locs     = [startLocation, ...optimizedSchedule];
-  const coordStr = locs.map(s => `${s.lng},${s.lat}`).join(";");
-  const routeUrl = `http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=false&steps=false&annotations=duration`;
+  const startMins = hh*60+mm;
+  let legMins = null;
 
   try {
-    const resp  = await fetch(routeUrl);
-    const rdata = await resp.json();
-    const legs  = rdata.routes?.[0]?.legs;
+    const locs     = [startLocation, ...realStops];
+    const coordStr = locs.map(s=>`${s.lng},${s.lat}`).join(";");
+    const resp     = await fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=false&steps=false&annotations=duration`);
+    const rdata    = await resp.json();
+    const legs     = rdata.routes?.[0]?.legs;
+    if (legs && legs.length===realStops.length) legMins = legs.map(l=>(l.duration||0)/60);
+  } catch(_) {}
 
-    if (!legs || legs.length !== optimizedSchedule.length) return;
+  // Fallback: use stored leg durations (order may have changed but beats stale times)
+  if (!legMins && _lastLegDurations.length===realStops.length)
+    legMins = _lastLegDurations.map(s=>s/60);
 
-    let runningMinutes = startTimeMins;
-    optimizedSchedule.forEach((stop, i) => {
-      const drivingMins = (legs[i].duration || 0) / 60;
-      runningMinutes   += drivingMins;
-      stop.eta_minutes  = Math.round(runningMinutes);
-      stop.eta = `${String(Math.floor(runningMinutes / 60) % 24).padStart(2, '0')}:${String(Math.round(runningMinutes) % 60).padStart(2, '0')}`;
-      runningMinutes   += stop.serviceMinutes;
-    });
+  if (!legMins) legMins = realStops.map(()=>0);
 
-    const deadlineMins         = 16 * 60;
-    const priorityDeadlineMins = 12 * 60;
-    optimizedSchedule.forEach(stop => {
-      const finishMins   = stop.eta_minutes + stop.serviceMinutes;
-      stop.late          = stop.arrival          && finishMins > deadlineMins;
-      stop.priority_late = stop.priority_checkin && finishMins > priorityDeadlineMins;
-    });
-  } catch (_) {
-    // Network error — leave times as-is, map still works
-  }
+  let running = startMins;
+  realStops.forEach((stop,i) => {
+    running += legMins[i];
+    stop.eta_minutes = Math.round(running);
+    stop.eta = minutesToHHMM(stop.eta_minutes);
+    running += stop.serviceMinutes;
+  });
+
+  const deadlineMins  = 16*60, priorityMins = 12*60;
+  realStops.forEach(stop => {
+    const fin = stop.eta_minutes + stop.serviceMinutes;
+    stop.late          = stop.arrival          && fin > deadlineMins;
+    stop.priority_late = stop.priority_checkin && fin > priorityMins;
+  });
+
+  optimizedSchedule = realStops;
+  reapplyLunch();
 }
 
 /* ================================================================
-   REVERSE STOPS
+   REVERSE
 ================================================================ */
 async function reverseStops() {
   if (isOptimized) {
-    optimizedSchedule.reverse();
+    const real = optimizedSchedule.filter(s=>!s.isLunch).reverse();
+    optimizedSchedule = real;
     await recalculateTimesFromOrder();
-    renderSchedule();
-    redrawRouteOnMap();
+    renderSchedule(); redrawRouteOnMap();
   } else {
-    selectedStops.reverse();
-    renderStops();
+    selectedStops.reverse(); renderStops();
   }
 }
 
 /* ================================================================
-   MANUAL MOVE (post-optimization)
+   MANUAL MOVE
 ================================================================ */
 async function moveRouteUp(btn) {
-  const li  = btn.closest("li");
-  const idx = [...document.getElementById("routeList").children].indexOf(li);
-  if (idx <= 0) return;
-  [optimizedSchedule[idx - 1], optimizedSchedule[idx]] =
-    [optimizedSchedule[idx], optimizedSchedule[idx - 1]];
-  await recalculateTimesFromOrder();
-  renderSchedule();
-  redrawRouteOnMap();
+  const li     = btn.closest("li");
+  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+  const real   = optimizedSchedule.filter(s=>!s.isLunch);
+  const ri     = getRealIndex(domIdx);
+  if (ri <= 0) return;
+  [real[ri-1], real[ri]] = [real[ri], real[ri-1]];
+  optimizedSchedule = real;
+  await recalculateTimesFromOrder(); renderSchedule(); redrawRouteOnMap();
 }
-
 async function moveRouteDown(btn) {
-  const li   = btn.closest("li");
-  const list = document.getElementById("routeList");
-  const idx  = [...list.children].indexOf(li);
-  if (idx >= optimizedSchedule.length - 1) return;
-  [optimizedSchedule[idx], optimizedSchedule[idx + 1]] =
-    [optimizedSchedule[idx + 1], optimizedSchedule[idx]];
-  await recalculateTimesFromOrder();
-  renderSchedule();
-  redrawRouteOnMap();
+  const li     = btn.closest("li");
+  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+  const real   = optimizedSchedule.filter(s=>!s.isLunch);
+  const ri     = getRealIndex(domIdx);
+  if (ri < 0 || ri >= real.length-1) return;
+  [real[ri], real[ri+1]] = [real[ri+1], real[ri]];
+  optimizedSchedule = real;
+  await recalculateTimesFromOrder(); renderSchedule(); redrawRouteOnMap();
+}
+function getRealIndex(domIdx) {
+  let real=0;
+  for (let i=0; i<optimizedSchedule.length; i++) {
+    if (i===domIdx) return optimizedSchedule[i].isLunch ? -1 : real;
+    if (!optimizedSchedule[i].isLunch) real++;
+  }
+  return -1;
 }
 
 /* ================================================================
-   ROUTE MARKERS
+   RESTART
 ================================================================ */
-function clearRouteMarkers() {
-  activeRouteMarkers.forEach(m => map.removeLayer(m));
-  activeRouteMarkers = [];
-  markers = {};
+function restartRoute() {
+  if (selectedStops.length || isOptimized) {
+    if (!confirm("Start over? This will clear all stops and the current route.")) return;
+  }
+  selectedStops=[]; optimizedSchedule=[]; isOptimized=false;
+  _lastLegDurations=[]; currentRouteId=null;
+  lastStats={total_duration:0, driving_duration:0, service_duration:0, distance:0};
+  clearRouteMarkers();
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer=null; }
+  renderStops();
+  document.getElementById("scheduleSection").classList.add("hidden");
+  document.getElementById("saveRouteBtn").classList.add("hidden");
+  document.getElementById("warningBox").classList.add("hidden");
+  document.getElementById("saveRouteName").value="";
+  document.getElementById("saveRouteDate").value="";
+  ["totalTime","drivingTime","serviceTime","distance"].forEach(id =>
+    document.getElementById(id).textContent="—");
 }
 
-function pickStopIcon(stop) {
-  if (stop.priority_checkin && stop.priority_late) return nearDeadlineIcon;
-  if (stop.priority_checkin)                        return priorityIcon;
-  if (stop.arrival && stop.late)                    return nearDeadlineIcon;
-  if (stop.arrival)                                 return checkinIcon;
-  return regularIcon;
+/* ================================================================
+   MAP MARKERS
+================================================================ */
+function clearRouteMarkers() {
+  activeRouteMarkers.forEach(m=>map.removeLayer(m));
+  activeRouteMarkers=[]; markers={};
 }
 
 async function redrawRouteOnMap() {
   clearRouteMarkers();
-  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer=null; }
+  const real = optimizedSchedule.filter(s=>!s.isLunch);
+  const startM = L.marker([startLocation.lat,startLocation.lng],{icon:regularIcon})
+    .addTo(map).bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
+  activeRouteMarkers.push(startM);
+  if (!real.length) return;
 
-  const startMarker = L.marker([startLocation.lat, startLocation.lng], { icon: regularIcon })
-    .addTo(map)
-    .bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
-  activeRouteMarkers.push(startMarker);
-
-  const locs     = [startLocation, ...optimizedSchedule];
-  const coordStr = locs.map(s => `${s.lng},${s.lat}`).join(";");
-  const routeUrl = `http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
-
+  const coordStr = [startLocation,...real].map(s=>`${s.lng},${s.lat}`).join(";");
   try {
-    const resp  = await fetch(routeUrl);
+    const resp  = await fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&annotations=duration`);
     const rdata = await resp.json();
     const geo   = rdata.routes?.[0]?.geometry;
-    if (geo) {
-      routeLayer = L.geoJSON(geo, { style: { color: "#6366f1", weight: 5 } }).addTo(map);
-    }
-  } catch (_) { /* map usable without polyline */ }
+    const legs  = rdata.routes?.[0]?.legs;
+    if (geo) routeLayer = L.geoJSON(geo,{style:{color:"#6366f1",weight:5}}).addTo(map);
+    if (legs && legs.length===real.length) _lastLegDurations=legs.map(l=>l.duration||0);
+  } catch(_) {}
 
-  optimizedSchedule.forEach((stop, index) => {
-    const depMin    = stop.eta_minutes + stop.serviceMinutes;
-    const departure = `${String(Math.floor(depMin/60)%24).padStart(2,'0')}:${String(depMin%60).padStart(2,'0')}`;
-
-    let statusHtml = "";
-    if (stop.priority_checkin && stop.priority_late)
-      statusHtml = "<span style='color:#dc2626;font-weight:700;'>PRIORITY — LATE</span>";
-    else if (stop.priority_checkin)
-      statusHtml = "<span style='color:#7c3aed;font-weight:700;'>PRIORITY CHECK-IN</span>";
-    else if (stop.arrival && stop.late)
-      statusHtml = "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>";
-    else if (stop.arrival)
-      statusHtml = "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>";
-
-    const marker = L.marker([stop.lat, stop.lng], { icon: pickStopIcon(stop) })
-      .addTo(map)
-      .bindPopup(`<b>${stop.name}</b><br>
-        Arrive: ${stop.eta}<br>
-        Depart: ${departure}<br>
-        ${statusHtml}`);
-
-    marker.bindTooltip(`${index + 1}`, {
-      permanent: true, direction: "top", className: "route-number"
-    });
-
-    activeRouteMarkers.push(marker);
-    markers[stop.name] = marker;
+  let num=1;
+  real.forEach(stop => {
+    const dep = minutesToHHMM(stop.eta_minutes+stop.serviceMinutes);
+    let statusHtml="";
+    if (stop.priority_checkin&&stop.priority_late) statusHtml="<span style='color:#dc2626;font-weight:700;'>PRIORITY — LATE</span>";
+    else if (stop.priority_checkin) statusHtml="<span style='color:#7c3aed;font-weight:700;'>PRIORITY CHECK-IN</span>";
+    else if (stop.arrival&&stop.late) statusHtml="<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>";
+    else if (stop.arrival) statusHtml="<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>";
+    const m = L.marker([stop.lat,stop.lng],{icon:pickStopIcon(stop)})
+      .addTo(map).bindPopup(`<b>${stop.name}</b><br>Arrive:${stop.eta}<br>Depart:${dep}<br>${statusHtml}`);
+    m.bindTooltip(`${num++}`,{permanent:true,direction:"top",className:"route-number"});
+    activeRouteMarkers.push(m); markers[stop.name]=m;
   });
 }
 
 /* ================================================================
-   RENDER SCHEDULE (output list, post-optimization)
-   NEW: each item now has a ✕ Remove button
+   RENDER SCHEDULE (output list)
 ================================================================ */
 function renderSchedule() {
   const list = document.getElementById("routeList");
-  list.innerHTML = "";
+  list.innerHTML="";
+  let num=1;
 
-  optimizedSchedule.forEach((stop, index) => {
-    const depMin    = stop.eta_minutes + stop.serviceMinutes;
-    const depHH     = String(Math.floor(depMin / 60) % 24).padStart(2, '0');
-    const depMM     = String(depMin % 60).padStart(2, '0');
-    const departure = `${depHH}:${depMM}`;
+  optimizedSchedule.forEach((stop, si) => {
+    const li = document.createElement("li");
 
-    let badge = "";
-    if (stop.priority_checkin && stop.priority_late) {
-      badge = `<span class="late-badge">PRIORITY LATE</span>`;
-    } else if (stop.priority_checkin) {
-      badge = `<span class="checkin-badge">CHECK-IN</span><span class="priority-badge">by 12PM</span>`;
-    } else if (stop.arrival && stop.late) {
-      badge = `<span class="late-badge">LATE</span>`;
-    } else if (stop.arrival) {
-      badge = `<span class="checkin-badge">CHECK-IN</span>`;
+    if (stop.isLunch) {
+      li.className="p-2 border border-orange-200 rounded bg-orange-50 text-sm";
+      li.innerHTML=`
+        <div class="flex items-center gap-1 font-medium text-orange-800">
+          🍽 Lunch Break <span class="lunch-badge">30 MIN</span>
+        </div>
+        <div class="text-xs text-orange-600 mt-0.5">
+          ${stop.eta} – ${minutesToHHMM(stop.eta_minutes+30)}
+        </div>`;
+      list.appendChild(li); return;
     }
 
-    const li = document.createElement("li");
-    li.className = "p-2 border rounded bg-white hover:bg-indigo-50 transition-colors";
+    const dep = minutesToHHMM(stop.eta_minutes+stop.serviceMinutes);
+    let badge="";
+    if (stop.priority_checkin&&stop.priority_late) badge=`<span class="late-badge">PRIORITY LATE</span>`;
+    else if (stop.priority_checkin) badge=`<span class="checkin-badge">CHECK-IN</span><span class="priority-badge">by 12PM</span>`;
+    else if (stop.arrival&&stop.late) badge=`<span class="late-badge">LATE</span>`;
+    else if (stop.arrival) badge=`<span class="checkin-badge">CHECK-IN</span>`;
 
-    li.innerHTML = `
+    const checkinBtn = stop.arrival
+      ? `<button onclick="toggleScheduleCheckin('${stop._id}')" class="text-xs text-green-700 hover:text-red-500 font-medium" title="Remove check-in">✓ Check-in</button>`
+      : `<button onclick="toggleScheduleCheckin('${stop._id}')" class="text-xs text-gray-400 hover:text-green-600" title="Mark as check-in">+ Check-in</button>`;
+
+    li.className="p-2 border rounded bg-white hover:bg-indigo-50 transition-colors";
+    li.innerHTML=`
       <div class="flex items-start justify-between gap-1">
         <div class="font-medium text-sm flex items-center flex-wrap gap-1 flex-1 min-w-0">
-          <span class="text-indigo-600 font-bold shrink-0">${index + 1}.</span>
-          <span class="truncate max-w-[130px]" title="${stop.name}">${stop.name}</span>
+          <span class="text-indigo-600 font-bold shrink-0">${num}.</span>
+          <span class="truncate max-w-[100px]" title="${stop.name}">${stop.name}</span>
           ${badge}
         </div>
         <div class="flex gap-1 shrink-0">
-          <button class="move-btn" onclick="moveRouteUp(this)"
-                  ${index === 0 ? "disabled" : ""}>▲</button>
-          <button class="move-btn" onclick="moveRouteDown(this)"
-                  ${index === optimizedSchedule.length - 1 ? "disabled" : ""}>▼</button>
-          <button onclick="removeFromSchedule('${stop._id}')"
-                  class="move-btn !bg-red-50 !text-red-500 !border-red-200
-                         hover:!bg-red-100"
-                  title="Remove stop">✕</button>
+          <button class="move-btn" onclick="moveRouteUp(this)" ${si===0||optimizedSchedule[si-1]?.isLunch?"disabled":""}>▲</button>
+          <button class="move-btn" onclick="moveRouteDown(this)" ${si===optimizedSchedule.length-1||optimizedSchedule[si+1]?.isLunch?"disabled":""}>▼</button>
+          <button onclick="removeFromSchedule('${stop._id}')" class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100" title="Remove">✕</button>
         </div>
       </div>
-      <div class="text-xs text-gray-500 mt-0.5">
-        Arrive: ${stop.eta} &nbsp;|&nbsp; Depart: ${departure}
-      </div>
-    `;
+      <div class="text-xs text-gray-500 mt-0.5 flex items-center gap-3 flex-wrap">
+        <span>Arrive: ${stop.eta} &nbsp;|&nbsp; Depart: ${dep}</span>
+        <select class="service-time-select" onchange="setServiceMinutes('${stop._id}', parseInt(this.value))">
+          ${generateTimeOptions(stop.serviceMinutes)}
+        </select>
+        ${checkinBtn}
+      </div>`;
 
-    li.addEventListener("mouseenter", () => {
-      const m = markers[stop.name];
-      if (m) { map.panTo(m.getLatLng()); m.openPopup(); }
-    });
-    li.addEventListener("mouseleave", () => {
-      const m = markers[stop.name];
-      if (m) m.closePopup();
-    });
-
+    li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
+    li.addEventListener("mouseleave", () => { const m=markers[stop.name]; if(m)m.closePopup(); });
     list.appendChild(li);
+    num++;
   });
 }
 
@@ -785,41 +770,31 @@ function renderSchedule() {
 ================================================================ */
 function optimizeRoute() {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
-
   document.getElementById("loadingOverlay").classList.add("active");
-  document.getElementById("optimizeBtn").disabled = true;
-
-  const payload = {
-    stops: selectedStops.map(s => ({
-      name:             s.name,
-      lat:              s.lat,
-      lng:              s.lng,
-      arrival:          s.arrival,
-      priority_checkin: s.priority_checkin,
-      serviceMinutes:   s.serviceMinutes
-    })),
-    start:     startLocation,
-    startTime: document.getElementById("startTime").value
-  };
+  document.getElementById("optimizeBtn").disabled=true;
 
   fetch("/optimize", {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify(payload)
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      stops: selectedStops.map(s=>({
+        name:s.name, lat:s.lat, lng:s.lng,
+        arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
+      })),
+      start:startLocation,
+      startTime: document.getElementById("startTime").value
+    })
   })
-  .then(guardResponse)   // ← session expiry check
+  .then(guardResponse)
   .then(data => {
     document.getElementById("loadingOverlay").classList.remove("active");
-    document.getElementById("optimizeBtn").disabled = false;
-
+    document.getElementById("optimizeBtn").disabled=false;
     if (data.error) { alert(data.error); return; }
 
     optimizedSchedule = data.schedule.map(entry => {
-      const original = selectedStops.find(s => s.name === entry.name);
-      return { ...entry, _id: original?._id || makeStopId() };
+      const orig = selectedStops.find(s=>s.name===entry.name);
+      return {...entry, _id: orig?._id || makeStopId()};
     });
-
-    isOptimized = true;
+    isOptimized=true;
 
     lastStats = {
       total_duration:   data.total_duration,
@@ -828,241 +803,160 @@ function optimizeRoute() {
       distance:         data.distance,
     };
 
-    document.getElementById("totalTime").textContent   = (data.total_duration   / 3600).toFixed(2) + " hrs";
-    document.getElementById("drivingTime").textContent = (data.driving_duration / 3600).toFixed(2) + " hrs";
-    document.getElementById("serviceTime").textContent = (data.service_duration / 3600).toFixed(2) + " hrs";
-    document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
+    document.getElementById("totalTime").textContent   = (data.total_duration  /3600).toFixed(2)+" hrs";
+    document.getElementById("drivingTime").textContent = (data.driving_duration/3600).toFixed(2)+" hrs";
+    document.getElementById("serviceTime").textContent = (data.service_duration/3600).toFixed(2)+" hrs";
+    document.getElementById("distance").textContent    = (data.distance/1609).toFixed(1)+" miles";
 
-    const warningBox = document.getElementById("warningBox");
-    warningBox.className = "text-sm hidden p-2 rounded";
-    warningBox.innerHTML = "";
-
-    const warnings = [];
-    if (data.total_duration > 10 * 3600)
-      warnings.push("⚠ Route exceeds 10-hour shift.");
-    if (data.late_priority_checkins?.length)
-      warnings.push(`⚠ Priority check-ins after 12PM: ${data.late_priority_checkins.join(", ")}`);
-    if (data.late_checkins?.length)
-      warnings.push(`⚠ Late check-ins (after 4PM): ${data.late_checkins.join(", ")}`);
-
-    if (warnings.length) {
-      warningBox.classList.remove("hidden");
-      warningBox.classList.add(
-        (data.late_checkins?.length || data.late_priority_checkins?.length)
-          ? "deadline-warning" : "shift-warning"
-      );
-      warningBox.innerHTML = warnings.join("<br>");
+    const wb=document.getElementById("warningBox");
+    wb.className="text-sm hidden p-2 rounded"; wb.innerHTML="";
+    const warns=[];
+    if (data.total_duration>10*3600) warns.push("⚠ Route exceeds 10-hour shift.");
+    if (data.late_priority_checkins?.length) warns.push(`⚠ Priority check-ins after 12PM: ${data.late_priority_checkins.join(", ")}`);
+    if (data.late_checkins?.length) warns.push(`⚠ Late check-ins (after 4PM): ${data.late_checkins.join(", ")}`);
+    if (warns.length) {
+      wb.classList.remove("hidden");
+      wb.classList.add((data.late_checkins?.length||data.late_priority_checkins?.length)?"deadline-warning":"shift-warning");
+      wb.innerHTML=warns.join("<br>");
     }
 
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
-    if (!document.getElementById("saveRouteDate").value) {
-      document.getElementById("saveRouteDate").value = new Date().toISOString().split("T")[0];
-    }
+    if (!document.getElementById("saveRouteDate").value)
+      document.getElementById("saveRouteDate").value=new Date().toISOString().split("T")[0];
 
+    reapplyLunch();
+
+    // Fetch route geometry + store leg durations
+    const real=optimizedSchedule.filter(s=>!s.isLunch);
+    const coordStr=[startLocation,...real].map(s=>`${s.lng},${s.lat}`).join(";");
     clearRouteMarkers();
-    if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+    if (routeLayer){map.removeLayer(routeLayer);routeLayer=null;}
 
-    routeLayer = L.geoJSON(data.geometry, {
-      style: { color: "#6366f1", weight: 5 }
-    }).addTo(map);
+    fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&annotations=duration`)
+      .then(r=>r.json()).then(rdata=>{
+        const geo=rdata.routes?.[0]?.geometry;
+        const legs=rdata.routes?.[0]?.legs;
+        if (geo) routeLayer=L.geoJSON(geo,{style:{color:"#6366f1",weight:5}}).addTo(map);
+        if (legs&&legs.length===real.length) _lastLegDurations=legs.map(l=>l.duration||0);
+      }).catch(()=>{});
 
-    const startMarker = L.marker([startLocation.lat, startLocation.lng], { icon: regularIcon })
-      .addTo(map)
-      .bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
-    activeRouteMarkers.push(startMarker);
+    const sm=L.marker([startLocation.lat,startLocation.lng],{icon:regularIcon})
+      .addTo(map).bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
+    activeRouteMarkers.push(sm);
 
-    optimizedSchedule.forEach((stop, index) => {
-      const depMin    = stop.eta_minutes + stop.serviceMinutes;
-      const departure = `${String(Math.floor(depMin/60)%24).padStart(2,'0')}:${String(depMin%60).padStart(2,'0')}`;
-
-      let statusHtml = "";
-      if (stop.priority_checkin && stop.priority_late)
-        statusHtml = "<span style='color:#dc2626;font-weight:700;'>PRIORITY — LATE</span>";
-      else if (stop.priority_checkin)
-        statusHtml = "<span style='color:#7c3aed;font-weight:700;'>PRIORITY CHECK-IN</span>";
-      else if (stop.arrival && stop.late)
-        statusHtml = "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>";
-      else if (stop.arrival)
-        statusHtml = "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>";
-
-      const marker = L.marker([stop.lat, stop.lng], { icon: pickStopIcon(stop) })
-        .addTo(map)
-        .bindPopup(`<b>${stop.name}</b><br>
-          Arrive: ${stop.eta}<br>
-          Depart: ${departure}<br>
-          ${statusHtml}`);
-
-      marker.bindTooltip(`${index + 1}`, {
-        permanent: true, direction: "top", className: "route-number"
-      });
-
-      activeRouteMarkers.push(marker);
-      markers[stop.name] = marker;
+    let num=1;
+    real.forEach(stop=>{
+      const dep=minutesToHHMM(stop.eta_minutes+stop.serviceMinutes);
+      let sh="";
+      if(stop.priority_checkin&&stop.priority_late) sh="<span style='color:#dc2626;font-weight:700;'>PRIORITY — LATE</span>";
+      else if(stop.priority_checkin) sh="<span style='color:#7c3aed;font-weight:700;'>PRIORITY CHECK-IN</span>";
+      else if(stop.arrival&&stop.late) sh="<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>";
+      else if(stop.arrival) sh="<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>";
+      const m=L.marker([stop.lat,stop.lng],{icon:pickStopIcon(stop)})
+        .addTo(map).bindPopup(`<b>${stop.name}</b><br>Arrive:${stop.eta}<br>Depart:${dep}<br>${sh}`);
+      m.bindTooltip(`${num++}`,{permanent:true,direction:"top",className:"route-number"});
+      activeRouteMarkers.push(m); markers[stop.name]=m;
     });
 
     renderSchedule();
   })
-  .catch(err => {
-    if (err === "session_expired") return; // banner already shown
+  .catch(err=>{
+    if(err==="session_expired") return;
     document.getElementById("loadingOverlay").classList.remove("active");
-    document.getElementById("optimizeBtn").disabled = false;
-    alert("Request failed: " + err.message);
+    document.getElementById("optimizeBtn").disabled=false;
+    alert("Request failed: "+err.message);
   });
 }
 
 /* ================================================================
-   SAVE ROUTE MODAL
+   SAVE MODAL
 ================================================================ */
-let currentRouteId = null;
-
 function openSaveModal() {
-  if (!optimizedSchedule.length) { alert("Optimize a route first."); return; }
+  if (!optimizedSchedule.filter(s=>!s.isLunch).length) { alert("Optimize a route first."); return; }
   document.getElementById("saveError").classList.add("hidden");
   document.getElementById("saveSuccess").classList.add("hidden");
   document.getElementById("saveModal").classList.remove("hidden");
 }
-
-function closeSaveModal() {
-  document.getElementById("saveModal").classList.add("hidden");
-}
+function closeSaveModal() { document.getElementById("saveModal").classList.add("hidden"); }
 
 async function submitSaveRoute() {
   const name      = document.getElementById("saveRouteName").value.trim();
   const routeDate = document.getElementById("saveRouteDate").value;
   const errorEl   = document.getElementById("saveError");
   const successEl = document.getElementById("saveSuccess");
+  errorEl.classList.add("hidden"); successEl.classList.add("hidden");
+  if (!name)      { errorEl.textContent="Please enter a route name."; errorEl.classList.remove("hidden"); return; }
+  if (!routeDate) { errorEl.textContent="Please choose a date.";      errorEl.classList.remove("hidden"); return; }
 
-  errorEl.classList.add("hidden");
-  successEl.classList.add("hidden");
-
-  if (!name)      { errorEl.textContent = "Please enter a route name."; errorEl.classList.remove("hidden"); return; }
-  if (!routeDate) { errorEl.textContent = "Please choose a date.";      errorEl.classList.remove("hidden"); return; }
-
-  const body = { name, route_date: routeDate, schedule: optimizedSchedule, stats: lastStats };
+  const real = optimizedSchedule.filter(s=>!s.isLunch);
   const url  = currentRouteId ? `/routes/${currentRouteId}/update` : "/routes/save";
 
   try {
-    const res  = await fetch(url, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(body),
-    });
-    // Session check for save too
-    const ct = res.headers.get("content-type") || "";
-    if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
-      document.getElementById("sessionBanner").style.display = "block";
-      closeSaveModal();
-      return;
+    const res  = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,route_date:routeDate,schedule:real,stats:lastStats})});
+    const ct=res.headers.get("content-type")||"";
+    if(res.redirected||res.url.includes("/login")||!ct.includes("json")){
+      document.getElementById("sessionBanner").style.display="block"; closeSaveModal(); return;
     }
-    const data = await res.json();
-
-    if (data.error) {
-      errorEl.textContent = data.error;
-      errorEl.classList.remove("hidden");
-    } else {
-      if (data.id) currentRouteId = data.id;
-      successEl.textContent = "Route saved!";
+    const data=await res.json();
+    if(data.error){ errorEl.textContent=data.error; errorEl.classList.remove("hidden"); }
+    else {
+      if(data.id) currentRouteId=data.id;
+      successEl.textContent="Route saved! Redirecting…";
       successEl.classList.remove("hidden");
-      setTimeout(closeSaveModal, 1200);
+      setTimeout(()=>{ window.location.href="/routes"; }, 1000);
     }
-  } catch (e) {
-    errorEl.textContent = "Save failed: " + e.message;
-    errorEl.classList.remove("hidden");
-  }
+  } catch(e) { errorEl.textContent="Save failed: "+e.message; errorEl.classList.remove("hidden"); }
 }
 
 /* ================================================================
-   LOAD SAVED ROUTE
+   LOAD ROUTE
 ================================================================ */
 (async function checkLoadParam() {
-  const params = new URLSearchParams(window.location.search);
-  const loadId = params.get("load");
+  const loadId = new URLSearchParams(window.location.search).get("load");
   if (!loadId) return;
-
-  window.history.replaceState({}, "", window.location.pathname);
-
+  window.history.replaceState({},  "", window.location.pathname);
   try {
-    const res = await fetch(`/routes/${loadId}`);
-    // Session check for load too
-    const ct = res.headers.get("content-type") || "";
-    if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
-      document.getElementById("sessionBanner").style.display = "block";
-      return;
+    const res=await fetch(`/routes/${loadId}`);
+    const ct=res.headers.get("content-type")||"";
+    if(res.redirected||res.url.includes("/login")||!ct.includes("json")){
+      document.getElementById("sessionBanner").style.display="block"; return;
     }
-    const data = await res.json();
-    if (data.error) { alert(data.error); return; }
-
-    currentRouteId = data.id;
-
-    _stopIdCounter    = 0;
-    optimizedSchedule = data.schedule.map(s => ({ ...s, _id: makeStopId() }));
-
-    selectedStops = optimizedSchedule.map(s => ({
-      _id:              s._id,
-      name:             s.name,
-      lat:              s.lat,
-      lng:              s.lng,
-      arrival:          s.arrival,
-      priority_checkin: s.priority_checkin || false,
-      serviceMinutes:   s.serviceMinutes,
+    const data=await res.json();
+    if(data.error){alert(data.error);return;}
+    currentRouteId=data.id; _stopIdCounter=0;
+    optimizedSchedule=data.schedule.map(s=>({...s,_id:makeStopId()}));
+    selectedStops=optimizedSchedule.map(s=>({
+      _id:s._id,name:s.name,lat:s.lat,lng:s.lng,
+      arrival:s.arrival,priority_checkin:s.priority_checkin||false,serviceMinutes:s.serviceMinutes
     }));
-
-    isOptimized = true;
-
-    lastStats = {
-      total_duration:   data.total_duration   || 0,
-      driving_duration: data.driving_duration || 0,
-      service_duration: data.service_duration || 0,
-      distance:         data.distance         || 0,
-    };
-
-    if (data.total_duration)
-      document.getElementById("totalTime").textContent   = (data.total_duration   / 3600).toFixed(2) + " hrs";
-    if (data.driving_duration)
-      document.getElementById("drivingTime").textContent = (data.driving_duration / 3600).toFixed(2) + " hrs";
-    if (data.service_duration)
-      document.getElementById("serviceTime").textContent = (data.service_duration / 3600).toFixed(2) + " hrs";
-    if (data.distance)
-      document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
-
+    isOptimized=true;
+    lastStats={total_duration:data.total_duration||0,driving_duration:data.driving_duration||0,
+               service_duration:data.service_duration||0,distance:data.distance||0};
+    if(data.total_duration) document.getElementById("totalTime").textContent=(data.total_duration/3600).toFixed(2)+" hrs";
+    if(data.driving_duration) document.getElementById("drivingTime").textContent=(data.driving_duration/3600).toFixed(2)+" hrs";
+    if(data.service_duration) document.getElementById("serviceTime").textContent=(data.service_duration/3600).toFixed(2)+" hrs";
+    if(data.distance) document.getElementById("distance").textContent=(data.distance/1609).toFixed(1)+" miles";
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
-    document.getElementById("saveRouteName").value = data.name;
-    document.getElementById("saveRouteDate").value = data.route_date;
-
-    renderStops();
-    renderSchedule();
-    await redrawRouteOnMap();
-
-  } catch (e) {
-    alert("Could not load route: " + e.message);
-  }
+    document.getElementById("saveRouteName").value=data.name;
+    document.getElementById("saveRouteDate").value=data.route_date;
+    reapplyLunch(); renderStops(); renderSchedule(); await redrawRouteOnMap();
+  } catch(e){alert("Could not load route: "+e.message);}
 })();
 
-document.getElementById("saveModal").addEventListener("click", function(e) {
-  if (e.target === this) closeSaveModal();
-});
+document.getElementById("saveModal").addEventListener("click",function(e){if(e.target===this)closeSaveModal();});
 
 /* ================================================================
    GOOGLE MAPS EXPORT
-   NOTE: Google Maps URL has a 10-waypoint display limit but we
-   still export all stops — Google will show as many as it can.
 ================================================================ */
 function exportToGoogleMaps() {
-  if (!optimizedSchedule.length) { alert("Optimize route first."); return; }
-
-  if (optimizedSchedule.length > 10) {
-    alert(`Note: Google Maps displays up to 10 waypoints in the URL. All ${optimizedSchedule.length} stops are included but Google may truncate the display. Use the numbered markers on this map for the full route.`);
-  }
-
-  const coords = [
-    `${startLocation.lat},${startLocation.lng}`,
-    ...optimizedSchedule.map(s => `${s.lat},${s.lng}`),
-    `${startLocation.lat},${startLocation.lng}`
-  ];
-
-  window.open("https://www.google.com/maps/dir/" + coords.join("/"), "_blank");
+  const real=optimizedSchedule.filter(s=>!s.isLunch);
+  if(!real.length){alert("Optimize route first.");return;}
+  if(real.length>10) alert(`Note: Google Maps displays up to 10 waypoints. All ${real.length} stops are included but Google may truncate the display.`);
+  const coords=[`${startLocation.lat},${startLocation.lng}`,...real.map(s=>`${s.lat},${s.lng}`),`${startLocation.lat},${startLocation.lng}`];
+  window.open("https://www.google.com/maps/dir/"+coords.join("/"),"_blank");
 }
 </script>
 
