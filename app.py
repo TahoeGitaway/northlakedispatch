@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
-from flask import send_file
 
 load_dotenv()
 
@@ -430,9 +429,10 @@ def admin_invite():
     # Cancel any existing unused invite for this email before creating a new one
     conn.execute("DELETE FROM invites WHERE email = ? AND used = 0", (email,))
 
-    token      = secrets.token_urlsafe(32)
-    expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
-    now        = datetime.utcnow().isoformat()
+    token        = secrets.token_urlsafe(32)
+    expires_at   = (datetime.utcnow() + timedelta(hours=48)).isoformat()
+    now          = datetime.utcnow().isoformat()
+    register_url = f"{APP_BASE_URL}/register/{token}"
 
     conn.execute(
         "INSERT INTO invites (email, token, invited_by, expires_at, used, created_at) VALUES (?,?,?,?,0,?)",
@@ -441,12 +441,26 @@ def admin_invite():
     conn.commit()
     conn.close()
 
-    _send_invite_email(email, token)
-    flash(f"Invite sent to {email}. Link expires in 48 hours.", "success")
+    email_ok, email_error = _send_invite_email(email, token)
+
+    if email_ok:
+        flash(f"Invite email sent to {email}. Link expires in 48 hours.", "success")
+    else:
+        # Email failed — show the link directly so admin can share manually
+        flash(
+            f"Could not send email to {email} ({email_error}). "
+            f"Share this link manually (expires 48 hrs): {register_url}",
+            "error"
+        )
+
     return redirect(url_for("admin_users"))
 
 
 def _send_invite_email(to_email: str, token: str):
+    """Send invite email. Returns (success: bool, error_message: str|None)."""
+    if not SENDGRID_API_KEY:
+        return False, "SENDGRID_API_KEY is not set in environment variables"
+
     register_url = f"{APP_BASE_URL}/register/{token}"
     message = Mail(
         from_email=FROM_EMAIL,
@@ -475,10 +489,14 @@ def _send_invite_email(to_email: str, token: str):
         """
     )
     try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        sg.send(message)
+        sg       = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        if response.status_code >= 400:
+            return False, f"SendGrid returned status {response.status_code}"
+        return True, None
     except Exception as e:
         app.logger.error(f"SendGrid invite error: {e}")
+        return False, str(e)
 
 
 @app.route("/register/<token>", methods=["GET", "POST"])
@@ -860,6 +878,7 @@ def optimize():
     stops           = data.get("stops", [])
     start           = data.get("start") or DEFAULT_START
     start_time_hhmm = (data.get("startTime") or "09:00").strip()
+    drive_only      = bool(data.get("drive_only", False))   # ← NEW
 
     if not stops:
         return jsonify({"error": "No stops provided"}), 400
@@ -910,46 +929,59 @@ def optimize():
     if not duration_matrix:
         return jsonify({"error": "Invalid matrix response"}), 500
 
-    service_times_sec = [0] + [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
-    checkin_flags     = [False] + [bool(s.get("arrival", False)) for s in cleaned_stops]
-    priority_flags    = [False] + [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
-
-    enforce_deadline          = start_minutes < deadline_minutes
-    enforce_priority_deadline = start_minutes < priority_deadline_minutes
-
-    deadline_offset_sec          = (deadline_minutes - start_minutes) * 60 if enforce_deadline else None
-    priority_deadline_offset_sec = (priority_deadline_minutes - start_minutes) * 60 if enforce_priority_deadline else None
-
-    ordered_nodes, arrival_times_sec = None, None
-    used_deadline_constraints = False
-    used_soft_penalties       = False
-
-    if enforce_deadline or enforce_priority_deadline:
-        ordered_nodes, arrival_times_sec = _solve_route(
-            duration_matrix, service_times_sec, checkin_flags, priority_flags,
-            deadline_offset_sec=deadline_offset_sec,
-            priority_deadline_offset_sec=priority_deadline_offset_sec,
-            hard_deadline=True
-        )
-        if ordered_nodes is not None:
-            used_deadline_constraints = True
-
-    if ordered_nodes is None:
-        ordered_nodes, arrival_times_sec = _solve_route(
-            duration_matrix, service_times_sec, checkin_flags, priority_flags,
-            deadline_offset_sec=deadline_offset_sec if enforce_deadline else None,
-            priority_deadline_offset_sec=priority_deadline_offset_sec if enforce_priority_deadline else None,
-            soft_deadline_penalty=True
-        )
-        if ordered_nodes is not None:
-            used_soft_penalties = True
-
-    if ordered_nodes is None:
+    # Drive-only mode: zero out service times and ignore all deadlines
+    if drive_only:
+        service_times_sec = [0] * len(all_locations)
+        checkin_flags     = [False] * len(all_locations)
+        priority_flags    = [False] * len(all_locations)
         ordered_nodes, arrival_times_sec = _solve_route(
             duration_matrix, service_times_sec, checkin_flags, priority_flags
         )
         if ordered_nodes is None:
             return jsonify({"error": "No solution found"}), 500
+        used_deadline_constraints = False
+        used_soft_penalties       = False
+    else:
+        service_times_sec = [0] + [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
+        checkin_flags     = [False] + [bool(s.get("arrival", False)) for s in cleaned_stops]
+        priority_flags    = [False] + [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
+
+        enforce_deadline          = start_minutes < deadline_minutes
+        enforce_priority_deadline = start_minutes < priority_deadline_minutes
+
+        deadline_offset_sec          = (deadline_minutes - start_minutes) * 60 if enforce_deadline else None
+        priority_deadline_offset_sec = (priority_deadline_minutes - start_minutes) * 60 if enforce_priority_deadline else None
+
+        ordered_nodes, arrival_times_sec = None, None
+        used_deadline_constraints = False
+        used_soft_penalties       = False
+
+        if enforce_deadline or enforce_priority_deadline:
+            ordered_nodes, arrival_times_sec = _solve_route(
+                duration_matrix, service_times_sec, checkin_flags, priority_flags,
+                deadline_offset_sec=deadline_offset_sec,
+                priority_deadline_offset_sec=priority_deadline_offset_sec,
+                hard_deadline=True
+            )
+            if ordered_nodes is not None:
+                used_deadline_constraints = True
+
+        if ordered_nodes is None:
+            ordered_nodes, arrival_times_sec = _solve_route(
+                duration_matrix, service_times_sec, checkin_flags, priority_flags,
+                deadline_offset_sec=deadline_offset_sec if enforce_deadline else None,
+                priority_deadline_offset_sec=priority_deadline_offset_sec if enforce_priority_deadline else None,
+                soft_deadline_penalty=True
+            )
+            if ordered_nodes is not None:
+                used_soft_penalties = True
+
+        if ordered_nodes is None:
+            ordered_nodes, arrival_times_sec = _solve_route(
+                duration_matrix, service_times_sec, checkin_flags, priority_flags
+            )
+            if ordered_nodes is None:
+                return jsonify({"error": "No solution found"}), 500
 
     node_arrival_sec = {}
     for pos, node in enumerate(ordered_nodes):
@@ -960,7 +992,7 @@ def optimize():
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]
 
     coords_final = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in [start] + ordered_stops)
-    route_url    = f"http://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
+    route_url    = f"http://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson&annotations=duration"
     route_resp   = requests.get(route_url, timeout=30)
     if route_resp.status_code != 200:
         return jsonify({"error": "OSRM route request failed"}), 500
@@ -970,22 +1002,31 @@ def optimize():
         return jsonify({"error": "Invalid OSRM route response"}), 500
 
     driving_duration = float(route_data.get("duration", 0.0))
-    service_duration = sum(int(s.get("serviceMinutes", 60)) * 60 for s in ordered_stops)
+    service_duration = 0 if drive_only else sum(int(s.get("serviceMinutes", 60)) * 60 for s in ordered_stops)
     total_duration   = driving_duration + service_duration
+
+    # In drive-only mode build leg drive times for display
+    leg_durations_sec = []
+    if drive_only:
+        legs = route_data.get("legs", []) if "legs" in route_data else route_resp.json().get("routes", [{}])[0].get("legs", [])
+        leg_durations_sec = [l.get("duration", 0) for l in legs]
 
     schedule               = []
     late_checkins          = []
     late_priority_checkins = []
 
-    for node in ordered_stop_nodes:
+    for i, node in enumerate(ordered_stop_nodes):
         stop             = all_locations[node]
         eta_minutes      = start_minutes + int(node_arrival_sec.get(node, 0) // 60)
-        service_min      = int(stop.get("serviceMinutes", 60))
+        service_min      = 0 if drive_only else int(stop.get("serviceMinutes", 60))
         finish_min       = eta_minutes + service_min
-        is_checkin       = bool(stop.get("arrival", False))
-        is_priority      = bool(stop.get("priority_checkin", False))
+        is_checkin       = False if drive_only else bool(stop.get("arrival", False))
+        is_priority      = False if drive_only else bool(stop.get("priority_checkin", False))
         is_late          = is_checkin and finish_min > deadline_minutes
         is_priority_late = is_priority and finish_min > priority_deadline_minutes
+
+        # Drive time to this stop from previous (for drive-only display)
+        drive_mins_to_here = round(leg_durations_sec[i] / 60) if drive_only and i < len(leg_durations_sec) else None
 
         if is_late:
             late_checkins.append(stop.get("name"))
@@ -993,16 +1034,17 @@ def optimize():
             late_priority_checkins.append(stop.get("name"))
 
         schedule.append({
-            "name":             stop.get("name"),
-            "arrival":          is_checkin,
-            "priority_checkin": is_priority,
-            "late":             is_late,
-            "priority_late":    is_priority_late,
-            "serviceMinutes":   service_min,
-            "eta":              minutes_to_hhmm(eta_minutes),
-            "eta_minutes":      eta_minutes,
-            "lat":              float(stop.get("lat")),
-            "lng":              float(stop.get("lng")),
+            "name":               stop.get("name"),
+            "arrival":            is_checkin,
+            "priority_checkin":   is_priority,
+            "late":               is_late,
+            "priority_late":      is_priority_late,
+            "serviceMinutes":     service_min,
+            "eta":                minutes_to_hhmm(eta_minutes),
+            "eta_minutes":        eta_minutes,
+            "lat":                float(stop.get("lat")),
+            "lng":                float(stop.get("lng")),
+            "drive_mins_to_here": drive_mins_to_here,  # only set in drive_only mode
         })
 
     return jsonify({
@@ -1020,17 +1062,45 @@ def optimize():
         "late_priority_checkins":     late_priority_checkins,
         "deadline_constraints_used":  used_deadline_constraints,
         "soft_penalties_used":        used_soft_penalties,
+        "drive_only":                 drive_only,   # echo back so frontend knows
     })
 
 
-@app.route("/admin/download-db")
-@login_required  
-@admin_required
-def download_db():
-    return send_file(DB_PATH, as_attachment=True, download_name="properties.db")
 
+# ══════════════════════════════════════════════════════════════════
+#  PUBLIC ROUTE VIEWER  (no login required — share with cleaners)
+# ══════════════════════════════════════════════════════════════════
 
+@app.route("/view/<int:route_id>")
+def view_route(route_id):
+    """Public read-only route view. No login needed — safe to share via URL."""
+    conn = get_db()
+    row  = conn.execute(
+        """SELECT r.id, r.name, r.route_date, r.stops_json,
+                  r.total_duration, r.driving_duration, r.distance,
+                  u.name AS created_by_name
+           FROM saved_routes r
+           JOIN users u ON r.created_by = u.id
+           WHERE r.id = ?""",
+        (route_id,)
+    ).fetchone()
+    conn.close()
 
+    if not row:
+        return render_template("view_route.html", error="Route not found."), 404
+
+    schedule = json.loads(row["stops_json"])
+    return render_template("view_route.html",
+        route_id       = row["id"],
+        route_name     = row["name"],
+        route_date     = row["route_date"],
+        schedule       = schedule,
+        total_duration = row["total_duration"],
+        driving_duration = row["driving_duration"],
+        distance       = row["distance"],
+        created_by     = row["created_by_name"],
+        error          = None,
+    )
 
 # ══════════════════════════════════════════════════════════════════
 #  RUN

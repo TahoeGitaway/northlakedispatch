@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Tahoe Dispatch">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#4f46e5">
+  <title>{% if not error %}{{ route_name }} — Tahoe Dispatch{% else %}Route Not Found{% endif %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>
+    /* ── PWA INSTALL BANNER ── */
+    #installBanner {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: #4f46e5;
+      color: #fff;
+      padding: 14px 16px;
+      z-index: 9999;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 -4px 16px rgba(0,0,0,0.2);
+    }
+    #installBanner.show { display: flex; }
+    #installBanner p { font-size: 0.85rem; font-weight: 500; flex: 1; }
+    #installBanner button {
+      background: #fff;
+      color: #4f46e5;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-weight: 700;
+      font-size: 0.85rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #installBanner .dismiss {
+      background: transparent;
+      color: rgba(255,255,255,0.7);
+      font-size: 1.2rem;
+      padding: 4px 8px;
+    }
+
+    /* ── BADGES ── */
+    .checkin-badge  { display:inline-block; background:#16a34a; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 7px; border-radius:999px; vertical-align:middle; white-space:nowrap; }
+    .priority-badge { display:inline-block; background:#7c3aed; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 7px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+    .late-badge     { display:inline-block; background:#dc2626; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 7px; border-radius:999px; vertical-align:middle; white-space:nowrap; }
+
+    /* ── MAP ── */
+    #map { height: 240px; width: 100%; border-radius: 12px; overflow: hidden; }
+
+    /* ── STOP CARDS ── */
+    .stop-card {
+      border-left: 4px solid #e5e7eb;
+      transition: border-color 0.15s;
+    }
+    .stop-card.checkin   { border-left-color: #16a34a; }
+    .stop-card.priority  { border-left-color: #7c3aed; }
+    .stop-card.late      { border-left-color: #dc2626; }
+
+    /* ── SMOOTH SCROLL ── */
+    html { scroll-behavior: smooth; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen pb-24">
+
+{% if error %}
+<!-- ── ERROR STATE ── -->
+<div class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
+  <div class="text-6xl mb-4">🗺</div>
+  <h1 class="text-xl font-bold text-gray-800 mb-2">Route Not Found</h1>
+  <p class="text-gray-500 text-sm">{{ error }}</p>
+</div>
+
+{% else %}
+<!-- ── HEADER ── -->
+<div class="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-10 shadow-sm">
+  <div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">🏔</span>
+        <h1 class="font-bold text-gray-900 text-base truncate">{{ route_name }}</h1>
+      </div>
+      <div class="text-xs text-gray-400 mt-0.5 flex items-center gap-3 flex-wrap">
+        {% if route_date %}
+        <span>📅 {{ route_date }}</span>
+        {% endif %}
+        {% if total_duration %}
+        <span>⏱ {{ "%.1f"|format(total_duration / 3600) }} hrs total</span>
+        {% endif %}
+        {% if distance %}
+        <span>🛣 {{ "%.1f"|format(distance / 1609) }} mi</span>
+        {% endif %}
+      </div>
+    </div>
+    <!-- Google Maps button -->
+    <button onclick="openGoogleMaps()"
+            class="shrink-0 bg-green-600 hover:bg-green-700 text-white text-xs font-bold
+                   px-3 py-2 rounded-lg transition-colors flex items-center gap-1">
+      📍 Nav
+    </button>
+  </div>
+</div>
+
+<!-- ── MAP ── -->
+<div class="px-4 pt-4">
+  <div id="map"></div>
+</div>
+
+<!-- ── STOP LIST ── -->
+<div class="px-4 pt-4 space-y-3">
+  <h2 class="font-semibold text-gray-700 text-sm">
+    {{ schedule|length }} Stop{{ 's' if schedule|length != 1 else '' }}
+  </h2>
+
+  {% for stop in schedule %}
+  {% set dep_minutes = stop.eta_minutes + stop.serviceMinutes %}
+  {% set dep_hh = (dep_minutes // 60) % 24 %}
+  {% set dep_mm = dep_minutes % 60 %}
+
+  <div class="stop-card bg-white rounded-xl p-4 shadow-sm
+              {% if stop.priority_checkin and stop.priority_late %}late
+              {% elif stop.priority_checkin %}priority
+              {% elif stop.arrival and stop.late %}late
+              {% elif stop.arrival %}checkin
+              {% endif %}"
+       id="stop-{{ loop.index }}">
+
+    <div class="flex items-start justify-between gap-2">
+      <div class="flex items-start gap-3 min-w-0">
+        <!-- Stop number circle -->
+        <div class="shrink-0 w-7 h-7 rounded-full bg-indigo-600 text-white
+                    flex items-center justify-center text-xs font-bold mt-0.5">
+          {{ loop.index }}
+        </div>
+        <div class="min-w-0">
+          <div class="font-semibold text-gray-900 text-sm leading-tight">
+            {{ stop.name }}
+          </div>
+          <div class="flex items-center gap-1 mt-1 flex-wrap">
+            {% if stop.priority_checkin and stop.priority_late %}
+              <span class="late-badge">PRIORITY LATE</span>
+            {% elif stop.priority_checkin %}
+              <span class="checkin-badge">CHECK-IN</span>
+              <span class="priority-badge">by 12PM</span>
+            {% elif stop.arrival and stop.late %}
+              <span class="late-badge">LATE CHECK-IN</span>
+            {% elif stop.arrival %}
+              <span class="checkin-badge">CHECK-IN</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Time block -->
+      <div class="shrink-0 text-right">
+        <div class="text-sm font-bold text-gray-900">{{ stop.eta }}</div>
+        <div class="text-xs text-gray-400">
+          → {{ "%02d:%02d"|format(dep_hh, dep_mm) }}
+        </div>
+        <div class="text-xs text-gray-400 mt-0.5">{{ stop.serviceMinutes }} min</div>
+      </div>
+    </div>
+
+    <!-- Map it button -->
+    <a href="https://maps.google.com/?q={{ stop.lat }},{{ stop.lng }}"
+       target="_blank"
+       class="mt-3 flex items-center gap-1.5 text-xs text-indigo-600
+              font-medium hover:text-indigo-800">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"/>
+      </svg>
+      Open in Maps
+    </a>
+  </div>
+  {% endfor %}
+
+  <!-- Summary footer -->
+  <div class="bg-white rounded-xl p-4 shadow-sm text-sm space-y-1.5 text-gray-600">
+    {% if total_duration %}
+    <div class="flex justify-between">
+      <span>Total time</span>
+      <span class="font-semibold text-gray-900">{{ "%.1f"|format(total_duration / 3600) }} hrs</span>
+    </div>
+    {% endif %}
+    {% if driving_duration %}
+    <div class="flex justify-between">
+      <span>Driving</span>
+      <span class="font-semibold text-gray-900">{{ "%.1f"|format(driving_duration / 3600) }} hrs</span>
+    </div>
+    {% endif %}
+    {% if distance %}
+    <div class="flex justify-between">
+      <span>Distance</span>
+      <span class="font-semibold text-gray-900">{{ "%.1f"|format(distance / 1609) }} mi</span>
+    </div>
+    {% endif %}
+    <div class="pt-1 border-t border-gray-100 text-xs text-gray-400">
+      Route by {{ created_by }} · Tahoe Getaways
+    </div>
+  </div>
+</div>
+
+<!-- ── MAP SCRIPT ── -->
+<script>
+const schedule = {{ schedule|tojson }};
+const startLocation = { lat: 39.34207, lng: -120.21422 };
+
+const map = L.map('map', { zoomControl: true, scrollWheelZoom: false })
+  .setView([39.3279, -120.1833], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18 }).addTo(map);
+
+function makeIcon(color) {
+  return new L.Icon({
+    iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
+    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+    iconSize:[25,41], iconAnchor:[12,41]
+  });
+}
+
+// Start marker
+L.marker([startLocation.lat, startLocation.lng], { icon: makeIcon("blue") })
+  .addTo(map)
+  .bindPopup("<b>Start / End</b><br>Tahoe Getaways Office");
+
+// Stop markers
+let num = 1;
+schedule.forEach(stop => {
+  if (!stop.lat || !stop.lng) return;
+  let color = "blue";
+  if (stop.priority_checkin && stop.priority_late) color = "red";
+  else if (stop.priority_checkin) color = "violet";
+  else if (stop.arrival && stop.late) color = "red";
+  else if (stop.arrival) color = "green";
+
+  const dep = stop.eta_minutes + stop.serviceMinutes;
+  const depStr = `${String(Math.floor(dep/60)%24).padStart(2,'0')}:${String(dep%60).padStart(2,'0')}`;
+
+  L.marker([stop.lat, stop.lng], { icon: makeIcon(color) })
+    .addTo(map)
+    .bindPopup(`<b>${stop.name}</b><br>Arrive: ${stop.eta}<br>Depart: ${depStr}`)
+    .bindTooltip(`${num}`, { permanent:true, direction:"top",
+      className: "route-number" });
+  num++;
+});
+
+// Draw route polyline
+const stops = schedule.filter(s => s.lat && s.lng);
+if (stops.length > 0) {
+  const locs = [startLocation, ...stops];
+  const coordStr = locs.map(s => `${s.lng},${s.lat}`).join(";");
+  fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`)
+    .then(r => r.json())
+    .then(data => {
+      const geo = data.routes?.[0]?.geometry;
+      if (geo) {
+        L.geoJSON(geo, { style:{ color:"#4f46e5", weight:4, opacity:0.8 } }).addTo(map);
+        // Fit map to route
+        const bounds = L.geoJSON(geo).getBounds();
+        map.fitBounds(bounds, { padding:[16,16] });
+      }
+    }).catch(() => {});
+}
+
+// Google Maps full route navigation
+function openGoogleMaps() {
+  const realStops = schedule.filter(s => s.lat && s.lng);
+  if (!realStops.length) return;
+  const coords = [
+    `${startLocation.lat},${startLocation.lng}`,
+    ...realStops.map(s => `${s.lat},${s.lng}`),
+    `${startLocation.lat},${startLocation.lng}`
+  ];
+  window.open("https://www.google.com/maps/dir/" + coords.join("/"), "_blank");
+}
+
+// ── PWA INSTALL PROMPT ──
+let deferredPrompt = null;
+const banner = document.getElementById("installBanner");
+
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  banner.classList.add("show");
+});
+
+function installApp() {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  deferredPrompt.userChoice.then(() => {
+    deferredPrompt = null;
+    banner.classList.remove("show");
+  });
+}
+
+function dismissBanner() {
+  banner.classList.remove("show");
+}
+
+// iOS doesn't support beforeinstallprompt — show a manual tip instead
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+const isInStandaloneMode = window.matchMedia('(display-mode: standalone)').matches;
+if (isIOS && !isInStandaloneMode) {
+  setTimeout(() => { banner.classList.add("show"); }, 1500);
+}
+</script>
+
+<!-- ── PWA INSTALL BANNER ── -->
+<div id="installBanner">
+  <p id="installText">
+    📲 Add Tahoe Dispatch to your home screen for quick access.
+  </p>
+  <button onclick="installApp()" id="installBtn">Add to Home</button>
+  <button class="dismiss" onclick="dismissBanner()">✕</button>
+</div>
+
+<script>
+// Adjust iOS banner text since there's no install prompt API
+const isIOS2 = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+if (isIOS2) {
+  document.getElementById("installText").textContent =
+    "📲 Tap the Share button then \"Add to Home Screen\" to install.";
+  document.getElementById("installBtn").style.display = "none";
+}
+</script>
+
+<!-- Leaflet tooltip style -->
+<style>
+  .route-number {
+    background:#4f46e5; color:#fff; border:none; border-radius:50%;
+    width:20px; height:20px; display:flex; align-items:center; justify-content:center;
+    font-size:0.65rem; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,0.3);
+  }
+</style>
+
+{% endif %}
+</body>
+</html>

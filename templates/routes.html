@@ -102,6 +102,12 @@
                       px-3 py-1.5 rounded-lg transition-colors">
               Load
             </a>
+            <button onclick="shareRoute({{ route.id }}, '{{ route.name|e }}')"
+                    class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
+                           px-3 py-1.5 rounded-lg transition-colors"
+                    title="Share route with cleaner">
+              📤 Share
+            </button>
             {% if current_user.is_admin %}
             <form method="POST"
                   action="{{ url_for('delete_route', route_id=route.id) }}"
@@ -171,6 +177,40 @@ document.addEventListener("DOMContentLoaded", () => {
     first.querySelector(".chevron").style.transform = "rotate(180deg)";
   }
 });
+</script>
+
+<script>
+/* Share route — copies the public view URL to clipboard and shows a toast */
+function shareRoute(routeId, routeName) {
+  const url = `${window.location.origin}/view/${routeId}`;
+
+  // Use native share sheet on mobile if available
+  if (navigator.share) {
+    navigator.share({
+      title: routeName + ' — Tahoe Dispatch',
+      text:  'Your route for today:',
+      url:   url,
+    }).catch(() => {});
+    return;
+  }
+
+  // Fallback: copy to clipboard + show toast
+  navigator.clipboard.writeText(url).then(() => {
+    showToast(`Link copied! Share: ${url}`);
+  }).catch(() => {
+    // Last resort: prompt so they can copy manually
+    prompt('Copy this link and share it:', url);
+  });
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white ' +
+                'text-sm font-medium px-4 py-3 rounded-xl shadow-xl z-50 max-w-sm text-center';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
 </script>
 
 {% endblock %}
