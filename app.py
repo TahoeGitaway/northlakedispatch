@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from flask import send_file
 
 load_dotenv()
 
@@ -1020,6 +1021,15 @@ def optimize():
         "deadline_constraints_used":  used_deadline_constraints,
         "soft_penalties_used":        used_soft_penalties,
     })
+
+
+@app.route("/admin/download-db")
+@login_required  
+@admin_required
+def download_db():
+    return send_file(DB_PATH, as_attachment=True, download_name="properties.db")
+
+
 
 
 # ══════════════════════════════════════════════════════════════════
