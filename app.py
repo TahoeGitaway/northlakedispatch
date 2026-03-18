@@ -53,6 +53,7 @@ def get_db():
 
 def init_db():
     conn = get_db()
+
     conn.execute("""CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT UNIQUE NOT NULL,
@@ -64,6 +65,17 @@ def init_db():
         reset_token_expires TEXT,
         created_at TEXT
     )""")
+
+    conn.execute("""CREATE TABLE IF NOT EXISTS invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL,
+        token TEXT UNIQUE NOT NULL,
+        invited_by INTEGER NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER DEFAULT 0,
+        created_at TEXT
+    )""")
+
     conn.execute("""CREATE TABLE IF NOT EXISTS saved_routes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -78,6 +90,7 @@ def init_db():
         created_at TEXT,
         updated_at TEXT
     )""")
+
     existing = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
     if not existing:
         admin_password = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")
@@ -177,7 +190,6 @@ def login():
 
         user = User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
         login_user(user, remember=remember)
-        # Mark session as permanent so the 12-hour lifetime applies
         session.permanent = True
         return redirect(request.args.get("next") or url_for("home"))
 
@@ -301,12 +313,21 @@ def admin_required(f):
 @login_required
 @admin_required
 def admin_users():
-    conn  = get_db()
-    users = conn.execute(
+    conn     = get_db()
+    users    = conn.execute(
         "SELECT id, email, name, role, is_active, created_at FROM users ORDER BY created_at DESC"
     ).fetchall()
+    # Show pending (unused, unexpired) invites so admin can see what's outstanding
+    invites  = conn.execute(
+        """SELECT i.email, i.expires_at, i.created_at, u.name AS invited_by_name
+           FROM invites i
+           JOIN users u ON i.invited_by = u.id
+           WHERE i.used = 0 AND i.expires_at > ?
+           ORDER BY i.created_at DESC""",
+        (datetime.utcnow().isoformat(),)
+    ).fetchall()
     conn.close()
-    return render_template("admin.html", users=users)
+    return render_template("admin.html", users=users, invites=invites)
 
 
 @app.route("/admin/users/add", methods=["POST"])
@@ -380,6 +401,161 @@ def admin_reset_password(user_id):
     conn.close()
     flash("Password updated.", "success")
     return redirect(url_for("admin_users"))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  INVITE SYSTEM
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/admin/invite", methods=["POST"])
+@login_required
+@admin_required
+def admin_invite():
+    email = (request.form.get("email") or "").strip().lower()
+
+    if not email:
+        flash("Email address is required.", "error")
+        return redirect(url_for("admin_users"))
+
+    conn = get_db()
+
+    # Don't invite someone who already has an account
+    existing_user = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if existing_user:
+        flash(f"{email} already has an account.", "error")
+        conn.close()
+        return redirect(url_for("admin_users"))
+
+    # Cancel any existing unused invite for this email before creating a new one
+    conn.execute("DELETE FROM invites WHERE email = ? AND used = 0", (email,))
+
+    token      = secrets.token_urlsafe(32)
+    expires_at = (datetime.utcnow() + timedelta(hours=48)).isoformat()
+    now        = datetime.utcnow().isoformat()
+
+    conn.execute(
+        "INSERT INTO invites (email, token, invited_by, expires_at, used, created_at) VALUES (?,?,?,?,0,?)",
+        (email, token, current_user.id, expires_at, now)
+    )
+    conn.commit()
+    conn.close()
+
+    _send_invite_email(email, token)
+    flash(f"Invite sent to {email}. Link expires in 48 hours.", "success")
+    return redirect(url_for("admin_users"))
+
+
+def _send_invite_email(to_email: str, token: str):
+    register_url = f"{APP_BASE_URL}/register/{token}"
+    message = Mail(
+        from_email=FROM_EMAIL,
+        to_emails=to_email,
+        subject="You're invited to Tahoe Dispatch",
+        html_content=f"""
+            <p>Hi,</p>
+            <p>You've been invited to join <strong>Tahoe Dispatch</strong> —
+               Tahoe Getaways' internal routing tool.</p>
+            <p>Click the link below to create your account.
+               This link expires in <strong>48 hours</strong>.</p>
+            <p><a href="{register_url}" style="
+                display:inline-block;
+                background:#4f46e5;
+                color:#fff;
+                padding:10px 20px;
+                border-radius:8px;
+                text-decoration:none;
+                font-weight:600;">
+                Create My Account →
+            </a></p>
+            <p style="color:#6b7280;font-size:0.85em;">
+                Or copy this link: {register_url}
+            </p>
+            <p>— Tahoe Getaways Operations</p>
+        """
+    )
+    try:
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        sg.send(message)
+    except Exception as e:
+        app.logger.error(f"SendGrid invite error: {e}")
+
+
+@app.route("/register/<token>", methods=["GET", "POST"])
+def register(token):
+    """Public registration page — only accessible via a valid invite link."""
+    conn = get_db()
+    invite = conn.execute(
+        "SELECT id, email, expires_at, used FROM invites WHERE token = ?", (token,)
+    ).fetchone()
+
+    # Validate token
+    if not invite:
+        conn.close()
+        flash("This invite link is invalid.", "error")
+        return redirect(url_for("login"))
+
+    if invite["used"]:
+        conn.close()
+        flash("This invite link has already been used.", "error")
+        return redirect(url_for("login"))
+
+    if datetime.utcnow() > datetime.fromisoformat(invite["expires_at"]):
+        conn.close()
+        flash("This invite link has expired. Ask your admin to send a new one.", "error")
+        return redirect(url_for("login"))
+
+    invited_email = invite["email"]
+
+    if request.method == "POST":
+        name     = (request.form.get("name") or "").strip()
+        password = request.form.get("password") or ""
+        confirm  = request.form.get("confirm") or ""
+
+        if not name:
+            flash("Please enter your name.", "error")
+            return render_template("register.html", token=token, email=invited_email)
+
+        if len(password) < 8:
+            flash("Password must be at least 8 characters.", "error")
+            return render_template("register.html", token=token, email=invited_email)
+
+        if password != confirm:
+            flash("Passwords do not match.", "error")
+            return render_template("register.html", token=token, email=invited_email)
+
+        # Check email not already taken (race condition guard)
+        existing = conn.execute("SELECT id FROM users WHERE email = ?", (invited_email,)).fetchone()
+        if existing:
+            conn.close()
+            flash("An account with this email already exists. Try logging in.", "error")
+            return redirect(url_for("login"))
+
+        # Create the account
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (?,?,?,?,1,?)",
+            (invited_email, name, "user", generate_password_hash(password), now)
+        )
+        # Mark invite as used
+        conn.execute("UPDATE invites SET used = 1 WHERE token = ?", (token,))
+        conn.commit()
+
+        # Log them in immediately
+        row = conn.execute(
+            "SELECT id, email, name, role, is_active FROM users WHERE email = ?",
+            (invited_email,)
+        ).fetchone()
+        conn.close()
+
+        user = User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
+        login_user(user)
+        session.permanent = True
+
+        flash(f"Welcome to Tahoe Dispatch, {name}! Your account is ready.", "success")
+        return redirect(url_for("home"))
+
+    conn.close()
+    return render_template("register.html", token=token, email=invited_email)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -496,17 +672,10 @@ def save_route():
             service_duration, distance, created_by, last_edited_by, created_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            name,
-            route_date,
-            json.dumps(schedule),
-            stats.get("total_duration", 0),
-            stats.get("driving_duration", 0),
-            stats.get("service_duration", 0),
-            stats.get("distance", 0),
-            current_user.id,
-            current_user.id,
-            now,
-            now,
+            name, route_date, json.dumps(schedule),
+            stats.get("total_duration", 0), stats.get("driving_duration", 0),
+            stats.get("service_duration", 0), stats.get("distance", 0),
+            current_user.id, current_user.id, now, now,
         )
     )
     conn.commit()
@@ -538,15 +707,10 @@ def update_route(route_id):
                service_duration = ?, distance = ?,
                last_edited_by = ?, updated_at = ?
                WHERE id = ?""",
-            (
-                name, route_date,
-                json.dumps(schedule),
-                stats.get("total_duration", 0),
-                stats.get("driving_duration", 0),
-                stats.get("service_duration", 0),
-                stats.get("distance", 0),
-                current_user.id, now, route_id,
-            )
+            (name, route_date, json.dumps(schedule),
+             stats.get("total_duration", 0), stats.get("driving_duration", 0),
+             stats.get("service_duration", 0), stats.get("distance", 0),
+             current_user.id, now, route_id)
         )
     else:
         conn.execute(
@@ -555,14 +719,10 @@ def update_route(route_id):
                service_duration = ?, distance = ?,
                last_edited_by = ?, updated_at = ?
                WHERE id = ?""",
-            (
-                json.dumps(schedule),
-                stats.get("total_duration", 0),
-                stats.get("driving_duration", 0),
-                stats.get("service_duration", 0),
-                stats.get("distance", 0),
-                current_user.id, now, route_id,
-            )
+            (json.dumps(schedule),
+             stats.get("total_duration", 0), stats.get("driving_duration", 0),
+             stats.get("service_duration", 0), stats.get("distance", 0),
+             current_user.id, now, route_id)
         )
 
     conn.commit()
