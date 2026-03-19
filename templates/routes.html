@@ -2,6 +2,81 @@
 {% block title %}Saved Routes — Tahoe Dispatch{% endblock %}
 {% block content %}
 
+<style>
+  /* ── CALENDAR ── */
+  .cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+  .cal-day-header {
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #9ca3af;
+    padding: 6px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .cal-cell {
+    min-height: 52px;
+    border-radius: 8px;
+    padding: 4px 6px;
+    cursor: pointer;
+    transition: background 0.1s;
+    position: relative;
+    background: #f9fafb;
+  }
+  .cal-cell:hover { background: #e0e7ff; }
+  .cal-cell.empty { background: transparent; cursor: default; }
+  .cal-cell.has-routes { background: #eef2ff; }
+  .cal-cell.has-routes:hover { background: #c7d2fe; }
+  .cal-cell.today { background: #4f46e5; color: #fff; }
+  .cal-cell.today:hover { background: #4338ca; }
+  .cal-cell.today .cal-date { color: #fff; }
+  .cal-cell.selected { background: #312e81; color: #fff; box-shadow: 0 0 0 2px #4f46e5; }
+  .cal-cell.selected .cal-date { color: #fff; }
+  .cal-date {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #374151;
+    line-height: 1;
+  }
+  .cal-dot-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-top: 3px;
+  }
+  .cal-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #6366f1;
+    flex-shrink: 0;
+  }
+  .cal-cell.today .cal-dot,
+  .cal-cell.selected .cal-dot { background: #a5b4fc; }
+
+  /* ── MONTH NAV ── */
+  .month-nav button {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: #374151;
+    transition: background 0.1s;
+  }
+  .month-nav button:hover { background: #f3f4f6; }
+
+  /* ── DAY DETAIL ── */
+  #dayDetail {
+    transition: opacity 0.15s;
+  }
+</style>
+
 <div class="max-w-3xl mx-auto px-6 py-8">
 
   <div class="flex items-center justify-between mb-6">
@@ -15,123 +90,39 @@
 
   {% if routes %}
 
-  {# ── Group routes by route_date ── #}
-  {% set ns = namespace(current_date=None) %}
+  <!-- ── CALENDAR ── -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
 
-  {# Build day groups in Jinja #}
-  {% set day_groups = {} %}
-  {% for route in routes %}
-    {% set d = route.route_date or "No Date" %}
-    {% if d not in day_groups %}
-      {% set _ = day_groups.update({d: []}) %}
-    {% endif %}
-    {% set _ = day_groups[d].append(route) %}
-  {% endfor %}
+    <!-- Month navigation -->
+    <div class="month-nav flex items-center justify-between mb-4">
+      <button onclick="changeMonth(-1)">← Prev</button>
+      <div id="monthLabel" class="font-bold text-gray-800 text-base"></div>
+      <button onclick="changeMonth(1)">Next →</button>
+    </div>
 
-  <div class="space-y-3" id="dayList">
-    {% for day, day_routes in day_groups.items() %}
+    <!-- Day-of-week headers -->
+    <div class="cal-grid mb-1">
+      {% for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
+      <div class="cal-day-header">{{ d }}</div>
+      {% endfor %}
+    </div>
 
-    {# Determine if this day should be expanded by default:
-       expand the group that contains today or the nearest future date #}
-    {% set today_str = now_date %}
-    {% set is_today_or_future = day >= today_str %}
+    <!-- Calendar cells (built by JS) -->
+    <div class="cal-grid" id="calGrid"></div>
+  </div>
 
-    <div class="day-group bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-
-      <!-- Day Header — click to expand/collapse -->
-      <button onclick="toggleDay(this)"
-              class="w-full flex items-center justify-between px-5 py-4
-                     hover:bg-gray-50 transition-colors text-left">
-        <div class="flex items-center gap-3">
-          <span class="text-lg">📅</span>
-          <div>
-            <div class="font-bold text-gray-800 text-base">
-              {% if day == "No Date" %}
-                No Date Set
-              {% else %}
-                {# Format: "Monday, March 18, 2026" #}
-                {{ day }}
-              {% endif %}
-            </div>
-            <div class="text-xs text-gray-400 mt-0.5">
-              {{ day_routes|length }} route{{ 's' if day_routes|length != 1 else '' }}
-            </div>
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          {% if day == today_str %}
-          <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">Today</span>
-          {% elif day > today_str %}
-          <span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Upcoming</span>
-          {% else %}
-          <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">Past</span>
-          {% endif %}
-          <svg class="chevron w-5 h-5 text-gray-400 transition-transform duration-200
-                      {% if is_today_or_future %}rotate-0{% else %}rotate-0{% endif %}"
-               fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
-          </svg>
-        </div>
-      </button>
-
-      <!-- Routes for this day -->
-      <div class="day-routes {% if not is_today_or_future %}hidden{% endif %}
-                  border-t border-gray-100 divide-y divide-gray-50">
-        {% for route in day_routes %}
-        <div class="px-5 py-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition-colors">
-
-          <div class="flex-1 min-w-0">
-            <div class="font-semibold text-gray-800 truncate">{{ route.name }}</div>
-            {% if route.assigned_to %}
-            <div class="text-sm font-medium text-indigo-700 mt-0.5">
-              👤 {{ route.assigned_to }}
-            </div>
-            {% endif %}
-            <div class="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1 mt-1">
-              <span>📍 {{ route.created_by_name }}</span>
-              {% if route.last_edited_by_name and route.last_edited_by_name != route.created_by_name %}
-              <span>✏️ {{ route.last_edited_by_name }}</span>
-              {% endif %}
-              {% if route.total_duration %}
-              <span>⏱ {{ "%.1f"|format(route.total_duration / 3600) }} hrs</span>
-              {% endif %}
-              {% if route.distance %}
-              <span>🛣 {{ "%.1f"|format(route.distance / 1609) }} mi</span>
-              {% endif %}
-            </div>
-          </div>
-
-          <div class="flex items-center gap-2 shrink-0">
-            <a href="{{ url_for('home') }}?load={{ route.id }}"
-               class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
-                      px-3 py-1.5 rounded-lg transition-colors">
-              Load
-            </a>
-            <button onclick="shareRoute({{ route.id }}, '{{ route.name|e }}')"
-                    class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
-                           px-3 py-1.5 rounded-lg transition-colors"
-                    title="Share route with cleaner">
-              📤 Share
-            </button>
-            {% if current_user.is_admin %}
-            <form method="POST"
-                  action="{{ url_for('delete_route', route_id=route.id) }}"
-                  onsubmit="return confirm('Delete \'{{ route.name }}\'? This cannot be undone.')">
-              <button type="submit"
-                      class="text-red-400 hover:text-red-600 text-sm px-2 py-1.5
-                             rounded-lg hover:bg-red-50 transition-colors">
-                Delete
-              </button>
-            </form>
-            {% endif %}
-          </div>
-
-        </div>
-        {% endfor %}
+  <!-- ── DAY DETAIL ── -->
+  <div id="dayDetail">
+    <div id="dayDetailEmpty" class="text-center py-10 text-gray-400 text-sm">
+      Click a day on the calendar to see its routes.
+    </div>
+    <div id="dayDetailContent" class="hidden">
+      <div class="flex items-center justify-between mb-3">
+        <h3 id="dayDetailTitle" class="font-bold text-gray-800 text-lg"></h3>
+        <span id="dayDetailCount" class="text-xs text-gray-400"></span>
       </div>
-
-    </div><!-- /day-group -->
-    {% endfor %}
+      <div id="dayDetailRoutes" class="space-y-3"></div>
+    </div>
   </div>
 
   {% else %}
@@ -145,76 +136,245 @@
 </div>
 
 <script>
-function toggleDay(btn) {
-  const group   = btn.closest(".day-group");
-  const content = group.querySelector(".day-routes");
-  const chevron = btn.querySelector(".chevron");
-  const hidden  = content.classList.contains("hidden");
-  content.classList.toggle("hidden", !hidden);
-  chevron.style.transform = hidden ? "rotate(180deg)" : "rotate(0deg)";
+/* ── ALL ROUTES from backend ── */
+const allRoutes = [
+  {% for r in routes %}
+  {
+    id: {{ r.id }},
+    name: {{ r.name | tojson }},
+    route_date: {{ (r.route_date or '') | tojson }},
+    assigned_to: {{ (r.assigned_to or '') | tojson }},
+    created_by_name: {{ (r.created_by_name or '') | tojson }},
+    total_duration: {{ r.total_duration or 0 }},
+    distance: {{ r.distance or 0 }}
+  }{{ "," if not loop.last }}
+  {% endfor %}
+];
+const TODAY_STR = "{{ now_date }}";
+
+/* ── Build a map: dateStr → [route, ...] ── */
+const routesByDate = {};
+allRoutes.forEach(r => {
+  const d = r.route_date || "no-date";
+  if (!routesByDate[d]) routesByDate[d] = [];
+  routesByDate[d].push(r);
+});
+
+/* ── Calendar state ── */
+const todayParts  = TODAY_STR.split("-").map(Number); // [y, m, d]
+let calYear  = todayParts[0];
+let calMonth = todayParts[1]; // 1-based
+let selectedDate = null;
+
+function dateStr(y, m, d) {
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+function monthLabel(y, m) {
+  return new Date(y, m - 1, 1).toLocaleString('default', { month:'long', year:'numeric' });
+}
+function daysInMonth(y, m) {
+  return new Date(y, m, 0).getDate();
+}
+function firstDayOfWeek(y, m) {
+  return new Date(y, m - 1, 1).getDay(); // 0=Sun
 }
 
-// On load: open the first upcoming/today group, close the rest
-document.addEventListener("DOMContentLoaded", () => {
-  const groups  = document.querySelectorAll(".day-group");
-  let   opened  = false;
+function buildCalendar() {
+  document.getElementById("monthLabel").textContent = monthLabel(calYear, calMonth);
+  const grid     = document.getElementById("calGrid");
+  grid.innerHTML = "";
 
-  groups.forEach(group => {
-    const content = group.querySelector(".day-routes");
-    const chevron = group.querySelector(".chevron");
-    const isOpen  = !content.classList.contains("hidden");
+  const startDow = firstDayOfWeek(calYear, calMonth);
+  const days     = daysInMonth(calYear, calMonth);
 
-    if (isOpen && !opened) {
-      // First open group = keep open, set chevron
-      chevron.style.transform = "rotate(180deg)";
-      opened = true;
-    } else {
-      // Everything else starts closed
-      content.classList.add("hidden");
-      chevron.style.transform = "rotate(0deg)";
-    }
-  });
-
-  // If nothing was naturally open (all past), open the most recent one
-  if (!opened && groups.length > 0) {
-    const first   = groups[0];
-    first.querySelector(".day-routes").classList.remove("hidden");
-    first.querySelector(".chevron").style.transform = "rotate(180deg)";
+  // Empty cells before first day
+  for (let i = 0; i < startDow; i++) {
+    const cell = document.createElement("div");
+    cell.className = "cal-cell empty";
+    grid.appendChild(cell);
   }
-});
-</script>
 
-<script>
-/* Share route — copies the public view URL to clipboard and shows a toast */
-function shareRoute(routeId, routeName) {
-  const url = `${window.location.origin}/view/${routeId}`;
+  for (let d = 1; d <= days; d++) {
+    const ds    = dateStr(calYear, calMonth, d);
+    const routes = routesByDate[ds] || [];
+    const isToday    = ds === TODAY_STR;
+    const isSelected = ds === selectedDate;
 
-  // Use native share sheet on mobile if available
-  if (navigator.share) {
-    navigator.share({
-      title: routeName + ' — Tahoe Dispatch',
-      text:  'Your route for today:',
-      url:   url,
-    }).catch(() => {});
+    const cell = document.createElement("div");
+    cell.className = "cal-cell" +
+      (routes.length ? " has-routes" : "") +
+      (isToday    ? " today"    : "") +
+      (isSelected ? " selected" : "");
+    cell.dataset.date = ds;
+
+    const dateDiv = document.createElement("div");
+    dateDiv.className = "cal-date";
+    dateDiv.textContent = d;
+    cell.appendChild(dateDiv);
+
+    if (routes.length) {
+      const dotRow = document.createElement("div");
+      dotRow.className = "cal-dot-row";
+      const maxDots = Math.min(routes.length, 5);
+      for (let i = 0; i < maxDots; i++) {
+        const dot = document.createElement("div");
+        dot.className = "cal-dot";
+        dotRow.appendChild(dot);
+      }
+      cell.appendChild(dotRow);
+    }
+
+    if (routes.length || isToday) {
+      cell.addEventListener("click", () => selectDay(ds));
+    }
+
+    grid.appendChild(cell);
+  }
+}
+
+function changeMonth(delta) {
+  calMonth += delta;
+  if (calMonth > 12) { calMonth = 1;  calYear++; }
+  if (calMonth < 1)  { calMonth = 12; calYear--; }
+  buildCalendar();
+}
+
+function selectDay(ds) {
+  selectedDate = ds;
+  buildCalendar(); // rebuild to update selected highlight
+
+  const routes = routesByDate[ds] || [];
+  const date   = new Date(ds + "T00:00:00");
+  const label  = date.toLocaleDateString('default', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+
+  document.getElementById("dayDetailEmpty").classList.add("hidden");
+  document.getElementById("dayDetailContent").classList.remove("hidden");
+  document.getElementById("dayDetailTitle").textContent = label;
+  document.getElementById("dayDetailCount").textContent =
+    routes.length + " route" + (routes.length !== 1 ? "s" : "");
+
+  const container = document.getElementById("dayDetailRoutes");
+  container.innerHTML = "";
+
+  if (!routes.length) {
+    container.innerHTML = '<p class="text-sm text-gray-400 text-center py-6">No routes saved for this day.</p>';
     return;
   }
 
-  // Fallback: copy to clipboard + show toast
-  navigator.clipboard.writeText(url).then(() => {
-    showToast(`Link copied! Share: ${url}`);
-  }).catch(() => {
-    // Last resort: prompt so they can copy manually
-    prompt('Copy this link and share it:', url);
+  routes.forEach(route => {
+    const div = document.createElement("div");
+    div.className = "bg-white rounded-xl shadow-sm border border-gray-100 px-5 py-4 flex items-center justify-between gap-4 hover:bg-gray-50 transition-colors";
+
+    const info = document.createElement("div");
+    info.className = "flex-1 min-w-0";
+
+    const name = document.createElement("div");
+    name.className = "font-semibold text-gray-800 truncate";
+    name.textContent = route.name;
+    info.appendChild(name);
+
+    if (route.assigned_to) {
+      const tech = document.createElement("div");
+      tech.className = "text-sm font-medium text-indigo-700 mt-0.5";
+      tech.textContent = "👤 " + route.assigned_to;
+      info.appendChild(tech);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1 mt-1";
+    let metaHtml = `<span>📍 ${route.created_by_name}</span>`;
+    if (route.total_duration) metaHtml += `<span>⏱ ${(route.total_duration/3600).toFixed(1)} hrs</span>`;
+    if (route.distance)       metaHtml += `<span>🛣 ${(route.distance/1609).toFixed(1)} mi</span>`;
+    meta.innerHTML = metaHtml;
+    info.appendChild(meta);
+
+    div.appendChild(info);
+
+    // Action buttons
+    const btns = document.createElement("div");
+    btns.className = "flex items-center gap-2 shrink-0";
+
+    const loadBtn = document.createElement("a");
+    loadBtn.href = `/?load=${route.id}`;
+    loadBtn.className = "bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors";
+    loadBtn.textContent = "Load";
+    btns.appendChild(loadBtn);
+
+    const shareBtn = document.createElement("button");
+    shareBtn.className = "bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors";
+    shareBtn.textContent = "📤 Share";
+    shareBtn.onclick = () => shareRoute(route.id, route.name);
+    btns.appendChild(shareBtn);
+
+    {% if current_user.is_admin %}
+    const delForm = document.createElement("form");
+    delForm.method = "POST";
+    delForm.action = `/routes/${0}/delete`.replace("0", route.id);
+    delForm.onsubmit = () => confirm(`Delete "${route.name}"? This cannot be undone.`);
+    const delBtn = document.createElement("button");
+    delBtn.type = "submit";
+    delBtn.className = "text-red-400 hover:text-red-600 text-sm px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors";
+    delBtn.textContent = "Delete";
+    delForm.appendChild(delBtn);
+    btns.appendChild(delForm);
+    {% endif %}
+
+    div.appendChild(btns);
+    container.appendChild(div);
   });
+}
+
+/* ── Init: build calendar, auto-select today or nearest date with routes ── */
+document.addEventListener("DOMContentLoaded", () => {
+  buildCalendar();
+
+  // Try to auto-select today if it has routes, else nearest future date with routes
+  if (routesByDate[TODAY_STR]) {
+    selectDay(TODAY_STR);
+  } else {
+    // Find nearest future date with routes
+    const futureDates = Object.keys(routesByDate)
+      .filter(d => d !== "no-date" && d >= TODAY_STR)
+      .sort();
+    if (futureDates.length) {
+      // Navigate to that month if needed
+      const parts = futureDates[0].split("-").map(Number);
+      calYear  = parts[0];
+      calMonth = parts[1];
+      buildCalendar();
+      selectDay(futureDates[0]);
+    } else {
+      // All past — show most recent month with routes
+      const pastDates = Object.keys(routesByDate)
+        .filter(d => d !== "no-date")
+        .sort().reverse();
+      if (pastDates.length) {
+        const parts = pastDates[0].split("-").map(Number);
+        calYear  = parts[0];
+        calMonth = parts[1];
+        buildCalendar();
+        selectDay(pastDates[0]);
+      }
+    }
+  }
+});
+
+/* ── Share ── */
+function shareRoute(routeId, routeName) {
+  const url = `${window.location.origin}/view/${routeId}`;
+  if (navigator.share) {
+    navigator.share({ title: routeName + ' — Tahoe Dispatch', text: 'Your route for today:', url }).catch(() => {});
+    return;
+  }
+  navigator.clipboard.writeText(url).then(() => showToast(`Link copied!`)).catch(() => prompt('Copy this link:', url));
 }
 
 function showToast(msg) {
   const t = document.createElement('div');
-  t.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white ' +
-                'text-sm font-medium px-4 py-3 rounded-xl shadow-xl z-50 max-w-sm text-center';
+  t.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm font-medium px-4 py-3 rounded-xl shadow-xl z-50';
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  setTimeout(() => t.remove(), 3000);
 }
 </script>
 
