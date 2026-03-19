@@ -151,14 +151,35 @@
       <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
     </div>
 
-    <!-- SEARCH — works both before and after optimization -->
-    <div class="relative">
+    <!-- PRE-OPT: Property search -->
+    <div id="preOptSearch" class="relative">
       <input id="searchBox" placeholder="Add property…"
              class="w-full border rounded-lg p-2" autocomplete="off">
       <div id="suggestions"
            class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
                   shadow-lg hidden overflow-hidden">
       </div>
+    </div>
+
+    <!-- POST-OPT: Work In a Stop (hidden until after optimization) -->
+    <div id="workInSection" class="hidden p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-semibold text-indigo-800 uppercase tracking-wide">➕ Work In a Stop</span>
+        <span class="text-xs text-indigo-500">No re-optimize needed</span>
+      </div>
+      <div class="relative">
+        <input id="workInBox" placeholder="Search for a property to insert…"
+               class="w-full border border-indigo-300 rounded-lg p-2 text-sm bg-white
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400"
+               autocomplete="off">
+        <div id="workInSuggestions"
+             class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
+                    shadow-lg hidden overflow-hidden">
+        </div>
+      </div>
+      <p class="text-xs text-indigo-500 mt-1.5">
+        Stop will be added at the end — drag it to the right position.
+      </p>
     </div>
 
     <!-- PRE-OPTIMIZATION STOP LIST (hidden after optimize) -->
@@ -586,23 +607,110 @@ function closeSuggestions(clearInput = false) {
 }
 
 /* ================================================================
+   WORK-IN SEARCH BOX — separate from main search, post-opt only
+================================================================ */
+const workInBox         = document.getElementById("workInBox");
+const workInSuggestions = document.getElementById("workInSuggestions");
+let workInCurrent = [];
+let workInIndex   = -1;
+
+workInBox.addEventListener("input", function() {
+  const text = this.value.toLowerCase().trim();
+  workInCurrent = []; workInIndex = -1;
+  if (text.length < 2) { closeWorkIn(false); return; }
+
+  const already = new Set(optimizedSchedule.filter(s => !s.isLunch).map(s => s.name));
+  workInCurrent = properties
+    .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
+    .slice(0, 10);
+  renderWorkInSuggestions();
+});
+
+workInBox.addEventListener("keydown", function(e) {
+  if (!workInCurrent.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    workInIndex = (workInIndex + 1) % workInCurrent.length;
+    updateWorkInHighlight();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    workInIndex = (workInIndex - 1 + workInCurrent.length) % workInCurrent.length;
+    updateWorkInHighlight();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const idx = workInIndex >= 0 ? workInIndex : 0;
+    workInStop(workInCurrent[idx], false, false); closeWorkIn(true);
+  } else if (e.key === "c" || e.key === "C") {
+    const idx = workInIndex >= 0 ? workInIndex : (workInCurrent.length===1?0:-1);
+    if (idx >= 0) { workInStop(workInCurrent[idx], true, false); closeWorkIn(true); }
+  } else if (e.key === "p" || e.key === "P") {
+    const idx = workInIndex >= 0 ? workInIndex : (workInCurrent.length===1?0:-1);
+    if (idx >= 0) { workInStop(workInCurrent[idx], true, true); closeWorkIn(true); }
+  } else if (e.key === "Escape") { closeWorkIn(false); }
+});
+
+document.addEventListener("click", e => {
+  if (!workInSuggestions.contains(e.target) && e.target !== workInBox) closeWorkIn(false);
+});
+
+function renderWorkInSuggestions() {
+  workInSuggestions.innerHTML = "";
+  if (!workInCurrent.length) { workInSuggestions.classList.add("hidden"); return; }
+  workInSuggestions.classList.remove("hidden");
+
+  workInCurrent.forEach((p, idx) => {
+    const div = document.createElement("div");
+    div.className = `sugg-item${idx === workInIndex ? " active" : ""}`;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "sugg-item-name";
+    nameSpan.textContent = p.name;
+    nameSpan.addEventListener("click", () => { workInStop(p, false, false); closeWorkIn(true); });
+
+    const btnWrap = document.createElement("span");
+    btnWrap.className = "sugg-type-btns";
+    [["stop","+ Stop",false,false],["checkin","✓ Check-in",true,false],["priority","★ Priority",true,true]]
+      .forEach(([cls, label, ci, pr]) => {
+        const btn = document.createElement("button");
+        btn.className = `sugg-type-btn ${cls}`;
+        btn.textContent = label;
+        btn.addEventListener("click", e => { e.stopPropagation(); workInStop(p,ci,pr); closeWorkIn(true); });
+        btnWrap.appendChild(btn);
+      });
+
+    div.addEventListener("mouseenter", () => { workInIndex = idx; updateWorkInHighlight(); });
+    div.appendChild(nameSpan);
+    div.appendChild(btnWrap);
+    workInSuggestions.appendChild(div);
+  });
+
+  const hint = document.createElement("div");
+  hint.className = "suggestion-hint";
+  hint.innerHTML = `<kbd>Enter</kbd> add &nbsp;<kbd>C</kbd> check-in &nbsp;<kbd>P</kbd> priority`;
+  workInSuggestions.appendChild(hint);
+}
+
+function updateWorkInHighlight() {
+  [...workInSuggestions.querySelectorAll(".sugg-item")].forEach((el, i) =>
+    el.classList.toggle("active", i === workInIndex));
+}
+function closeWorkIn(clearInput = false) {
+  workInSuggestions.classList.add("hidden"); workInSuggestions.innerHTML = "";
+  if (clearInput) workInBox.value = "";
+  workInCurrent = []; workInIndex = -1;
+}
+
+/* ================================================================
    ADD STOP — works both before and after optimization
 ================================================================ */
-async function addStop(property, asCheckin = false, asPriority = false) {
-  if (isOptimized) {
-    // "Work in" mode: add to end of optimized schedule, fetch its
-    // matrix distances to neighbors, update times
-    await workInStop(property, asCheckin, asPriority);
-  } else {
-    // Pre-optimization: just add to the list
-    if (selectedStops.find(s => s.name === property.name)) return;
-    selectedStops.push({
-      _id: makeStopId(), name:property.name, lat:property.lat, lng:property.lng,
-      arrival: asCheckin || asPriority, priority_checkin: asPriority, serviceMinutes: 60
-    });
-    isOptimized = false;
-    renderStops();
-  }
+function addStop(property, asCheckin = false, asPriority = false) {
+  // Pre-optimization only — post-opt use the Work In box instead
+  if (selectedStops.find(s => s.name === property.name)) return;
+  selectedStops.push({
+    _id: makeStopId(), name:property.name, lat:property.lat, lng:property.lng,
+    arrival: asCheckin || asPriority, priority_checkin: asPriority, serviceMinutes: 60
+  });
+  renderStops();
 }
 
 async function workInStop(property, asCheckin, asPriority) {
@@ -837,8 +945,11 @@ function restartRoute() {
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
   document.getElementById("preOptSection").classList.remove("hidden");
+  document.getElementById("preOptSearch").classList.remove("hidden");
+  document.getElementById("workInSection").classList.add("hidden");
   document.getElementById("saveRouteBtn").classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
+  document.getElementById("workInBox").value = "";
   document.getElementById("saveRouteName").value  = "";
   document.getElementById("saveAssignedTo").value = "";
   document.getElementById("saveRouteDate").value  = "";
@@ -1071,9 +1182,11 @@ function optimizeRoute() {
       wb.innerHTML = warns.join("<br>");
     }
 
-    // Show schedule section, hide pre-opt list
+    // Show schedule section, hide pre-opt list, show work-in hint
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("preOptSection").classList.add("hidden");
+    document.getElementById("preOptSearch").classList.add("hidden");
+    document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
     if (!document.getElementById("saveRouteDate").value)
       document.getElementById("saveRouteDate").value = new Date().toISOString().split("T")[0];
@@ -1244,6 +1357,8 @@ async function submitSaveRoute() {
 
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("preOptSection").classList.add("hidden");
+    document.getElementById("preOptSearch").classList.add("hidden");
+    document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value  = data.name;
     document.getElementById("saveAssignedTo").value = data.assigned_to || "";
