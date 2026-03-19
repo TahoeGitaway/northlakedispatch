@@ -947,8 +947,6 @@ function restartRoute() {
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
-  document.getElementById("preOptSection").classList.remove("hidden");
-  document.getElementById("preOptSearch").classList.remove("hidden");
   document.getElementById("workInSection").classList.add("hidden");
   document.getElementById("saveRouteBtn").classList.add("hidden");
   document.getElementById("updateRouteBtn").classList.add("hidden");
@@ -1188,10 +1186,15 @@ function optimizeRoute() {
 
     // Show schedule section, hide pre-opt list, show work-in hint
     document.getElementById("scheduleSection").classList.remove("hidden");
-    document.getElementById("preOptSection").classList.add("hidden");
-    document.getElementById("preOptSearch").classList.add("hidden");
     document.getElementById("workInSection").classList.remove("hidden");
-    document.getElementById("saveRouteBtn").classList.remove("hidden");
+    // If a route is already loaded, show Update; otherwise show Save
+    if (currentRouteId) {
+      document.getElementById("saveRouteBtn").classList.add("hidden");
+      document.getElementById("updateRouteBtn").classList.remove("hidden");
+    } else {
+      document.getElementById("saveRouteBtn").classList.remove("hidden");
+      document.getElementById("updateRouteBtn").classList.add("hidden");
+    }
     if (!document.getElementById("saveRouteDate").value)
       document.getElementById("saveRouteDate").value = new Date().toISOString().split("T")[0];
 
@@ -1222,6 +1225,7 @@ function optimizeRoute() {
       markers[stop.name] = m;
     });
 
+    renderStops();    // keep pre-opt list in sync so user can add more stops and re-optimize
     renderSchedule();
   })
   .catch(err => {
@@ -1417,11 +1421,10 @@ async function submitUpdateRoute() {
     if (data.distance)         document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
 
     document.getElementById("scheduleSection").classList.remove("hidden");
-    document.getElementById("preOptSection").classList.add("hidden");
-    document.getElementById("preOptSearch").classList.add("hidden");
-    document.getElementById("workInSection").classList.remove("hidden");
-    document.getElementById("saveRouteBtn").classList.add("hidden");     // hide Save on load
-    document.getElementById("updateRouteBtn").classList.remove("hidden"); // show Update instead
+    // Keep pre-opt search + stop list visible so user can add more stops and re-optimize
+    document.getElementById("workInSection").classList.add("hidden");
+    document.getElementById("saveRouteBtn").classList.add("hidden");
+    document.getElementById("updateRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value  = data.name;
     document.getElementById("saveAssignedTo").value = data.assigned_to || "";
     document.getElementById("saveRouteDate").value  = data.route_date;
@@ -1432,6 +1435,7 @@ async function submitUpdateRoute() {
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
     recalculateTimes();
+    renderStops();   // show the loaded stops in pre-opt list so user can add more
     renderSchedule();
     await redrawRouteOnMap();
   } catch(e) { alert("Could not load route: " + e.message); }
