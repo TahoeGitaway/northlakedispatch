@@ -161,28 +161,7 @@
       </div>
     </div>
 
-    <!-- POST-OPT: Work In a Stop (hidden until after optimization) -->
-    <div id="workInSection" class="hidden p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-xs font-semibold text-indigo-800 uppercase tracking-wide">➕ Work In a Stop</span>
-        <span class="text-xs text-indigo-500">No re-optimize needed</span>
-      </div>
-      <div class="relative">
-        <input id="workInBox" placeholder="Search for a property to insert…"
-               class="w-full border border-indigo-300 rounded-lg p-2 text-sm bg-white
-                      focus:outline-none focus:ring-2 focus:ring-indigo-400"
-               autocomplete="off">
-        <div id="workInSuggestions"
-             class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
-                    shadow-lg hidden overflow-hidden">
-        </div>
-      </div>
-      <p class="text-xs text-indigo-500 mt-1.5">
-        Stop will be added at the end — drag it to the right position.
-      </p>
-    </div>
-
-    <!-- PRE-OPTIMIZATION STOP LIST (hidden after optimize) -->
+    <!-- PRE-OPTIMIZATION STOP LIST -->
     <div id="preOptSection">
       <h4 class="font-semibold text-sm mb-2">
         Selected Stops <span id="stopCount" class="text-gray-400 font-normal"></span>
@@ -226,6 +205,27 @@
     <div id="scheduleSection" class="hidden">
       <h3 class="font-semibold mb-2">Route Schedule</h3>
       <ol id="routeList" class="space-y-2"></ol>
+
+      <!-- WORK IN A STOP — inside schedule section, always visible after optimize -->
+      <div id="workInSection" class="hidden mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold text-indigo-800 uppercase tracking-wide">➕ Work In a Stop</span>
+          <span class="text-xs text-indigo-500">No re-optimize needed</span>
+        </div>
+        <div class="relative">
+          <input id="workInBox" placeholder="Search for a property to insert…"
+                 class="w-full border border-indigo-300 rounded-lg p-2 text-sm bg-white
+                        focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                 autocomplete="off">
+          <div id="workInSuggestions"
+               class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
+                      shadow-lg hidden overflow-hidden">
+          </div>
+        </div>
+        <p class="text-xs text-indigo-500 mt-1.5">
+          Stop added at end of list — drag it to the right position.
+        </p>
+      </div>
 
       <!-- STATS -->
       <div class="mt-4 text-sm space-y-1 bg-gray-50 rounded-lg p-3">
