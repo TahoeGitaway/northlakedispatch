@@ -91,11 +91,12 @@ def init_db():
         created_at TEXT,
         updated_at TEXT
     )""")
+
     # Safe migration: add assigned_to column if it doesn't exist yet
     try:
         conn.execute("ALTER TABLE saved_routes ADD COLUMN assigned_to TEXT")
     except Exception:
-        pass  # column already exists — fine
+        pass
 
     existing = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
     if not existing:
@@ -319,12 +320,11 @@ def admin_required(f):
 @login_required
 @admin_required
 def admin_users():
-    conn     = get_db()
-    users    = conn.execute(
+    conn    = get_db()
+    users   = conn.execute(
         "SELECT id, email, name, role, is_active, created_at FROM users ORDER BY created_at DESC"
     ).fetchall()
-    # Show pending (unused, unexpired) invites so admin can see what's outstanding
-    invites  = conn.execute(
+    invites = conn.execute(
         """SELECT i.email, i.expires_at, i.created_at, u.name AS invited_by_name
            FROM invites i
            JOIN users u ON i.invited_by = u.id
@@ -424,15 +424,12 @@ def admin_invite():
         return redirect(url_for("admin_users"))
 
     conn = get_db()
-
-    # Don't invite someone who already has an account
     existing_user = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
     if existing_user:
         flash(f"{email} already has an account.", "error")
         conn.close()
         return redirect(url_for("admin_users"))
 
-    # Cancel any existing unused invite for this email before creating a new one
     conn.execute("DELETE FROM invites WHERE email = ? AND used = 0", (email,))
 
     token        = secrets.token_urlsafe(32)
@@ -452,7 +449,6 @@ def admin_invite():
     if email_ok:
         flash(f"Invite email sent to {email}. Link expires in 48 hours.", "success")
     else:
-        # Email failed — show the link directly so admin can share manually
         flash(
             f"Could not send email to {email} ({email_error}). "
             f"Share this link manually (expires 48 hrs): {register_url}",
@@ -463,7 +459,7 @@ def admin_invite():
 
 
 def _send_invite_email(to_email: str, token: str):
-    """Send invite email. Returns (success: bool, error_message: str|None)."""
+    """Returns (success: bool, error_message: str|None)."""
     if not SENDGRID_API_KEY:
         return False, "SENDGRID_API_KEY is not set in environment variables"
 
@@ -479,18 +475,11 @@ def _send_invite_email(to_email: str, token: str):
             <p>Click the link below to create your account.
                This link expires in <strong>48 hours</strong>.</p>
             <p><a href="{register_url}" style="
-                display:inline-block;
-                background:#4f46e5;
-                color:#fff;
-                padding:10px 20px;
-                border-radius:8px;
-                text-decoration:none;
-                font-weight:600;">
+                display:inline-block; background:#4f46e5; color:#fff;
+                padding:10px 20px; border-radius:8px; text-decoration:none; font-weight:600;">
                 Create My Account →
             </a></p>
-            <p style="color:#6b7280;font-size:0.85em;">
-                Or copy this link: {register_url}
-            </p>
+            <p style="color:#6b7280;font-size:0.85em;">Or copy this link: {register_url}</p>
             <p>— Tahoe Getaways Operations</p>
         """
     )
@@ -507,13 +496,11 @@ def _send_invite_email(to_email: str, token: str):
 
 @app.route("/register/<token>", methods=["GET", "POST"])
 def register(token):
-    """Public registration page — only accessible via a valid invite link."""
-    conn = get_db()
+    conn   = get_db()
     invite = conn.execute(
         "SELECT id, email, expires_at, used FROM invites WHERE token = ?", (token,)
     ).fetchone()
 
-    # Validate token
     if not invite:
         conn.close()
         flash("This invite link is invalid.", "error")
@@ -548,24 +535,20 @@ def register(token):
             flash("Passwords do not match.", "error")
             return render_template("register.html", token=token, email=invited_email)
 
-        # Check email not already taken (race condition guard)
         existing = conn.execute("SELECT id FROM users WHERE email = ?", (invited_email,)).fetchone()
         if existing:
             conn.close()
             flash("An account with this email already exists. Try logging in.", "error")
             return redirect(url_for("login"))
 
-        # Create the account
         now = datetime.utcnow().isoformat()
         conn.execute(
             "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (?,?,?,?,1,?)",
             (invited_email, name, "user", generate_password_hash(password), now)
         )
-        # Mark invite as used
         conn.execute("UPDATE invites SET used = 1 WHERE token = ?", (token,))
         conn.commit()
 
-        # Log them in immediately
         row = conn.execute(
             "SELECT id, email, name, role, is_active FROM users WHERE email = ?",
             (invited_email,)
@@ -575,7 +558,6 @@ def register(token):
         user = User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
         login_user(user)
         session.permanent = True
-
         flash(f"Welcome to Tahoe Dispatch, {name}! Your account is ready.", "success")
         return redirect(url_for("home"))
 
@@ -584,7 +566,7 @@ def register(token):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PORTFOLIO  (public — no login required)
+#  PORTFOLIO
 # ══════════════════════════════════════════════════════════════════
 
 @app.route("/portfolio")
@@ -597,7 +579,6 @@ def portfolio():
     )
     rows = cursor.fetchall()
     conn.close()
-
     properties = [
         {"name": r[0], "address": r[1], "lat": float(r[2]), "lng": float(r[3])}
         for r in rows
@@ -619,12 +600,10 @@ def home():
     )
     rows = cursor.fetchall()
     conn.close()
-
     properties = [
         {"name": r[0], "address": r[1], "lat": float(r[2]), "lng": float(r[3])}
         for r in rows
     ]
-
     return render_template(
         "map.html",
         properties=properties,
@@ -641,15 +620,13 @@ def home():
 @login_required
 def saved_routes():
     conn = get_db()
-
     if current_user.is_admin:
         routes = conn.execute(
             """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
                       r.total_duration, r.driving_duration, r.distance,
-                      u.name AS created_by_name,
-                      lu.name AS last_edited_by_name
+                      u.name AS created_by_name, lu.name AS last_edited_by_name
                FROM saved_routes r
-               JOIN users u  ON r.created_by      = u.id
+               JOIN users u ON r.created_by = u.id
                LEFT JOIN users lu ON r.last_edited_by = lu.id
                ORDER BY r.route_date DESC, r.updated_at DESC"""
         ).fetchall()
@@ -657,16 +634,14 @@ def saved_routes():
         routes = conn.execute(
             """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
                       r.total_duration, r.driving_duration, r.distance,
-                      u.name AS created_by_name,
-                      lu.name AS last_edited_by_name
+                      u.name AS created_by_name, lu.name AS last_edited_by_name
                FROM saved_routes r
-               JOIN users u  ON r.created_by      = u.id
+               JOIN users u ON r.created_by = u.id
                LEFT JOIN users lu ON r.last_edited_by = lu.id
                WHERE r.created_by = ?
                ORDER BY r.route_date DESC, r.updated_at DESC""",
             (current_user.id,)
         ).fetchall()
-
     conn.close()
     today = datetime.utcnow().strftime("%Y-%m-%d")
     return render_template("routes.html", routes=routes, now_date=today)
@@ -675,8 +650,7 @@ def saved_routes():
 @app.route("/routes/save", methods=["POST"])
 @login_required
 def save_route():
-    data = request.json or {}
-
+    data        = request.json or {}
     name        = (data.get("name") or "").strip()
     assigned_to = (data.get("assigned_to") or "").strip()
     route_date  = (data.get("route_date") or "").strip()
@@ -713,7 +687,7 @@ def save_route():
 @app.route("/routes/<int:route_id>/update", methods=["POST"])
 @login_required
 def update_route(route_id):
-    data       = request.json or {}
+    data        = request.json or {}
     name        = (data.get("name") or "").strip()
     assigned_to = (data.get("assigned_to") or "").strip()
     route_date  = (data.get("route_date") or "").strip()
@@ -877,7 +851,8 @@ def _solve_route(
 
 
 # ══════════════════════════════════════════════════════════════════
-#  OPTIMIZE
+#  OPTIMIZE  — returns duration_matrix so frontend can recalculate
+#              times locally without OSRM calls on every edit
 # ══════════════════════════════════════════════════════════════════
 
 @app.route("/optimize", methods=["POST"])
@@ -887,7 +862,7 @@ def optimize():
     stops           = data.get("stops", [])
     start           = data.get("start") or DEFAULT_START
     start_time_hhmm = (data.get("startTime") or "09:00").strip()
-    drive_only      = bool(data.get("drive_only", False))   # ← NEW
+    drive_only      = bool(data.get("drive_only", False))
 
     if not stops:
         return jsonify({"error": "No stops provided"}), 400
@@ -938,7 +913,6 @@ def optimize():
     if not duration_matrix:
         return jsonify({"error": "Invalid matrix response"}), 500
 
-    # Drive-only mode: zero out service times and ignore all deadlines
     if drive_only:
         service_times_sec = [0] * len(all_locations)
         checkin_flags     = [False] * len(all_locations)
@@ -1001,7 +975,7 @@ def optimize():
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]
 
     coords_final = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in [start] + ordered_stops)
-    route_url    = f"http://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson&annotations=duration"
+    route_url    = f"http://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
     route_resp   = requests.get(route_url, timeout=30)
     if route_resp.status_code != 200:
         return jsonify({"error": "OSRM route request failed"}), 500
@@ -1013,12 +987,6 @@ def optimize():
     driving_duration = float(route_data.get("duration", 0.0))
     service_duration = 0 if drive_only else sum(int(s.get("serviceMinutes", 60)) * 60 for s in ordered_stops)
     total_duration   = driving_duration + service_duration
-
-    # In drive-only mode build leg drive times for display
-    leg_durations_sec = []
-    if drive_only:
-        legs = route_data.get("legs", []) if "legs" in route_data else route_resp.json().get("routes", [{}])[0].get("legs", [])
-        leg_durations_sec = [l.get("duration", 0) for l in legs]
 
     schedule               = []
     late_checkins          = []
@@ -1034,27 +1002,32 @@ def optimize():
         is_late          = is_checkin and finish_min > deadline_minutes
         is_priority_late = is_priority and finish_min > priority_deadline_minutes
 
-        # Drive time to this stop from previous (for drive-only display)
-        drive_mins_to_here = round(leg_durations_sec[i] / 60) if drive_only and i < len(leg_durations_sec) else None
-
         if is_late:
             late_checkins.append(stop.get("name"))
         if is_priority_late:
             late_priority_checkins.append(stop.get("name"))
 
+        # matrix_index = position in all_locations (0 = start depot)
         schedule.append({
-            "name":               stop.get("name"),
-            "arrival":            is_checkin,
-            "priority_checkin":   is_priority,
-            "late":               is_late,
-            "priority_late":      is_priority_late,
-            "serviceMinutes":     service_min,
-            "eta":                minutes_to_hhmm(eta_minutes),
-            "eta_minutes":        eta_minutes,
-            "lat":                float(stop.get("lat")),
-            "lng":                float(stop.get("lng")),
-            "drive_mins_to_here": drive_mins_to_here,  # only set in drive_only mode
+            "name":           stop.get("name"),
+            "arrival":        is_checkin,
+            "priority_checkin": is_priority,
+            "late":           is_late,
+            "priority_late":  is_priority_late,
+            "serviceMinutes": service_min,
+            "eta":            minutes_to_hhmm(eta_minutes),
+            "eta_minutes":    eta_minutes,
+            "lat":            float(stop.get("lat")),
+            "lng":            float(stop.get("lng")),
+            "matrix_index":   node,  # index into duration_matrix for this stop
         })
+
+    # Build a compact stop-to-stop matrix using the ordered stop indices.
+    # This is what the frontend stores to recalculate times on edits.
+    # Rows/cols: 0 = start depot, 1..N = stops in optimized order.
+    # We return the full NxN submatrix for all_locations so the frontend
+    # can look up drive time between any two stops by matrix_index.
+    compact_matrix = duration_matrix  # already NxN, indices match matrix_index
 
     return jsonify({
         "distance":                   route_data.get("distance", 0.0),
@@ -1062,7 +1035,6 @@ def optimize():
         "driving_duration":           driving_duration,
         "service_duration":           service_duration,
         "geometry":                   route_data.get("geometry"),
-        "ordered_stops":              ordered_stops,
         "start_time":                 start_time_hhmm,
         "checkin_deadline":           CHECKIN_DEADLINE_HHMM,
         "priority_checkin_deadline":  PRIORITY_CHECKIN_DEADLINE_HHMM,
@@ -1071,18 +1043,57 @@ def optimize():
         "late_priority_checkins":     late_priority_checkins,
         "deadline_constraints_used":  used_deadline_constraints,
         "soft_penalties_used":        used_soft_penalties,
-        "drive_only":                 drive_only,   # echo back so frontend knows
+        "drive_only":                 drive_only,
+        "duration_matrix":            compact_matrix,  # ← THE KEY ADDITION
+        "start_minutes":              start_minutes,   # so frontend can recalc without reparsing
     })
 
 
+# ══════════════════════════════════════════════════════════════════
+#  MATRIX LOOKUP for a single new stop being worked in
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/matrix-row", methods=["POST"])
+@login_required
+def matrix_row():
+    """
+    Given a new stop's lat/lng and a list of existing stop coords,
+    returns drive times from the new stop to every existing stop
+    and from every existing stop to the new stop.
+    Used when inserting a stop without re-optimizing.
+    """
+    data      = request.json or {}
+    new_stop  = data.get("new_stop")
+    existing  = data.get("existing_stops", [])  # [{lat, lng}, ...]
+
+    if not new_stop or not existing:
+        return jsonify({"error": "Missing new_stop or existing_stops"}), 400
+
+    all_coords = [new_stop] + existing
+    coords     = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_coords)
+    matrix_url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+
+    try:
+        resp = requests.get(matrix_url, timeout=15)
+        if resp.status_code != 200:
+            return jsonify({"error": "OSRM request failed"}), 500
+        matrix = resp.json().get("durations", [])
+        # matrix[0] = drive times FROM new_stop TO everything
+        # matrix[i][0] = drive time FROM existing[i-1] TO new_stop
+        return jsonify({
+            "from_new":  matrix[0][1:],             # new→each existing (seconds)
+            "to_new":    [row[0] for row in matrix[1:]]  # each existing→new (seconds)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # ══════════════════════════════════════════════════════════════════
-#  PUBLIC ROUTE VIEWER  (no login required — share with cleaners)
+#  PUBLIC ROUTE VIEWER
 # ══════════════════════════════════════════════════════════════════
 
 @app.route("/view/<int:route_id>")
 def view_route(route_id):
-    """Public read-only route view. No login needed — safe to share via URL."""
     conn = get_db()
     row  = conn.execute(
         """SELECT r.id, r.name, r.assigned_to, r.route_date, r.stops_json,
@@ -1112,8 +1123,9 @@ def view_route(route_id):
         error            = None,
     )
 
+
 # ══════════════════════════════════════════════════════════════════
-#  DEBUG — TEMPORARY DB DOWNLOAD (admin only, remove if needed)
+#  DEBUG — DB DOWNLOAD
 # ══════════════════════════════════════════════════════════════════
 
 from flask import send_file as _send_file

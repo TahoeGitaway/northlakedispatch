@@ -4,20 +4,13 @@
 <style>
   /* ── BANANA LOADER ── */
   #loadingOverlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.45);
-    z-index: 9999;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45);
+    z-index:9999; flex-direction:column; align-items:center; justify-content:center;
   }
-  #loadingOverlay.active { display: flex; }
+  #loadingOverlay.active { display:flex; }
   #loadingOverlay .banana img {
-    width: 120px;
-    image-rendering: pixelated;
-    filter: drop-shadow(0 4px 16px rgba(0,0,0,0.5));
+    width:120px; image-rendering:pixelated;
+    filter:drop-shadow(0 4px 16px rgba(0,0,0,0.5));
   }
 
   /* ── BADGES ── */
@@ -87,12 +80,12 @@
   }
   .service-time-select:focus { outline:none; border-color:#6366f1; }
 
-  /* ── MODE TOGGLE ── */
+  /* ── MODE TOGGLE (bottom of schedule) ── */
   .mode-toggle {
     display:flex; background:#f3f4f6; border-radius:8px; padding:3px; gap:3px;
   }
   .mode-toggle button {
-    flex:1; padding:6px 10px; border-radius:6px; font-size:0.78rem; font-weight:600;
+    flex:1; padding:5px 8px; border-radius:6px; font-size:0.75rem; font-weight:600;
     border:none; cursor:pointer; transition:all 0.15s; color:#6b7280; background:transparent;
   }
   .mode-toggle button.active {
@@ -106,6 +99,12 @@
     padding:12px 16px; font-weight:600; font-size:0.9rem; z-index:99999;
   }
   #sessionBanner a { color:#fef2f2; text-decoration:underline; margin-left:12px; font-weight:700; }
+
+  /* ── LUNCH ROW ── */
+  .lunch-row {
+    border:1px solid #fed7aa; border-radius:6px; background:#fff7ed;
+    padding:6px 8px; cursor:default;
+  }
 </style>
 
 <div id="sessionBanner">
@@ -152,47 +151,7 @@
       <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
     </div>
 
-    <!-- MODE TOGGLE -->
-    <div>
-      <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Mode</label>
-      <div class="mode-toggle">
-        <button id="modeFullBtn" class="active" onclick="setMode('full')">
-          📋 Full Schedule
-        </button>
-        <button id="modeDriveBtn" onclick="setMode('drive')">
-          🚗 Drive Order
-        </button>
-      </div>
-      <div id="modeHint" class="text-xs text-gray-400 mt-1">
-        Includes timing, check-ins and deadlines.
-      </div>
-    </div>
-
-    <!-- LUNCH (hidden in drive-only mode) -->
-    <div id="lunchPanel">
-      <div class="p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm">
-        <div class="flex items-center justify-between mb-2">
-          <span class="font-medium text-orange-800">🍽 Lunch Break (30 min)</span>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" id="lunchEnabled" class="accent-orange-500" checked>
-            <span class="text-orange-700 text-xs font-medium">Include</span>
-          </label>
-        </div>
-        <div class="flex items-center gap-4">
-          <span class="text-orange-700 text-xs">Time:</span>
-          <label class="flex items-center gap-1 cursor-pointer">
-            <input type="radio" name="lunchTime" value="14:00" checked class="accent-orange-500">
-            <span class="text-xs text-orange-800 font-medium">2:00 PM</span>
-          </label>
-          <label class="flex items-center gap-1 cursor-pointer">
-            <input type="radio" name="lunchTime" value="16:00" class="accent-orange-500">
-            <span class="text-xs text-orange-800 font-medium">4:00 PM</span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <!-- SEARCH -->
+    <!-- SEARCH — works both before and after optimization -->
     <div class="relative">
       <input id="searchBox" placeholder="Add property…"
              class="w-full border rounded-lg p-2" autocomplete="off">
@@ -202,8 +161,8 @@
       </div>
     </div>
 
-    <!-- STOP LIST -->
-    <div>
+    <!-- PRE-OPTIMIZATION STOP LIST (hidden after optimize) -->
+    <div id="preOptSection">
       <h4 class="font-semibold text-sm mb-2">
         Selected Stops <span id="stopCount" class="text-gray-400 font-normal"></span>
       </h4>
@@ -218,7 +177,7 @@
         Optimize Route
       </button>
       <div class="flex gap-2">
-        <button onclick="reverseStops()"
+        <button onclick="reverseRoute()"
                 class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-3 py-2
                        rounded-lg text-sm font-medium transition-colors">↕ Reverse</button>
         <button onclick="exportToGoogleMaps()"
@@ -239,15 +198,56 @@
 
     <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
 
-    <!-- ROUTE SCHEDULE -->
+    <!-- POST-OPTIMIZATION SCHEDULE -->
     <div id="scheduleSection" class="hidden">
       <h3 class="font-semibold mb-2">Route Schedule</h3>
       <ol id="routeList" class="space-y-2"></ol>
+
+      <!-- STATS -->
       <div class="mt-4 text-sm space-y-1 bg-gray-50 rounded-lg p-3">
         <div><b>Total:</b>     <span id="totalTime">—</span></div>
         <div><b>Driving:</b>   <span id="drivingTime">—</span></div>
         <div><b>At Houses:</b> <span id="serviceTime">—</span></div>
         <div><b>Distance:</b>  <span id="distance">—</span></div>
+      </div>
+
+      <!-- LUNCH TOGGLE -->
+      <div class="mt-3 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-medium text-orange-800">🍽 Lunch Break (30 min)</span>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="lunchEnabled" class="accent-orange-500" checked
+                   onchange="toggleLunch()">
+            <span class="text-orange-700 text-xs font-medium">Include</span>
+          </label>
+        </div>
+        <div class="flex items-center gap-4" id="lunchTimeRow">
+          <span class="text-orange-700 text-xs">At:</span>
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="lunchTime" value="14:00" checked class="accent-orange-500"
+                   onchange="moveLunchTo(14*60)">
+            <span class="text-xs text-orange-800 font-medium">2:00 PM</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="lunchTime" value="16:00" class="accent-orange-500"
+                   onchange="moveLunchTo(16*60)">
+            <span class="text-xs text-orange-800 font-medium">4:00 PM</span>
+          </label>
+          <span class="text-xs text-orange-500 italic">or drag it in the list</span>
+        </div>
+      </div>
+
+      <!-- MODE TOGGLE — display only, no re-optimize -->
+      <div class="mt-3">
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">View Mode</label>
+        <div class="mode-toggle">
+          <button id="modeFullBtn" class="active" onclick="setViewMode('full')">
+            📋 Full Schedule
+          </button>
+          <button id="modeDriveBtn" onclick="setViewMode('drive')">
+            🚗 Drive Times
+          </button>
+        </div>
       </div>
     </div>
 
@@ -284,7 +284,7 @@
       </div>
     </div>
     <div class="flex gap-2 mt-5">
-      <button onclick="submitSaveRoute()"
+      <button id="saveSubmitBtn" onclick="submitSaveRoute()"
               class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium
                      py-2 rounded-lg text-sm transition-colors">Save</button>
       <button onclick="closeSaveModal()"
@@ -298,14 +298,24 @@
 /* ================================================================
    STATE
 ================================================================ */
-const properties      = {{ properties|tojson }};
-let selectedStops     = [];
-let optimizedSchedule = [];   // may contain lunch sentinel
+const properties = {{ properties|tojson }};
+
+// Pre-optimization
+let selectedStops = [];
+
+// Post-optimization — schedule includes real stops + lunch sentinel
+let optimizedSchedule = [];
 let isOptimized       = false;
 let currentRouteId    = null;
-let driveOnly         = false;
+let viewMode          = 'full'; // 'full' | 'drive'
+
+// The NxN duration matrix returned by the backend (seconds).
+// Index 0 = start depot, 1..N = stops in the order sent to optimize.
+// Each stop in optimizedSchedule has a matrix_index field for lookups.
+let durationMatrix  = [];
+let startMinutes    = 9 * 60; // mirrors the startTime input, updated on optimize
+
 let lastStats = { total_duration:0, driving_duration:0, service_duration:0, distance:0 };
-let _lastLegDurations = [];   // seconds per leg, stored after every successful OSRM route call
 let routeLayer         = null;
 let activeRouteMarkers = [];
 let markers            = {};
@@ -313,6 +323,8 @@ let currentSuggestions = [];
 let activeIndex        = -1;
 
 const startLocation = { name:"Tahoe Getaways Office", lat:39.34207, lng:-120.21422 };
+const DEADLINE_MINS  = 16 * 60;
+const PRIORITY_MINS  = 12 * 60;
 
 /* ================================================================
    SESSION GUARD
@@ -324,20 +336,6 @@ function guardResponse(res) {
     return Promise.reject("session_expired");
   }
   return res.json();
-}
-
-/* ================================================================
-   MODE TOGGLE
-================================================================ */
-function setMode(mode) {
-  driveOnly = (mode === 'drive');
-  document.getElementById('modeFullBtn').classList.toggle('active', !driveOnly);
-  document.getElementById('modeDriveBtn').classList.toggle('active',  driveOnly);
-  document.getElementById('modeHint').textContent = driveOnly
-    ? 'Shortest drive route only — no timing or deadlines.'
-    : 'Includes timing, check-ins and deadlines.';
-  document.getElementById('lunchPanel').style.display = driveOnly ? 'none' : '';
-  if (isOptimized && selectedStops.length) optimizeRoute();
 }
 
 /* ================================================================
@@ -357,6 +355,7 @@ const regularIcon      = makeIcon("blue");
 const checkinIcon      = makeIcon("green");
 const priorityIcon     = makeIcon("violet");
 const nearDeadlineIcon = makeIcon("red");
+const lunchIcon        = makeIcon("orange");
 
 /* ================================================================
    HELPERS
@@ -373,7 +372,8 @@ function hhmmToMinutes(hhmm) {
   return h * 60 + m;
 }
 function pickStopIcon(stop) {
-  if (stop.priority_checkin && stop.priority_late) return nearDeadlineIcon;
+  if (stop.isLunch)                                 return lunchIcon;
+  if (stop.priority_checkin && stop.priority_late)  return nearDeadlineIcon;
   if (stop.priority_checkin)                        return priorityIcon;
   if (stop.arrival && stop.late)                    return nearDeadlineIcon;
   if (stop.arrival)                                 return checkinIcon;
@@ -385,128 +385,104 @@ function generateTimeOptions(selected) {
     html += `<option value="${m}" ${m===selected?"selected":""}>${m} min</option>`;
   return html;
 }
-function getLunchSettings() {
+
+/* ================================================================
+   CORE TIME RECALCULATION — MATRIX BASED
+   This is the heart of the fix. Walk the schedule in order.
+   For each real stop, look up drive time from previous stop
+   using the stored duration matrix. Lunch adds 30 min flat.
+   No network calls. Never fails silently.
+================================================================ */
+function recalculateTimes() {
+  let running = startMinutes;
+  let prevMatrixIdx = 0; // 0 = start depot
+
+  optimizedSchedule.forEach(stop => {
+    if (stop.isLunch) {
+      // Lunch block: just consume 30 minutes, no drive time, no matrix lookup
+      stop.eta_minutes = Math.round(running);
+      stop.eta         = minutesToHHMM(stop.eta_minutes);
+      running         += 30;
+      return;
+    }
+
+    // Drive time from previous stop (or depot) to this stop
+    const driveSec = (durationMatrix[prevMatrixIdx] && durationMatrix[prevMatrixIdx][stop.matrix_index])
+      ? durationMatrix[prevMatrixIdx][stop.matrix_index]
+      : 0;
+
+    running          += driveSec / 60;
+    stop.eta_minutes  = Math.round(running);
+    stop.eta          = minutesToHHMM(stop.eta_minutes);
+    running          += stop.serviceMinutes;
+    prevMatrixIdx     = stop.matrix_index;
+
+    // Recompute late flags
+    const fin          = stop.eta_minutes + stop.serviceMinutes;
+    stop.late          = stop.arrival          && fin > DEADLINE_MINS;
+    stop.priority_late = stop.priority_checkin && fin > PRIORITY_MINS;
+  });
+}
+
+/* ================================================================
+   VIEW MODE (display only — no recalculation, no re-optimize)
+================================================================ */
+function setViewMode(mode) {
+  viewMode = mode;
+  document.getElementById('modeFullBtn').classList.toggle('active', mode === 'full');
+  document.getElementById('modeDriveBtn').classList.toggle('active', mode === 'drive');
+  if (isOptimized) renderSchedule();
+}
+
+/* ================================================================
+   LUNCH — as a draggable entry in the schedule
+================================================================ */
+function makeLunchSentinel(etaMinutes) {
   return {
-    enabled: document.getElementById("lunchEnabled").checked,
-    minutes: hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value)
+    _id:          "lunch",
+    name:         "Lunch Break",
+    isLunch:      true,
+    serviceMinutes: 30,
+    eta_minutes:  etaMinutes,
+    eta:          minutesToHHMM(etaMinutes),
+    lat:          null,
+    lng:          null,
+    matrix_index: null,  // no matrix entry for lunch
   };
 }
 
-/* ================================================================
-   LUNCH HELPERS
-   applyLunchToSchedule() inserts the lunch sentinel and shifts
-   all stops after it by 30 min. Works on whatever is currently
-   in optimizedSchedule (real stops only — no existing sentinel).
-================================================================ */
-function applyLunchToSchedule() {
-  // Remove any existing sentinel first
+function getLunchEnabled() { return document.getElementById("lunchEnabled").checked; }
+
+function insertLunchAt(etaMinutes) {
+  // Remove existing lunch if any
   optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch);
+  if (!getLunchEnabled()) return;
 
-  const { enabled, minutes: lunchMins } = getLunchSettings();
-  if (!enabled || !isOptimized) return;
-
-  // Find insertion point: first stop at or after lunch time
-  let insertIdx = optimizedSchedule.length;
+  // Insert before the first real stop whose eta is >= lunchMinutes
+  let idx = optimizedSchedule.length;
   for (let i = 0; i < optimizedSchedule.length; i++) {
-    if (optimizedSchedule[i].eta_minutes >= lunchMins) { insertIdx = i; break; }
+    if (optimizedSchedule[i].eta_minutes >= etaMinutes) { idx = i; break; }
   }
-
-  // Shift all stops from that point forward by 30 min
-  for (let i = insertIdx; i < optimizedSchedule.length; i++) {
-    optimizedSchedule[i].eta_minutes += 30;
-    optimizedSchedule[i].eta = minutesToHHMM(optimizedSchedule[i].eta_minutes);
-  }
-
-  // Re-check late flags for shifted stops
-  const deadlineMins = 16 * 60;
-  const priorityMins = 12 * 60;
-  optimizedSchedule.slice(insertIdx).forEach(stop => {
-    const fin = stop.eta_minutes + stop.serviceMinutes;
-    stop.late          = stop.arrival          && fin > deadlineMins;
-    stop.priority_late = stop.priority_checkin && fin > priorityMins;
-  });
-
-  // Insert sentinel
-  optimizedSchedule.splice(insertIdx, 0, {
-    _id:"lunch", name:"Lunch Break", isLunch:true,
-    arrival:false, priority_checkin:false, serviceMinutes:30,
-    eta_minutes:lunchMins, eta:minutesToHHMM(lunchMins), lat:null, lng:null
-  });
+  optimizedSchedule.splice(idx, 0, makeLunchSentinel(etaMinutes));
 }
 
-/* ── Lunch controls: live update when toggled ── */
-document.getElementById("lunchEnabled").addEventListener("change", () => {
-  if (isOptimized) { applyLunchToSchedule(); renderSchedule(); }
-});
-document.querySelectorAll('input[name="lunchTime"]').forEach(r =>
-  r.addEventListener("change", () => {
-    if (isOptimized) { applyLunchToSchedule(); renderSchedule(); }
-  })
-);
+function toggleLunch() {
+  if (!isOptimized) return;
+  if (!getLunchEnabled()) {
+    optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch);
+  } else {
+    const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
+    insertLunchAt(lunchMins);
+    recalculateTimes();
+  }
+  renderSchedule();
+}
 
-/* ================================================================
-   RECALCULATE TIMES FROM ORDER
-   Called after manual edits (reverse, move, remove, service time
-   change). Fetches fresh OSRM leg durations for the current stop
-   order, recalculates all ETAs, then re-applies lunch.
-
-   KEY RULE: This is NOT called after fresh optimization — the
-   backend already provides correct times. Calling it there would
-   overwrite correct times with potentially-wrong OSRM times if
-   the fetch fails.
-================================================================ */
-async function recalculateTimesFromOrder() {
-  // Work on real stops only (lunch sentinel has null coords)
-  const realStops = optimizedSchedule.filter(s => !s.isLunch);
-  if (!realStops.length) return;
-
-  const [hh, mm] = document.getElementById("startTime").value.split(":").map(Number);
-  const startMins = hh * 60 + mm;
-  let legMins = null;
-
-  // Try fetching fresh leg durations from OSRM
-  try {
-    const locs     = [startLocation, ...realStops];
-    const coordStr = locs.map(s => `${s.lng},${s.lat}`).join(";");
-    const resp     = await fetch(
-      `http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=false&steps=false&annotations=duration`
-    );
-    const rdata = await resp.json();
-    const legs  = rdata.routes?.[0]?.legs;
-    if (legs && legs.length === realStops.length) {
-      legMins = legs.map(l => (l.duration || 0) / 60);
-      _lastLegDurations = legs.map(l => l.duration || 0); // keep fresh for next fallback
-    }
-  } catch(_) {}
-
-  // Fallback: use stored leg durations if OSRM failed
-  if (!legMins && _lastLegDurations.length === realStops.length)
-    legMins = _lastLegDurations.map(s => s / 60);
-
-  // Last resort: zero drive time (times wrong but won't crash)
-  if (!legMins) legMins = realStops.map(() => 0);
-
-  // Walk stops: drive time in, then service time out
-  let running = startMins;
-  realStops.forEach((stop, i) => {
-    running          += legMins[i];          // drive to this stop
-    stop.eta_minutes  = Math.round(running);
-    stop.eta          = minutesToHHMM(stop.eta_minutes);
-    running          += stop.serviceMinutes; // service at this stop
-  });
-
-  // Recompute late flags
-  const deadlineMins = 16 * 60;
-  const priorityMins = 12 * 60;
-  realStops.forEach(stop => {
-    const fin = stop.eta_minutes + stop.serviceMinutes;
-    stop.late          = stop.arrival          && fin > deadlineMins;
-    stop.priority_late = stop.priority_checkin && fin > priorityMins;
-  });
-
-  // Write back real stops, then apply lunch shift + insert sentinel
-  optimizedSchedule = realStops;
-  applyLunchToSchedule();
+function moveLunchTo(lunchMins) {
+  if (!isOptimized || !getLunchEnabled()) return;
+  insertLunchAt(lunchMins);
+  recalculateTimes();
+  renderSchedule();
 }
 
 /* ================================================================
@@ -519,7 +495,12 @@ searchBox.addEventListener("input", function() {
   const text = this.value.toLowerCase().trim();
   currentSuggestions = []; activeIndex = -1;
   if (text.length < 2) { closeSuggestions(false); return; }
-  const already = new Set(selectedStops.map(s => s.name));
+
+  // Exclude already-selected stops
+  const already = new Set([
+    ...selectedStops.map(s => s.name),
+    ...optimizedSchedule.filter(s => !s.isLunch).map(s => s.name)
+  ]);
   currentSuggestions = properties
     .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
     .slice(0, 10);
@@ -605,38 +586,138 @@ function closeSuggestions(clearInput = false) {
 }
 
 /* ================================================================
-   STOPS
+   ADD STOP — works both before and after optimization
 ================================================================ */
-function addStop(property, asCheckin = false, asPriority = false) {
-  if (selectedStops.find(s => s.name === property.name)) return;
-  selectedStops.push({
-    _id: makeStopId(), name:property.name, lat:property.lat, lng:property.lng,
-    arrival: asCheckin || asPriority, priority_checkin: asPriority, serviceMinutes: 60
-  });
-  isOptimized = false;
-  renderStops();
+async function addStop(property, asCheckin = false, asPriority = false) {
+  if (isOptimized) {
+    // "Work in" mode: add to end of optimized schedule, fetch its
+    // matrix distances to neighbors, update times
+    await workInStop(property, asCheckin, asPriority);
+  } else {
+    // Pre-optimization: just add to the list
+    if (selectedStops.find(s => s.name === property.name)) return;
+    selectedStops.push({
+      _id: makeStopId(), name:property.name, lat:property.lat, lng:property.lng,
+      arrival: asCheckin || asPriority, priority_checkin: asPriority, serviceMinutes: 60
+    });
+    isOptimized = false;
+    renderStops();
+  }
 }
 
+async function workInStop(property, asCheckin, asPriority) {
+  // Fetch drive times between the new stop and all existing stops + depot
+  const existingReal = optimizedSchedule.filter(s => !s.isLunch);
+  const allExisting  = [
+    { lat: startLocation.lat, lng: startLocation.lng },
+    ...existingReal.map(s => ({ lat: s.lat, lng: s.lng }))
+  ];
+
+  let fromNew = [];
+  let toNew   = [];
+
+  try {
+    const res  = await fetch("/matrix-row", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        new_stop:        { lat: property.lat, lng: property.lng },
+        existing_stops:  allExisting
+      })
+    });
+    const data = await res.json();
+    fromNew = data.from_new || [];
+    toNew   = data.to_new   || [];
+  } catch(_) {
+    // If network fails, use 0 drive time — still usable, user can move it
+  }
+
+  // Expand the duration matrix with this new stop
+  const newIdx = durationMatrix.length;
+  // Add new row (drive times FROM new stop TO all existing)
+  const newRow = [0, ...fromNew]; // 0 = new→new (unused)
+  durationMatrix.push(newRow);
+  // Add new column (drive times FROM each existing TO new stop)
+  durationMatrix.forEach((row, i) => {
+    row.push(i < toNew.length ? toNew[i] : 0);
+  });
+
+  const newStop = {
+    _id:            makeStopId(),
+    name:           property.name,
+    lat:            property.lat,
+    lng:            property.lng,
+    arrival:        asCheckin || asPriority,
+    priority_checkin: asPriority,
+    serviceMinutes: 60,
+    matrix_index:   newIdx,
+    eta_minutes:    0,
+    eta:            "—",
+    late:           false,
+    priority_late:  false,
+  };
+
+  // Also add to selectedStops for consistency
+  selectedStops.push({
+    _id: newStop._id, name:property.name, lat:property.lat, lng:property.lng,
+    arrival: newStop.arrival, priority_checkin: newStop.priority_checkin, serviceMinutes: 60
+  });
+
+  // Insert before lunch sentinel if it exists, otherwise at end
+  const lunchIdx = optimizedSchedule.findIndex(s => s.isLunch);
+  if (lunchIdx >= 0) {
+    optimizedSchedule.splice(lunchIdx, 0, newStop);
+  } else {
+    optimizedSchedule.push(newStop);
+  }
+
+  recalculateTimes();
+  renderSchedule();
+  redrawRouteOnMap();
+}
+
+/* ================================================================
+   REMOVE STOP
+================================================================ */
 function removeStop(id) {
+  if (id === "lunch") {
+    // Removing the lunch block
+    document.getElementById("lunchEnabled").checked = false;
+    optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch);
+    recalculateTimes();
+    renderSchedule();
+    return;
+  }
+
   const entry = optimizedSchedule.find(s => s._id === id);
-  if (entry && markers[entry.name]) { map.removeLayer(markers[entry.name]); delete markers[entry.name]; }
+  if (entry && markers[entry.name]) {
+    map.removeLayer(markers[entry.name]);
+    delete markers[entry.name];
+  }
+
   selectedStops     = selectedStops.filter(s => s._id !== id);
   optimizedSchedule = optimizedSchedule.filter(s => s._id !== id);
-  renderStops();
+
   if (isOptimized) {
     const real = optimizedSchedule.filter(s => !s.isLunch);
     if (!real.length) { restartRoute(); return; }
-    recalculateTimesFromOrder().then(() => { renderSchedule(); redrawRouteOnMap(); });
+    recalculateTimes();
+    renderSchedule();
+    redrawRouteOnMap();
+  } else {
+    renderStops();
   }
 }
-function removeFromSchedule(id) { removeStop(id); }
 
+/* ================================================================
+   SETTERS — sync across both lists
+================================================================ */
 function setArrival(id, val) {
   [selectedStops, optimizedSchedule].forEach(arr => {
     const s = arr.find(s => s._id === id);
     if (s) { s.arrival = val; if (!val) s.priority_checkin = false; }
   });
-  renderStops();
+  if (isOptimized) renderSchedule(); else renderStops();
 }
 function setPriorityCheckin(id, val) {
   [selectedStops, optimizedSchedule].forEach(arr => {
@@ -651,17 +732,17 @@ function toggleScheduleCheckin(id) {
   });
   renderSchedule();
 }
-async function setServiceMinutes(id, val) {
+function setServiceMinutes(id, val) {
   [selectedStops, optimizedSchedule].forEach(arr => {
     const s = arr.find(s => s._id === id);
     if (s) s.serviceMinutes = val;
   });
-  if (isOptimized) {
-    await recalculateTimesFromOrder();
-    renderSchedule();
-  }
+  if (isOptimized) { recalculateTimes(); renderSchedule(); }
 }
 
+/* ================================================================
+   PRE-OPTIMIZATION STOP LIST RENDER
+================================================================ */
 function renderStops() {
   const container = document.getElementById("selectedStops");
   const countEl   = document.getElementById("stopCount");
@@ -705,54 +786,41 @@ function renderStops() {
 }
 
 /* ================================================================
-   REVERSE
+   MOVE UP / DOWN — pure array swap + recalculateTimes()
 ================================================================ */
-async function reverseStops() {
-  if (isOptimized) {
-    optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch).reverse();
-    await recalculateTimesFromOrder();
-    renderSchedule();
-    redrawRouteOnMap();
-  } else {
-    selectedStops.reverse();
-    renderStops();
-  }
+function moveUp(btn) {
+  const li     = btn.closest("li");
+  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+  if (domIdx <= 0) return;
+  [optimizedSchedule[domIdx-1], optimizedSchedule[domIdx]] =
+    [optimizedSchedule[domIdx], optimizedSchedule[domIdx-1]];
+  recalculateTimes();
+  renderSchedule();
+  redrawRouteOnMap();
+}
+function moveDown(btn) {
+  const li     = btn.closest("li");
+  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+  if (domIdx >= optimizedSchedule.length - 1) return;
+  [optimizedSchedule[domIdx], optimizedSchedule[domIdx+1]] =
+    [optimizedSchedule[domIdx+1], optimizedSchedule[domIdx]];
+  recalculateTimes();
+  renderSchedule();
+  redrawRouteOnMap();
 }
 
 /* ================================================================
-   MANUAL MOVE
+   REVERSE — flip real stops only, keep lunch position stable
 ================================================================ */
-async function moveRouteUp(btn) {
-  const li     = btn.closest("li");
-  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+function reverseRoute() {
+  if (!isOptimized) { selectedStops.reverse(); renderStops(); return; }
   const real   = optimizedSchedule.filter(s => !s.isLunch);
-  const ri     = getRealIndex(domIdx);
-  if (ri <= 0) return;
-  [real[ri-1], real[ri]] = [real[ri], real[ri-1]];
-  optimizedSchedule = real;
-  await recalculateTimesFromOrder();
+  const lunch  = optimizedSchedule.find(s => s.isLunch) || null;
+  real.reverse();
+  optimizedSchedule = lunch ? [...real, lunch] : real;
+  recalculateTimes();
   renderSchedule();
   redrawRouteOnMap();
-}
-async function moveRouteDown(btn) {
-  const li     = btn.closest("li");
-  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
-  const real   = optimizedSchedule.filter(s => !s.isLunch);
-  const ri     = getRealIndex(domIdx);
-  if (ri < 0 || ri >= real.length - 1) return;
-  [real[ri], real[ri+1]] = [real[ri+1], real[ri]];
-  optimizedSchedule = real;
-  await recalculateTimesFromOrder();
-  renderSchedule();
-  redrawRouteOnMap();
-}
-function getRealIndex(domIdx) {
-  let real = 0;
-  for (let i = 0; i < optimizedSchedule.length; i++) {
-    if (i === domIdx) return optimizedSchedule[i].isLunch ? -1 : real;
-    if (!optimizedSchedule[i].isLunch) real++;
-  }
-  return -1;
 }
 
 /* ================================================================
@@ -762,12 +830,13 @@ function restartRoute() {
   if ((selectedStops.length || isOptimized) &&
       !confirm("Start over? This will clear all stops and the current route.")) return;
   selectedStops = []; optimizedSchedule = []; isOptimized = false;
-  _lastLegDurations = []; currentRouteId = null;
+  durationMatrix = []; startMinutes = 9 * 60; currentRouteId = null;
   lastStats = { total_duration:0, driving_duration:0, service_duration:0, distance:0 };
   clearRouteMarkers();
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
+  document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("saveRouteBtn").classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   document.getElementById("saveRouteName").value  = "";
@@ -787,11 +856,25 @@ function clearRouteMarkers() {
   activeRouteMarkers = []; markers = {};
 }
 
-function drawStopMarkers() {
-  const real = optimizedSchedule.filter(s => !s.isLunch);
+async function redrawRouteOnMap() {
+  clearRouteMarkers();
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+
+  const real = optimizedSchedule.filter(s => !s.isLunch && s.lat && s.lng);
+
   const startM = L.marker([startLocation.lat, startLocation.lng], { icon:regularIcon })
     .addTo(map).bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
   activeRouteMarkers.push(startM);
+
+  if (!real.length) return;
+
+  const coordStr = [startLocation, ...real].map(s => `${s.lng},${s.lat}`).join(";");
+  try {
+    const resp  = await fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`);
+    const rdata = await resp.json();
+    const geo   = rdata.routes?.[0]?.geometry;
+    if (geo) routeLayer = L.geoJSON(geo, { style:{color:"#6366f1",weight:5} }).addTo(map);
+  } catch(_) {}
 
   let num = 1;
   real.forEach(stop => {
@@ -810,27 +893,6 @@ function drawStopMarkers() {
   });
 }
 
-async function redrawRouteOnMap() {
-  clearRouteMarkers();
-  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-
-  const real = optimizedSchedule.filter(s => !s.isLunch);
-  if (!real.length) return;
-
-  const coordStr = [startLocation, ...real].map(s => `${s.lng},${s.lat}`).join(";");
-  try {
-    const resp  = await fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&annotations=duration`);
-    const rdata = await resp.json();
-    const geo   = rdata.routes?.[0]?.geometry;
-    const legs  = rdata.routes?.[0]?.legs;
-    if (geo) routeLayer = L.geoJSON(geo, { style:{color:"#6366f1",weight:5} }).addTo(map);
-    if (legs && legs.length === real.length)
-      _lastLegDurations = legs.map(l => l.duration || 0);
-  } catch(_) {}
-
-  drawStopMarkers();
-}
-
 /* ================================================================
    RENDER SCHEDULE
 ================================================================ */
@@ -844,23 +906,35 @@ function renderSchedule() {
 
     // ── LUNCH ROW ──
     if (stop.isLunch) {
-      li.className = "p-2 border border-orange-200 rounded bg-orange-50 text-sm";
+      li.className = "lunch-row";
       li.innerHTML = `
-        <div class="flex items-center gap-1 font-medium text-orange-800">
-          🍽 Lunch Break <span class="lunch-badge">30 MIN</span>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1 font-medium text-orange-800 text-sm">
+            🍽 Lunch Break <span class="lunch-badge">30 MIN</span>
+          </div>
+          <div class="flex gap-1">
+            <button class="move-btn" onclick="moveUp(this)"   ${si===0?"disabled":""}>▲</button>
+            <button class="move-btn" onclick="moveDown(this)" ${si===optimizedSchedule.length-1?"disabled":""}>▼</button>
+            <button onclick="removeStop('lunch')"
+                    class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
+          </div>
         </div>
         <div class="text-xs text-orange-600 mt-0.5">
           ${stop.eta} – ${minutesToHHMM(stop.eta_minutes + 30)}
         </div>`;
-      list.appendChild(li);
-      return;
+      list.appendChild(li); return;
     }
 
-    // ── DRIVE-ONLY ROW ──
-    if (driveOnly) {
-      const driveMins = stop.drive_mins_to_here != null ? stop.drive_mins_to_here : null;
-      const isFirst = si === 0 || optimizedSchedule[si-1]?.isLunch;
-      const isLast  = si === optimizedSchedule.length-1 || optimizedSchedule[si+1]?.isLunch;
+    // ── DRIVE TIMES VIEW ──
+    if (viewMode === 'drive') {
+      const prevStop = si > 0 ? optimizedSchedule[si-1] : null;
+      let driveMin = 0;
+      if (prevStop && !prevStop.isLunch && prevStop.matrix_index != null && stop.matrix_index != null) {
+        driveMin = Math.round((durationMatrix[prevStop.matrix_index]?.[stop.matrix_index] || 0) / 60);
+      } else if (si === 0 && stop.matrix_index != null) {
+        driveMin = Math.round((durationMatrix[0]?.[stop.matrix_index] || 0) / 60);
+      }
+
       li.className = "p-2 border-l-4 border-l-indigo-300 border border-gray-100 rounded bg-white hover:bg-indigo-50 transition-colors";
       li.innerHTML = `
         <div class="flex items-center justify-between gap-1">
@@ -869,19 +943,19 @@ function renderSchedule() {
             <span class="truncate max-w-[160px]" title="${stop.name}">${stop.name}</span>
           </div>
           <div class="flex gap-1 shrink-0">
-            <button class="move-btn" onclick="moveRouteUp(this)"   ${isFirst ? "disabled":""}>▲</button>
-            <button class="move-btn" onclick="moveRouteDown(this)" ${isLast  ? "disabled":""}>▼</button>
-            <button onclick="removeFromSchedule('${stop._id}')"
+            <button class="move-btn" onclick="moveUp(this)"   ${si===0?"disabled":""}>▲</button>
+            <button class="move-btn" onclick="moveDown(this)" ${si===optimizedSchedule.length-1?"disabled":""}>▼</button>
+            <button onclick="removeStop('${stop._id}')"
                     class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
           </div>
         </div>
-        ${driveMins != null ? `<div class="text-xs text-gray-400 mt-0.5">🚗 ${driveMins} min drive</div>` : ""}`;
+        <div class="text-xs text-gray-400 mt-0.5">🚗 ${driveMin} min drive · ${stop.serviceMinutes} min at house</div>`;
       li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
       li.addEventListener("mouseleave", () => { const m=markers[stop.name]; if(m) m.closePopup(); });
       list.appendChild(li); num++; return;
     }
 
-    // ── FULL SCHEDULE ROW ──
+    // ── FULL SCHEDULE VIEW ──
     const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
     let badge = "";
     if (stop.priority_checkin && stop.priority_late)
@@ -897,11 +971,6 @@ function renderSchedule() {
       ? `<button onclick="toggleScheduleCheckin('${stop._id}')" class="text-xs text-green-700 hover:text-red-500 font-medium">✓ Check-in</button>`
       : `<button onclick="toggleScheduleCheckin('${stop._id}')" class="text-xs text-gray-400 hover:text-green-600">+ Check-in</button>`;
 
-    const prevIsLunch = si > 0 && optimizedSchedule[si-1]?.isLunch;
-    const nextIsLunch = si < optimizedSchedule.length-1 && optimizedSchedule[si+1]?.isLunch;
-    const isFirst = si === 0 || prevIsLunch;
-    const isLast  = si === optimizedSchedule.length-1 || nextIsLunch;
-
     li.className = "p-2 border rounded bg-white hover:bg-indigo-50 transition-colors";
     li.innerHTML = `
       <div class="flex items-start justify-between gap-1">
@@ -911,9 +980,9 @@ function renderSchedule() {
           ${badge}
         </div>
         <div class="flex gap-1 shrink-0">
-          <button class="move-btn" onclick="moveRouteUp(this)"   ${isFirst ? "disabled":""}>▲</button>
-          <button class="move-btn" onclick="moveRouteDown(this)" ${isLast  ? "disabled":""}>▼</button>
-          <button onclick="removeFromSchedule('${stop._id}')"
+          <button class="move-btn" onclick="moveUp(this)"   ${si===0?"disabled":""}>▲</button>
+          <button class="move-btn" onclick="moveDown(this)" ${si===optimizedSchedule.length-1?"disabled":""}>▼</button>
+          <button onclick="removeStop('${stop._id}')"
                   class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
         </div>
       </div>
@@ -949,9 +1018,9 @@ function optimizeRoute() {
         name:s.name, lat:s.lat, lng:s.lng,
         arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
       })),
-      start:      startLocation,
-      startTime:  document.getElementById("startTime").value,
-      drive_only: driveOnly,
+      start:     startLocation,
+      startTime: document.getElementById("startTime").value,
+      drive_only: false, // drive_only is now just a view mode, not an optimize mode
     })
   })
   .then(guardResponse)
@@ -960,12 +1029,22 @@ function optimizeRoute() {
     document.getElementById("optimizeBtn").disabled = false;
     if (data.error) { alert(data.error); return; }
 
-    // Store backend-computed schedule — these times are already correct
+    // Store the duration matrix and start minutes — the source of truth for all edits
+    durationMatrix = data.duration_matrix || [];
+    startMinutes   = data.start_minutes   || hhmmToMinutes(document.getElementById("startTime").value);
+
+    // Build optimized schedule from backend response
     optimizedSchedule = data.schedule.map(entry => {
       const orig = selectedStops.find(s => s.name === entry.name);
       return { ...entry, _id: orig?._id || makeStopId() };
     });
     isOptimized = true;
+
+    // Insert lunch at the chosen time
+    const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
+    if (getLunchEnabled()) insertLunchAt(lunchMins);
+    // Note: backend times are already correct, recalculateTimes() not needed here
+    // because the matrix lookup would match what the backend computed
 
     lastStats = {
       total_duration:   data.total_duration,
@@ -992,33 +1071,40 @@ function optimizeRoute() {
       wb.innerHTML = warns.join("<br>");
     }
 
+    // Show schedule section, hide pre-opt list
     document.getElementById("scheduleSection").classList.remove("hidden");
+    document.getElementById("preOptSection").classList.add("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
     if (!document.getElementById("saveRouteDate").value)
       document.getElementById("saveRouteDate").value = new Date().toISOString().split("T")[0];
 
-    // FIX: Apply lunch directly using backend-provided times — do NOT call
-    // recalculateTimesFromOrder() here because _lastLegDurations may not yet
-    // be populated, which would overwrite correct backend times with zeros.
-    applyLunchToSchedule();
-
-    // Fetch OSRM geometry for the map + store leg durations for future edits
+    // Draw map from backend geometry
     clearRouteMarkers();
     if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-    const real     = optimizedSchedule.filter(s => !s.isLunch);
-    const coordStr = [startLocation, ...real].map(s => `${s.lng},${s.lat}`).join(";");
-    try {
-      const resp  = await fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&annotations=duration`);
-      const rdata = await resp.json();
-      const geo   = rdata.routes?.[0]?.geometry;
-      const legs  = rdata.routes?.[0]?.legs;
-      if (geo) routeLayer = L.geoJSON(geo, { style:{color:"#6366f1",weight:5} }).addTo(map);
-      // Store leg durations NOW so recalculateTimesFromOrder() has them for edits
-      if (legs && legs.length === real.length)
-        _lastLegDurations = legs.map(l => l.duration || 0);
-    } catch(_) {}
+    if (data.geometry) {
+      routeLayer = L.geoJSON(data.geometry, { style:{color:"#6366f1",weight:5} }).addTo(map);
+    }
 
-    drawStopMarkers();
+    const startM = L.marker([startLocation.lat, startLocation.lng], { icon:regularIcon })
+      .addTo(map).bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
+    activeRouteMarkers.push(startM);
+
+    let num = 1;
+    optimizedSchedule.filter(s => !s.isLunch && s.lat && s.lng).forEach(stop => {
+      const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
+      let sh = "";
+      if (stop.priority_checkin && stop.priority_late) sh = "<span style='color:#dc2626;font-weight:700;'>PRIORITY — LATE</span>";
+      else if (stop.priority_checkin) sh = "<span style='color:#7c3aed;font-weight:700;'>PRIORITY CHECK-IN</span>";
+      else if (stop.arrival && stop.late) sh = "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>";
+      else if (stop.arrival) sh = "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>";
+      const m = L.marker([stop.lat, stop.lng], { icon:pickStopIcon(stop) })
+        .addTo(map)
+        .bindPopup(`<b>${stop.name}</b><br>Arrive: ${stop.eta}<br>Depart: ${dep}<br>${sh}`);
+      m.bindTooltip(`${num++}`, { permanent:true, direction:"top", className:"route-number" });
+      activeRouteMarkers.push(m);
+      markers[stop.name] = m;
+    });
+
     renderSchedule();
   })
   .catch(err => {
@@ -1036,7 +1122,6 @@ function openSaveModal() {
   if (!optimizedSchedule.filter(s => !s.isLunch).length) { alert("Optimize a route first."); return; }
   document.getElementById("saveError").classList.add("hidden");
   document.getElementById("saveSuccess").classList.add("hidden");
-  // Pre-fill from sidebar fields if modal is empty
   const sidebarName     = document.getElementById("routeNameField").value.trim();
   const sidebarAssigned = document.getElementById("assignedToField").value.trim();
   if (sidebarName     && !document.getElementById("saveRouteName").value)
@@ -1053,14 +1138,13 @@ async function submitSaveRoute() {
   const routeDate  = document.getElementById("saveRouteDate").value;
   const errorEl    = document.getElementById("saveError");
   const successEl  = document.getElementById("saveSuccess");
+  const saveBtn    = document.getElementById("saveSubmitBtn");
   errorEl.classList.add("hidden"); successEl.classList.add("hidden");
 
   if (!name)      { errorEl.textContent = "Please enter a route name."; errorEl.classList.remove("hidden"); return; }
   if (!routeDate) { errorEl.textContent = "Please choose a date.";      errorEl.classList.remove("hidden"); return; }
 
-  // Disable save button immediately to prevent duplicate saves
-  const saveBtn = document.querySelector('[onclick="submitSaveRoute()"]');
-  if (saveBtn) saveBtn.disabled = true;
+  saveBtn.disabled = true;
 
   const real = optimizedSchedule.filter(s => !s.isLunch);
   const url  = currentRouteId ? `/routes/${currentRouteId}/update` : "/routes/save";
@@ -1079,7 +1163,7 @@ async function submitSaveRoute() {
     const data = await res.json();
     if (data.error) {
       errorEl.textContent = data.error; errorEl.classList.remove("hidden");
-      if (saveBtn) saveBtn.disabled = false; // re-enable on error
+      saveBtn.disabled = false;
     } else {
       if (data.id) currentRouteId = data.id;
       successEl.textContent = "Route saved! Redirecting…";
@@ -1088,7 +1172,7 @@ async function submitSaveRoute() {
     }
   } catch(e) {
     errorEl.textContent = "Save failed: " + e.message; errorEl.classList.remove("hidden");
-    if (saveBtn) saveBtn.disabled = false;
+    saveBtn.disabled = false;
   }
 }
 
@@ -1110,12 +1194,41 @@ async function submitSaveRoute() {
 
     currentRouteId    = data.id;
     _stopIdCounter    = 0;
-    optimizedSchedule = data.schedule.map(s => ({ ...s, _id: makeStopId() }));
-    selectedStops     = optimizedSchedule.map(s => ({
+
+    // Saved routes don't have a matrix stored — we'll rebuild it
+    // by treating saved matrix_index values as positions in the saved order
+    optimizedSchedule = data.schedule.map((s, i) => ({
+      ...s,
+      _id:          makeStopId(),
+      matrix_index: i + 1, // 0 = depot, stops start at 1
+    }));
+
+    selectedStops = optimizedSchedule.map(s => ({
       _id: s._id, name:s.name, lat:s.lat, lng:s.lng,
       arrival:s.arrival, priority_checkin:s.priority_checkin || false, serviceMinutes:s.serviceMinutes
     }));
-    isOptimized = true;
+
+    isOptimized    = true;
+    startMinutes   = hhmmToMinutes(document.getElementById("startTime").value);
+
+    // Build a simple sequential matrix for loaded routes
+    // (we don't have the original matrix, so fetch it now)
+    try {
+      const allLocs = [
+        { lat: startLocation.lat, lng: startLocation.lng },
+        ...optimizedSchedule.map(s => ({ lat: s.lat, lng: s.lng }))
+      ];
+      const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
+      const mResp = await fetch(
+        `http://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
+      );
+      const mData = await mResp.json();
+      durationMatrix = mData.durations || [];
+      // Reassign matrix_index to match this fetched matrix
+      optimizedSchedule.forEach((s, i) => { s.matrix_index = i + 1; });
+    } catch(_) {
+      durationMatrix = []; // times won't recalculate but route still usable
+    }
 
     lastStats = {
       total_duration:   data.total_duration   || 0,
@@ -1130,6 +1243,7 @@ async function submitSaveRoute() {
     if (data.distance)         document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
 
     document.getElementById("scheduleSection").classList.remove("hidden");
+    document.getElementById("preOptSection").classList.add("hidden");
     document.getElementById("saveRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value  = data.name;
     document.getElementById("saveAssignedTo").value = data.assigned_to || "";
@@ -1137,11 +1251,12 @@ async function submitSaveRoute() {
     document.getElementById("routeNameField").value  = data.name;
     document.getElementById("assignedToField").value = data.assigned_to || "";
 
-    // On load: apply lunch display, then fetch OSRM legs so edits will work correctly
-    applyLunchToSchedule();
-    renderStops();
+    // Insert lunch, recalculate with the freshly fetched matrix
+    const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
+    if (getLunchEnabled()) insertLunchAt(lunchMins);
+    recalculateTimes();
     renderSchedule();
-    await redrawRouteOnMap(); // this also populates _lastLegDurations
+    await redrawRouteOnMap();
   } catch(e) { alert("Could not load route: " + e.message); }
 })();
 
@@ -1153,7 +1268,7 @@ document.getElementById("saveModal").addEventListener("click", function(e) {
    GOOGLE MAPS EXPORT
 ================================================================ */
 function exportToGoogleMaps() {
-  const real = optimizedSchedule.filter(s => !s.isLunch);
+  const real = optimizedSchedule.filter(s => !s.isLunch && s.lat);
   if (!real.length) { alert("Optimize route first."); return; }
   if (real.length > 10)
     alert(`Note: Google Maps displays up to 10 waypoints. All ${real.length} stops are included but Google may truncate the display.`);
