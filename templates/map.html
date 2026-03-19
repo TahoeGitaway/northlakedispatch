@@ -209,6 +209,9 @@
         <button id="saveRouteBtn" onclick="openSaveModal()"
                 class="hidden flex-1 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2
                        rounded-lg font-medium transition-colors text-sm">💾 Save Route</button>
+        <button id="updateRouteBtn" onclick="submitUpdateRoute()"
+                class="hidden flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors text-sm">↑ Update</button>
         <button onclick="restartRoute()"
                 class="flex-1 bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2
                        rounded-lg font-medium transition-colors text-sm border border-red-200">
@@ -948,6 +951,7 @@ function restartRoute() {
   document.getElementById("preOptSearch").classList.remove("hidden");
   document.getElementById("workInSection").classList.add("hidden");
   document.getElementById("saveRouteBtn").classList.add("hidden");
+  document.getElementById("updateRouteBtn").classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   document.getElementById("workInBox").value = "";
   document.getElementById("saveRouteName").value  = "";
@@ -1290,6 +1294,63 @@ async function submitSaveRoute() {
 }
 
 /* ================================================================
+   UPDATE ROUTE — saves current state back to the loaded route ID
+   Updates name, assigned_to, date, schedule and stats in one click.
+================================================================ */
+async function submitUpdateRoute() {
+  const name       = document.getElementById("saveRouteName").value.trim();
+  const assignedTo = document.getElementById("saveAssignedTo").value.trim();
+  const routeDate  = document.getElementById("saveRouteDate").value;
+  const btn        = document.getElementById("updateRouteBtn");
+
+  if (!currentRouteId) {
+    alert("No loaded route to update. Use Save Route instead.");
+    return;
+  }
+  if (!name)      { alert("Please enter a route name before updating."); return; }
+  if (!routeDate) { alert("Please select a date before updating."); return; }
+
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+
+  const real = optimizedSchedule.filter(s => !s.isLunch);
+  try {
+    const res = await fetch(`/routes/${currentRouteId}/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name, assigned_to:assignedTo, route_date:routeDate,
+        schedule:real, stats:lastStats
+      })
+    });
+    const ct = res.headers.get("content-type") || "";
+    if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
+      document.getElementById("sessionBanner").style.display = "block"; return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      alert("Update failed: " + data.error);
+      btn.disabled = false;
+      btn.textContent = "↑ Update";
+    } else {
+      btn.textContent = "✓ Updated!";
+      btn.classList.remove("bg-blue-600","hover:bg-blue-700");
+      btn.classList.add("bg-green-600");
+      setTimeout(() => {
+        btn.textContent = "↑ Update";
+        btn.disabled = false;
+        btn.classList.remove("bg-green-600");
+        btn.classList.add("bg-blue-600","hover:bg-blue-700");
+      }, 2000);
+    }
+  } catch(e) {
+    alert("Update failed: " + e.message);
+    btn.disabled = false;
+    btn.textContent = "↑ Update";
+  }
+}
+
+/* ================================================================
    LOAD ROUTE
 ================================================================ */
 (async function checkLoadParam() {
@@ -1359,7 +1420,8 @@ async function submitSaveRoute() {
     document.getElementById("preOptSection").classList.add("hidden");
     document.getElementById("preOptSearch").classList.add("hidden");
     document.getElementById("workInSection").classList.remove("hidden");
-    document.getElementById("saveRouteBtn").classList.remove("hidden");
+    document.getElementById("saveRouteBtn").classList.add("hidden");     // hide Save on load
+    document.getElementById("updateRouteBtn").classList.remove("hidden"); // show Update instead
     document.getElementById("saveRouteName").value  = data.name;
     document.getElementById("saveAssignedTo").value = data.assigned_to || "";
     document.getElementById("saveRouteDate").value  = data.route_date;

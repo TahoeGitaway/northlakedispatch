@@ -82,6 +82,11 @@
 
           <div class="flex-1 min-w-0">
             <div class="font-semibold text-gray-800 truncate">{{ route.name }}</div>
+            {% if route.assigned_to %}
+            <div class="text-sm font-medium text-indigo-700 mt-0.5">
+              👤 {{ route.assigned_to }}
+            </div>
+            {% endif %}
             <div class="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1 mt-1">
               <span>📍 {{ route.created_by_name }}</span>
               {% if route.last_edited_by_name and route.last_edited_by_name != route.created_by_name %}

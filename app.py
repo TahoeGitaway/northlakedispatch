@@ -622,7 +622,7 @@ def saved_routes():
     conn = get_db()
     if current_user.is_admin:
         routes = conn.execute(
-            """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
+            """SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
                       r.total_duration, r.driving_duration, r.distance,
                       u.name AS created_by_name, lu.name AS last_edited_by_name
                FROM saved_routes r
@@ -632,7 +632,7 @@ def saved_routes():
         ).fetchall()
     else:
         routes = conn.execute(
-            """SELECT r.id, r.name, r.route_date, r.created_at, r.updated_at,
+            """SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
                       r.total_duration, r.driving_duration, r.distance,
                       u.name AS created_by_name, lu.name AS last_edited_by_name
                FROM saved_routes r
