@@ -555,11 +555,19 @@ searchBox.addEventListener("keydown", function(e) {
     addStop(currentSuggestions[idx], false, false);
     closeSuggestions(true);
   } else if (e.key === "c" || e.key === "C") {
-    const idx = activeIndex >= 0 ? activeIndex : (currentSuggestions.length === 1 ? 0 : -1);
-    if (idx >= 0) { addStop(currentSuggestions[idx], true, false); closeSuggestions(true); }
+    // Only trigger if a suggestion is actively highlighted with arrow keys
+    if (activeIndex >= 0) {
+      e.preventDefault();
+      addStop(currentSuggestions[activeIndex], true, false);
+      closeSuggestions(true);
+    }
   } else if (e.key === "p" || e.key === "P") {
-    const idx = activeIndex >= 0 ? activeIndex : (currentSuggestions.length === 1 ? 0 : -1);
-    if (idx >= 0) { addStop(currentSuggestions[idx], true, true); closeSuggestions(true); }
+    // Only trigger if a suggestion is actively highlighted with arrow keys
+    if (activeIndex >= 0) {
+      e.preventDefault();
+      addStop(currentSuggestions[activeIndex], true, true);
+      closeSuggestions(true);
+    }
   } else if (e.key === "Escape") {
     closeSuggestions(false);
   }
@@ -652,11 +660,15 @@ workInBox.addEventListener("keydown", function(e) {
     const idx = workInIndex >= 0 ? workInIndex : 0;
     workInStop(workInCurrent[idx], false, false); closeWorkIn(true);
   } else if (e.key === "c" || e.key === "C") {
-    const idx = workInIndex >= 0 ? workInIndex : (workInCurrent.length===1?0:-1);
-    if (idx >= 0) { workInStop(workInCurrent[idx], true, false); closeWorkIn(true); }
+    if (workInIndex >= 0) {
+      e.preventDefault();
+      workInStop(workInCurrent[workInIndex], true, false); closeWorkIn(true);
+    }
   } else if (e.key === "p" || e.key === "P") {
-    const idx = workInIndex >= 0 ? workInIndex : (workInCurrent.length===1?0:-1);
-    if (idx >= 0) { workInStop(workInCurrent[idx], true, true); closeWorkIn(true); }
+    if (workInIndex >= 0) {
+      e.preventDefault();
+      workInStop(workInCurrent[workInIndex], true, true); closeWorkIn(true);
+    }
   } else if (e.key === "Escape") { closeWorkIn(false); }
 });
 
@@ -1435,8 +1447,7 @@ async function submitUpdateRoute() {
     if (data.distance)         document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
 
     document.getElementById("scheduleSection").classList.remove("hidden");
-    // Keep pre-opt search + stop list visible so user can add more stops and re-optimize
-    document.getElementById("workInSection").classList.add("hidden");
+    document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.add("hidden");
     document.getElementById("updateRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value  = data.name;
