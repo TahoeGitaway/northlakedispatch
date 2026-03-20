@@ -115,7 +115,7 @@ def init_db():
     cur.execute("SELECT id FROM users WHERE role='admin'")
     existing = cur.fetchone()
     if not existing:
-        admin_password = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")
+        admin_password = os.environ.get("APP_ADMIN_PW", "ChangeMe123!")
         cur.execute(
             "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (%s,%s,%s,%s,1,%s)",
             ("operations@tahoegetaways.com", "Admin", "admin",

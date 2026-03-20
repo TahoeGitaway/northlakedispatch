@@ -21,7 +21,7 @@ CSV_PATH = "data/properties_geocoded.csv"
 
 ADMIN_EMAIL    = "operations@tahoegetaways.com"
 ADMIN_NAME     = "Operations Admin"
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")  # override via env var
+ADMIN_PASSWORD = os.environ.get("APP_ADMIN_PW", "ChangeMe123!")  # override via env var
 
 
 def reload():
