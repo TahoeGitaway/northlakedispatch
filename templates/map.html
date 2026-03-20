@@ -1083,7 +1083,7 @@ function renderSchedule() {
           </div>
         </div>
         <div class="text-xs text-gray-400 mt-0.5">
-          🚗 ${driveMin} min drive${stop.arrival
+          🚗 ${driveMin < 1 ? '< 1' : driveMin} min drive${stop.arrival
             ? (stop.priority_checkin
                 ? ' &nbsp;·&nbsp; <span style="background:#ede9fe;color:#6d28d9;font-weight:700;padding:1px 6px;border-radius:999px;font-size:0.6rem;">CHECK-IN by 12PM</span>'
                 : ' &nbsp;·&nbsp; <span style="background:#dcfce7;color:#15803d;font-weight:700;padding:1px 6px;border-radius:999px;font-size:0.6rem;">CHECK-IN</span>')
