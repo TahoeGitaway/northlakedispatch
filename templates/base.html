@@ -34,11 +34,10 @@
                           {% if request.endpoint == 'saved_routes' %}text-indigo-600{% endif %}">
                     Saved Routes
                 </a>
-                <!-- Portfolio link added to nav -->
                 <a href="{{ url_for('portfolio') }}"
                    class="text-gray-600 hover:text-indigo-600 font-medium
                           {% if request.endpoint == 'portfolio' %}text-indigo-600{% endif %}">
-                    Properties
+                    Portfolio
                 </a>
                 {% if current_user.is_admin %}
                 <a href="{{ url_for('admin_users') }}"
