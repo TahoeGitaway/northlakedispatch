@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, f
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import requests
 import json
 import os
@@ -27,7 +28,7 @@ login_manager.login_message = "Please log in to access Tahoe Dispatch."
 login_manager.login_message_category = "info"
 
 # ── Config ────────────────────────────────────────────────────────
-DB_PATH = "data/properties.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
 FROM_EMAIL = "operations@tahoegetaways.com"
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5000")
@@ -47,15 +48,19 @@ PRIORITY_CHECKIN_DEADLINE_HHMM = "12:00"
 # ══════════════════════════════════════════════════════════════════
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL)
     return conn
+
+def get_cursor(conn):
+    """Return a RealDictCursor so rows behave like dicts (replaces sqlite3.Row)."""
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 def init_db():
     conn = get_db()
+    cur  = get_cursor(conn)
 
-    conn.execute("""CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cur.execute("""CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         role TEXT DEFAULT 'user',
@@ -66,8 +71,8 @@ def init_db():
         created_at TEXT
     )""")
 
-    conn.execute("""CREATE TABLE IF NOT EXISTS invites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cur.execute("""CREATE TABLE IF NOT EXISTS invites (
+        id SERIAL PRIMARY KEY,
         email TEXT NOT NULL,
         token TEXT UNIQUE NOT NULL,
         invited_by INTEGER NOT NULL,
@@ -76,8 +81,8 @@ def init_db():
         created_at TEXT
     )""")
 
-    conn.execute("""CREATE TABLE IF NOT EXISTS saved_routes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cur.execute("""CREATE TABLE IF NOT EXISTS saved_routes (
+        id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         route_date TEXT,
         assigned_to TEXT,
@@ -92,21 +97,30 @@ def init_db():
         updated_at TEXT
     )""")
 
-    # Safe migration: add assigned_to column if it doesn't exist yet
-    try:
-        conn.execute("ALTER TABLE saved_routes ADD COLUMN assigned_to TEXT")
-    except Exception:
-        pass
+    cur.execute("""CREATE TABLE IF NOT EXISTS properties (
+        id SERIAL PRIMARY KEY,
+        "Property Name" TEXT,
+        "Unit Address" TEXT,
+        "Latitude" REAL,
+        "Longitude" REAL
+    )""")
 
-    existing = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
+    # Safe migration: add assigned_to if missing
+    cur.execute("""
+        ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT
+    """)
+
+    cur.execute("SELECT id FROM users WHERE role='admin'")
+    existing = cur.fetchone()
     if not existing:
         admin_password = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")
-        conn.execute(
-            "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (?,?,?,?,1,?)",
+        cur.execute(
+            "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (%s,%s,%s,%s,1,%s)",
             ("operations@tahoegetaways.com", "Admin", "admin",
              generate_password_hash(admin_password), datetime.utcnow().isoformat())
         )
     conn.commit()
+    cur.close()
     conn.close()
 
 with app.app_context():
@@ -137,11 +151,10 @@ class User(UserMixin):
 @login_manager.user_loader
 def load_user(user_id):
     conn = get_db()
-    row = conn.execute(
-        "SELECT id, email, name, role, is_active FROM users WHERE id = ?",
-        (user_id,)
-    ).fetchone()
-    conn.close()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id, email, name, role, is_active FROM users WHERE id = %s", (user_id,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
     if row:
         return User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
     return None
@@ -181,11 +194,10 @@ def login():
         remember = bool(request.form.get("remember"))
 
         conn = get_db()
-        row = conn.execute(
-            "SELECT id, email, name, role, password_hash, is_active FROM users WHERE email = ?",
-            (email,)
-        ).fetchone()
-        conn.close()
+        cur  = get_cursor(conn)
+        cur.execute("SELECT id, email, name, role, password_hash, is_active FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
 
         if not row or not check_password_hash(row["password_hash"], password):
             flash("Invalid email or password.", "error")
@@ -217,20 +229,22 @@ def logout():
 def forgot_password():
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
-        conn  = get_db()
-        row   = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        conn = get_db()
+        cur  = get_cursor(conn)
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
 
         if row:
             token   = secrets.token_urlsafe(32)
             expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
-            conn.execute(
-                "UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?",
+            cur.execute(
+                "UPDATE users SET reset_token = %s, reset_token_expires = %s WHERE id = %s",
                 (token, expires, row["id"])
             )
             conn.commit()
             _send_reset_email(email, token)
 
-        conn.close()
+        cur.close(); conn.close()
         flash("If that email is in our system, a reset link has been sent.", "info")
         return redirect(url_for("login"))
 
@@ -240,17 +254,17 @@ def forgot_password():
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
 def reset_password(token):
     conn = get_db()
-    row  = conn.execute(
-        "SELECT id, reset_token_expires FROM users WHERE reset_token = ?", (token,)
-    ).fetchone()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id, reset_token_expires FROM users WHERE reset_token = %s", (token,))
+    row  = cur.fetchone()
 
     if not row:
-        conn.close()
+        cur.close(); conn.close()
         flash("Invalid or expired reset link.", "error")
         return redirect(url_for("login"))
 
     if datetime.utcnow() > datetime.fromisoformat(row["reset_token_expires"]):
-        conn.close()
+        cur.close(); conn.close()
         flash("This reset link has expired. Please request a new one.", "error")
         return redirect(url_for("forgot_password"))
 
@@ -266,16 +280,16 @@ def reset_password(token):
             flash("Passwords do not match.", "error")
             return render_template("reset_password.html", token=token)
 
-        conn.execute(
-            "UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?",
+        cur.execute(
+            "UPDATE users SET password_hash = %s, reset_token = NULL, reset_token_expires = NULL WHERE id = %s",
             (generate_password_hash(password), row["id"])
         )
         conn.commit()
-        conn.close()
+        cur.close(); conn.close()
         flash("Password updated. You can now log in.", "success")
         return redirect(url_for("login"))
 
-    conn.close()
+    cur.close(); conn.close()
     return render_template("reset_password.html", token=token)
 
 
@@ -320,19 +334,20 @@ def admin_required(f):
 @login_required
 @admin_required
 def admin_users():
-    conn    = get_db()
-    users   = conn.execute(
-        "SELECT id, email, name, role, is_active, created_at FROM users ORDER BY created_at DESC"
-    ).fetchall()
-    invites = conn.execute(
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id, email, name, role, is_active, created_at FROM users ORDER BY created_at DESC")
+    users = cur.fetchall()
+    cur.execute(
         """SELECT i.email, i.expires_at, i.created_at, u.name AS invited_by_name
            FROM invites i
            JOIN users u ON i.invited_by = u.id
-           WHERE i.used = 0 AND i.expires_at > ?
+           WHERE i.used = 0 AND i.expires_at > %s
            ORDER BY i.created_at DESC""",
         (datetime.utcnow().isoformat(),)
-    ).fetchall()
-    conn.close()
+    )
+    invites = cur.fetchall()
+    cur.close(); conn.close()
     return render_template("admin.html", users=users, invites=invites)
 
 
@@ -353,18 +368,20 @@ def admin_add_user():
         role = "user"
 
     conn = get_db()
-    existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+    existing = cur.fetchone()
     if existing:
         flash(f"{email} already exists.", "error")
-        conn.close()
+        cur.close(); conn.close()
         return redirect(url_for("admin_users"))
 
-    conn.execute(
-        "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (?,?,?,?,1,?)",
+    cur.execute(
+        "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (%s,%s,%s,%s,1,%s)",
         (email, name, role, generate_password_hash(password), datetime.utcnow().isoformat())
     )
     conn.commit()
-    conn.close()
+    cur.close(); conn.close()
     flash(f"User {name} ({email}) created.", "success")
     return redirect(url_for("admin_users"))
 
@@ -378,14 +395,16 @@ def admin_toggle_user(user_id):
         return redirect(url_for("admin_users"))
 
     conn = get_db()
-    row  = conn.execute("SELECT is_active, name FROM users WHERE id = ?", (user_id,)).fetchone()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT is_active, name FROM users WHERE id = %s", (user_id,))
+    row = cur.fetchone()
     if row:
         new_state = 0 if row["is_active"] else 1
-        conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (new_state, user_id))
+        cur.execute("UPDATE users SET is_active = %s WHERE id = %s", (new_state, user_id))
         conn.commit()
         status = "activated" if new_state else "deactivated"
         flash(f"{row['name']} has been {status}.", "success")
-    conn.close()
+    cur.close(); conn.close()
     return redirect(url_for("admin_users"))
 
 
@@ -399,12 +418,13 @@ def admin_reset_password(user_id):
         return redirect(url_for("admin_users"))
 
     conn = get_db()
-    conn.execute(
-        "UPDATE users SET password_hash = ? WHERE id = ?",
+    cur  = get_cursor(conn)
+    cur.execute(
+        "UPDATE users SET password_hash = %s WHERE id = %s",
         (generate_password_hash(new_password), user_id)
     )
     conn.commit()
-    conn.close()
+    cur.close(); conn.close()
     flash("Password updated.", "success")
     return redirect(url_for("admin_users"))
 
@@ -424,25 +444,27 @@ def admin_invite():
         return redirect(url_for("admin_users"))
 
     conn = get_db()
-    existing_user = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+    existing_user = cur.fetchone()
     if existing_user:
         flash(f"{email} already has an account.", "error")
-        conn.close()
+        cur.close(); conn.close()
         return redirect(url_for("admin_users"))
 
-    conn.execute("DELETE FROM invites WHERE email = ? AND used = 0", (email,))
+    cur.execute("DELETE FROM invites WHERE email = %s AND used = 0", (email,))
 
     token        = secrets.token_urlsafe(32)
     expires_at   = (datetime.utcnow() + timedelta(hours=48)).isoformat()
     now          = datetime.utcnow().isoformat()
     register_url = f"{APP_BASE_URL}/register/{token}"
 
-    conn.execute(
-        "INSERT INTO invites (email, token, invited_by, expires_at, used, created_at) VALUES (?,?,?,?,0,?)",
+    cur.execute(
+        "INSERT INTO invites (email, token, invited_by, expires_at, used, created_at) VALUES (%s,%s,%s,%s,0,%s)",
         (email, token, current_user.id, expires_at, now)
     )
     conn.commit()
-    conn.close()
+    cur.close(); conn.close()
 
     email_ok, email_error = _send_invite_email(email, token)
 
@@ -496,23 +518,23 @@ def _send_invite_email(to_email: str, token: str):
 
 @app.route("/register/<token>", methods=["GET", "POST"])
 def register(token):
-    conn   = get_db()
-    invite = conn.execute(
-        "SELECT id, email, expires_at, used FROM invites WHERE token = ?", (token,)
-    ).fetchone()
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id, email, expires_at, used FROM invites WHERE token = %s", (token,))
+    invite = cur.fetchone()
 
     if not invite:
-        conn.close()
+        cur.close(); conn.close()
         flash("This invite link is invalid.", "error")
         return redirect(url_for("login"))
 
     if invite["used"]:
-        conn.close()
+        cur.close(); conn.close()
         flash("This invite link has already been used.", "error")
         return redirect(url_for("login"))
 
     if datetime.utcnow() > datetime.fromisoformat(invite["expires_at"]):
-        conn.close()
+        cur.close(); conn.close()
         flash("This invite link has expired. Ask your admin to send a new one.", "error")
         return redirect(url_for("login"))
 
@@ -535,25 +557,24 @@ def register(token):
             flash("Passwords do not match.", "error")
             return render_template("register.html", token=token, email=invited_email)
 
-        existing = conn.execute("SELECT id FROM users WHERE email = ?", (invited_email,)).fetchone()
+        cur.execute("SELECT id FROM users WHERE email = %s", (invited_email,))
+        existing = cur.fetchone()
         if existing:
-            conn.close()
+            cur.close(); conn.close()
             flash("An account with this email already exists. Try logging in.", "error")
             return redirect(url_for("login"))
 
         now = datetime.utcnow().isoformat()
-        conn.execute(
-            "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (?,?,?,?,1,?)",
+        cur.execute(
+            "INSERT INTO users (email, name, role, password_hash, is_active, created_at) VALUES (%s,%s,%s,%s,1,%s)",
             (invited_email, name, "user", generate_password_hash(password), now)
         )
-        conn.execute("UPDATE invites SET used = 1 WHERE token = ?", (token,))
+        cur.execute("UPDATE invites SET used = 1 WHERE token = %s", (token,))
         conn.commit()
 
-        row = conn.execute(
-            "SELECT id, email, name, role, is_active FROM users WHERE email = ?",
-            (invited_email,)
-        ).fetchone()
-        conn.close()
+        cur.execute("SELECT id, email, name, role, is_active FROM users WHERE email = %s", (invited_email,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
 
         user = User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
         login_user(user)
@@ -561,7 +582,7 @@ def register(token):
         flash(f"Welcome to Tahoe Dispatch, {name}! Your account is ready.", "success")
         return redirect(url_for("home"))
 
-    conn.close()
+    cur.close(); conn.close()
     return render_template("register.html", token=token, email=invited_email)
 
 
@@ -571,14 +592,15 @@ def register(token):
 
 @app.route("/portfolio")
 def portfolio():
-    conn   = get_db()
-    cursor = conn.execute(
-        'SELECT "Property Name", "Unit Address", Latitude, Longitude FROM properties '
-        'WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL '
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        'SELECT "Property Name", "Unit Address", "Latitude", "Longitude" FROM properties '
+        'WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL '
         'ORDER BY "Property Name" ASC'
     )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = cur.fetchall()
+    cur.close(); conn.close()
     properties = [
         {"name": r[0], "address": r[1], "lat": float(r[2]), "lng": float(r[3])}
         for r in rows
@@ -593,15 +615,17 @@ def portfolio():
 @app.route("/")
 @login_required
 def home():
-    conn   = get_db()
-    cursor = conn.execute(
-        'SELECT "Property Name", "Unit Address", Latitude, Longitude FROM properties '
-        'WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL'
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        'SELECT "Property Name", "Unit Address", "Latitude", "Longitude" FROM properties '
+        'WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL'
     )
-    rows = cursor.fetchall()
-    conn.close()
+    rows = cur.fetchall()
+    cur.close(); conn.close()
     properties = [
-        {"name": r[0], "address": r[1], "lat": float(r[2]), "lng": float(r[3])}
+        {"name": r["Property Name"], "address": r["Unit Address"],
+         "lat": float(r["Latitude"]), "lng": float(r["Longitude"])}
         for r in rows
     ]
     return render_template(
@@ -620,8 +644,9 @@ def home():
 @login_required
 def saved_routes():
     conn = get_db()
+    cur  = get_cursor(conn)
     if current_user.is_admin:
-        routes = conn.execute(
+        cur.execute(
             """SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
                       r.total_duration, r.driving_duration, r.distance,
                       u.name AS created_by_name, lu.name AS last_edited_by_name
@@ -629,20 +654,22 @@ def saved_routes():
                JOIN users u ON r.created_by = u.id
                LEFT JOIN users lu ON r.last_edited_by = lu.id
                ORDER BY r.route_date DESC, r.updated_at DESC"""
-        ).fetchall()
+        )
+        routes = cur.fetchall()
     else:
-        routes = conn.execute(
+        cur.execute(
             """SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
                       r.total_duration, r.driving_duration, r.distance,
                       u.name AS created_by_name, lu.name AS last_edited_by_name
                FROM saved_routes r
                JOIN users u ON r.created_by = u.id
                LEFT JOIN users lu ON r.last_edited_by = lu.id
-               WHERE r.created_by = ?
+               WHERE r.created_by = %s
                ORDER BY r.route_date DESC, r.updated_at DESC""",
             (current_user.id,)
-        ).fetchall()
-    conn.close()
+        )
+        routes = cur.fetchall()
+    cur.close(); conn.close()
     today = datetime.utcnow().strftime("%Y-%m-%d")
     return render_template("routes.html", routes=routes, now_date=today)
 
@@ -666,11 +693,12 @@ def save_route():
 
     now = datetime.utcnow().isoformat()
     conn = get_db()
-    cursor = conn.execute(
+    cur  = get_cursor(conn)
+    cur.execute(
         """INSERT INTO saved_routes
            (name, assigned_to, route_date, stops_json, total_duration, driving_duration,
             service_duration, distance, created_by, last_edited_by, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (
             name, assigned_to or None, route_date, json.dumps(schedule),
             stats.get("total_duration", 0), stats.get("driving_duration", 0),
@@ -678,9 +706,9 @@ def save_route():
             current_user.id, current_user.id, now, now,
         )
     )
+    route_id = cur.fetchone()["id"]
     conn.commit()
-    route_id = cursor.lastrowid
-    conn.close()
+    cur.close(); conn.close()
     return jsonify({"success": True, "id": route_id})
 
 
@@ -699,27 +727,28 @@ def update_route(route_id):
 
     now  = datetime.utcnow().isoformat()
     conn = get_db()
+    cur  = get_cursor(conn)
 
     if name and route_date:
-        conn.execute(
+        cur.execute(
             """UPDATE saved_routes SET
-               name = ?, assigned_to = ?, route_date = ?,
-               stops_json = ?, total_duration = ?, driving_duration = ?,
-               service_duration = ?, distance = ?,
-               last_edited_by = ?, updated_at = ?
-               WHERE id = ?""",
+               name = %s, assigned_to = %s, route_date = %s,
+               stops_json = %s, total_duration = %s, driving_duration = %s,
+               service_duration = %s, distance = %s,
+               last_edited_by = %s, updated_at = %s
+               WHERE id = %s""",
             (name, assigned_to or None, route_date, json.dumps(schedule),
              stats.get("total_duration", 0), stats.get("driving_duration", 0),
              stats.get("service_duration", 0), stats.get("distance", 0),
              current_user.id, now, route_id)
         )
     else:
-        conn.execute(
+        cur.execute(
             """UPDATE saved_routes SET
-               stops_json = ?, total_duration = ?, driving_duration = ?,
-               service_duration = ?, distance = ?,
-               last_edited_by = ?, updated_at = ?
-               WHERE id = ?""",
+               stops_json = %s, total_duration = %s, driving_duration = %s,
+               service_duration = %s, distance = %s,
+               last_edited_by = %s, updated_at = %s
+               WHERE id = %s""",
             (json.dumps(schedule),
              stats.get("total_duration", 0), stats.get("driving_duration", 0),
              stats.get("service_duration", 0), stats.get("distance", 0),
@@ -727,7 +756,7 @@ def update_route(route_id):
         )
 
     conn.commit()
-    conn.close()
+    cur.close(); conn.close()
     return jsonify({"success": True})
 
 
@@ -735,10 +764,10 @@ def update_route(route_id):
 @login_required
 def load_route(route_id):
     conn = get_db()
-    row  = conn.execute(
-        "SELECT * FROM saved_routes WHERE id = ?", (route_id,)
-    ).fetchone()
-    conn.close()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT * FROM saved_routes WHERE id = %s", (route_id,))
+    row  = cur.fetchone()
+    cur.close(); conn.close()
 
     if not row:
         flash("Route not found.", "error")
@@ -763,9 +792,10 @@ def load_route(route_id):
 @admin_required
 def delete_route(route_id):
     conn = get_db()
-    conn.execute("DELETE FROM saved_routes WHERE id = ?", (route_id,))
+    cur  = get_cursor(conn)
+    cur.execute("DELETE FROM saved_routes WHERE id = %s", (route_id,))
     conn.commit()
-    conn.close()
+    cur.close(); conn.close()
     flash("Route deleted.", "success")
     return redirect(url_for("saved_routes"))
 
@@ -1095,16 +1125,18 @@ def matrix_row():
 @app.route("/view/<int:route_id>")
 def view_route(route_id):
     conn = get_db()
-    row  = conn.execute(
+    cur  = get_cursor(conn)
+    cur.execute(
         """SELECT r.id, r.name, r.assigned_to, r.route_date, r.stops_json,
                   r.total_duration, r.driving_duration, r.distance,
                   u.name AS created_by_name
            FROM saved_routes r
            JOIN users u ON r.created_by = u.id
-           WHERE r.id = ?""",
+           WHERE r.id = %s""",
         (route_id,)
-    ).fetchone()
-    conn.close()
+    )
+    row = cur.fetchone()
+    cur.close(); conn.close()
 
     if not row:
         return render_template("view_route.html", error="Route not found."), 404
@@ -1128,13 +1160,12 @@ def view_route(route_id):
 #  DEBUG — DB DOWNLOAD
 # ══════════════════════════════════════════════════════════════════
 
-from flask import send_file as _send_file
-
 @app.route("/admin/download-db")
 @login_required
 @admin_required
 def download_db():
-    return _send_file(DB_PATH, as_attachment=True, download_name="properties.db")
+    # SQLite download no longer applicable — use Railway dashboard to access Postgres backups
+    return jsonify({"info": "Database is now PostgreSQL. Use Railway dashboard for backups."}), 200
 
 
 # ══════════════════════════════════════════════════════════════════

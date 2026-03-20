@@ -365,7 +365,15 @@ function guardResponse(res) {
 /* ================================================================
    MAP
 ================================================================ */
-const map = L.map('map').setView([39.3279, -120.1833], 11);
+const TAHOE_BOUNDS = L.latLngBounds(
+  L.latLng(38.8, -120.8),  // SW corner — well south/west of Tahoe
+  L.latLng(39.8, -119.6)   // NE corner — well north/east of Tahoe
+);
+const map = L.map('map', {
+  minZoom: 10,
+  maxBounds: TAHOE_BOUNDS,
+  maxBoundsViscosity: 0.8,  // resist but don't hard-lock dragging
+}).setView([39.3279, -120.1833], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18 }).addTo(map);
 
 function makeIcon(color) {
@@ -1062,7 +1070,13 @@ function renderSchedule() {
                     class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
           </div>
         </div>
-        <div class="text-xs text-gray-400 mt-0.5">🚗 ${driveMin} min drive · ${stop.serviceMinutes} min at house</div>`;
+        <div class="text-xs text-gray-400 mt-0.5">
+          🚗 ${driveMin} min drive${stop.arrival
+            ? (stop.priority_checkin
+                ? ' &nbsp;·&nbsp; <span style="background:#ede9fe;color:#6d28d9;font-weight:700;padding:1px 6px;border-radius:999px;font-size:0.6rem;">CHECK-IN by 12PM</span>'
+                : ' &nbsp;·&nbsp; <span style="background:#dcfce7;color:#15803d;font-weight:700;padding:1px 6px;border-radius:999px;font-size:0.6rem;">CHECK-IN</span>')
+            : ''}
+        </div>`;
       li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
       li.addEventListener("mouseleave", () => { const m=markers[stop.name]; if(m) m.closePopup(); });
       list.appendChild(li); num++; return;
