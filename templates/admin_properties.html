@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+{% block title %}Properties — Tahoe Dispatch{% endblock %}
+{% block content %}
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<div class="max-w-5xl mx-auto px-6 py-8">
+
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-800">Properties</h2>
+      <p class="text-sm text-gray-500 mt-0.5">{{ properties|length }} properties in the database</p>
+    </div>
+    <a href="{{ url_for('admin_users') }}"
+       class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+      ← User Management
+    </a>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+    <div class="mb-4 px-4 py-3 rounded-lg text-sm font-medium
+                {{ 'bg-green-100 text-green-800' if cat == 'success' else 'bg-red-100 text-red-800' }}">
+      {{ msg }}
+    </div>
+    {% endfor %}
+  {% endwith %}
+
+  <!-- ══ ADD PROPERTY FORM ══ -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+    <h3 class="font-semibold text-gray-800 mb-4">➕ Add New Property</h3>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 uppercase tracking-wide mb-1">
+          Property Name *
+        </label>
+        <input id="newName" type="text" placeholder="e.g. Kings Way Lodge"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 uppercase tracking-wide mb-1">
+          Street Address *
+        </label>
+        <div class="flex gap-2">
+          <input id="newAddress" type="text" placeholder="e.g. 123 Lakeview Dr"
+                 class="flex-1 border rounded-lg px-3 py-2 text-sm
+                        focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                 onkeydown="if(event.key==='Enter'){geocodeNew()}">
+          <button onclick="geocodeNew()"
+                  class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                         px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+            🔍 Look Up
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Just the street address — we'll search the Tahoe region automatically.</p>
+      </div>
+    </div>
+
+    <!-- Geocode result preview -->
+    <div id="geocodeResult" class="hidden">
+      <div class="border border-indigo-200 bg-indigo-50 rounded-lg p-4 mb-4">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <div class="text-xs font-semibold text-indigo-700 uppercase tracking-wide mb-1">
+              📍 Resolved Location
+            </div>
+            <div id="resolvedName" class="text-sm text-gray-700"></div>
+            <div id="resolvedCoords" class="text-xs text-gray-400 mt-0.5"></div>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <button onclick="confirmAdd()"
+                    class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium
+                           px-4 py-2 rounded-lg transition-colors">
+              ✓ Looks right — Add
+            </button>
+            <button onclick="cancelGeocode()"
+                    class="bg-gray-100 hover:bg-gray-200 text-gray-600 text-sm font-medium
+                           px-3 py-2 rounded-lg transition-colors">
+              ✕
+            </button>
+          </div>
+        </div>
+        <!-- Mini map preview -->
+        <div id="previewMap" style="height:180px; border-radius:8px; overflow:hidden;"></div>
+      </div>
+    </div>
+
+    <div id="geocodeError" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200
+                                   rounded-lg text-sm text-red-700"></div>
+    <div id="geocodeSpinner" class="hidden text-sm text-gray-500 italic">Looking up address…</div>
+  </div>
+
+  <!-- ══ PROPERTY LIST ══ -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+      <h3 class="font-semibold text-gray-800">All Properties</h3>
+      <input id="propSearch" type="text" placeholder="Filter…"
+             oninput="filterProps(this.value)"
+             class="border rounded-lg px-3 py-1.5 text-sm w-48
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400">
+    </div>
+
+    <div id="propList">
+      {% for p in properties %}
+      <div class="prop-row px-6 py-4 flex items-center justify-between gap-4
+                  hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0"
+           data-name="{{ p['Property Name']|lower }}">
+
+        <div class="flex-1 min-w-0" id="view-{{ p.id }}">
+          <div class="font-medium text-gray-800 truncate">{{ p['Property Name'] }}</div>
+          <div class="text-xs text-gray-400 mt-0.5">{{ p['Unit Address'] }}</div>
+          <div class="text-xs text-gray-300 mt-0.5">
+            {{ "%.5f"|format(p['Latitude']) }}, {{ "%.5f"|format(p['Longitude']) }}
+          </div>
+        </div>
+
+        <!-- Edit form (hidden by default) -->
+        <div class="flex-1 min-w-0 hidden" id="edit-{{ p.id }}">
+          <input id="edit-name-{{ p.id }}" type="text" value="{{ p['Property Name'] }}"
+                 class="w-full border rounded px-2 py-1 text-sm mb-1
+                        focus:outline-none focus:ring-1 focus:ring-indigo-400">
+          <div class="flex gap-2">
+            <input id="edit-addr-{{ p.id }}" type="text" value="{{ p['Unit Address'] }}"
+                   class="flex-1 border rounded px-2 py-1 text-sm
+                          focus:outline-none focus:ring-1 focus:ring-indigo-400">
+            <button onclick="reGeocode({{ p.id }})"
+                    class="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-xs
+                           font-medium px-2 py-1 rounded transition-colors whitespace-nowrap">
+              🔍 Re-geocode
+            </button>
+          </div>
+          <div class="flex gap-2 mt-1">
+            <input id="edit-lat-{{ p.id }}" type="number" step="0.00001"
+                   value="{{ p['Latitude'] }}"
+                   class="w-32 border rounded px-2 py-1 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                   placeholder="Latitude">
+            <input id="edit-lng-{{ p.id }}" type="number" step="0.00001"
+                   value="{{ p['Longitude'] }}"
+                   class="w-32 border rounded px-2 py-1 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                   placeholder="Longitude">
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0" id="view-btns-{{ p.id }}">
+          <button onclick="startEdit({{ p.id }})"
+                  class="text-xs text-indigo-600 hover:text-indigo-800 font-medium
+                         px-2 py-1.5 rounded hover:bg-indigo-50 transition-colors">
+            Edit
+          </button>
+          <form method="POST" action="{{ url_for('delete_property', prop_id=p.id) }}"
+                onsubmit="return confirm('Remove {{ p['Property Name']|e }}? This cannot be undone.')">
+            <button type="submit"
+                    class="text-xs text-red-400 hover:text-red-600 font-medium
+                           px-2 py-1.5 rounded hover:bg-red-50 transition-colors">
+              Remove
+            </button>
+          </form>
+        </div>
+
+        <div class="flex items-center gap-2 shrink-0 hidden" id="edit-btns-{{ p.id }}">
+          <button onclick="saveEdit({{ p.id }})"
+                  class="text-xs bg-green-600 hover:bg-green-700 text-white font-medium
+                         px-3 py-1.5 rounded transition-colors">
+            Save
+          </button>
+          <button onclick="cancelEdit({{ p.id }})"
+                  class="text-xs text-gray-500 hover:text-gray-700 font-medium
+                         px-2 py-1.5 rounded hover:bg-gray-100 transition-colors">
+            Cancel
+          </button>
+        </div>
+
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if not properties %}
+    <div class="text-center py-16 text-gray-400">
+      <div class="text-4xl mb-3">🏠</div>
+      <p class="font-medium">No properties yet</p>
+      <p class="text-sm mt-1">Add your first property above.</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+let previewMap   = null;
+let previewMarker = null;
+let pendingLat   = null;
+let pendingLng   = null;
+
+/* ── GEOCODE new property ── */
+async function geocodeNew() {
+  const address = document.getElementById("newAddress").value.trim();
+  const name    = document.getElementById("newName").value.trim();
+  if (!address) { alert("Enter a street address first."); return; }
+
+  document.getElementById("geocodeSpinner").classList.remove("hidden");
+  document.getElementById("geocodeResult").classList.add("hidden");
+  document.getElementById("geocodeError").classList.add("hidden");
+
+  try {
+    const res  = await fetch("/admin/properties/geocode", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ address })
+    });
+    const data = await res.json();
+    document.getElementById("geocodeSpinner").classList.add("hidden");
+
+    if (data.error) {
+      document.getElementById("geocodeError").textContent = data.error;
+      document.getElementById("geocodeError").classList.remove("hidden");
+      return;
+    }
+
+    pendingLat = data.lat;
+    pendingLng = data.lng;
+
+    document.getElementById("resolvedName").textContent   = data.display_name;
+    document.getElementById("resolvedCoords").textContent =
+      `${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}  (via "${data.resolved_query}")`;
+    document.getElementById("geocodeResult").classList.remove("hidden");
+
+    // Build/update preview map
+    if (!previewMap) {
+      previewMap = L.map("previewMap", { zoomControl:true, scrollWheelZoom:false })
+        .setView([data.lat, data.lng], 15);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:18 }).addTo(previewMap);
+    } else {
+      previewMap.setView([data.lat, data.lng], 15);
+    }
+
+    if (previewMarker) previewMap.removeLayer(previewMarker);
+    previewMarker = L.marker([data.lat, data.lng]).addTo(previewMap)
+      .bindPopup(name || address).openPopup();
+
+    // Invalidate size in case div was hidden
+    setTimeout(() => previewMap.invalidateSize(), 50);
+
+  } catch(e) {
+    document.getElementById("geocodeSpinner").classList.add("hidden");
+    document.getElementById("geocodeError").textContent = "Geocoding failed: " + e.message;
+    document.getElementById("geocodeError").classList.remove("hidden");
+  }
+}
+
+async function confirmAdd() {
+  const name    = document.getElementById("newName").value.trim();
+  const address = document.getElementById("newAddress").value.trim();
+  if (!name)    { alert("Enter a property name first."); return; }
+  if (!address) { alert("Enter a street address first."); return; }
+
+  try {
+    const res  = await fetch("/admin/properties/add", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ name, address, lat: pendingLat, lng: pendingLng })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    // Reload to show new property in list
+    window.location.reload();
+  } catch(e) {
+    alert("Failed to add property: " + e.message);
+  }
+}
+
+function cancelGeocode() {
+  document.getElementById("geocodeResult").classList.add("hidden");
+  pendingLat = null; pendingLng = null;
+}
+
+/* ── FILTER ── */
+function filterProps(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll(".prop-row").forEach(row => {
+    row.style.display = row.dataset.name.includes(q) ? "" : "none";
+  });
+}
+
+/* ── EDIT ── */
+function startEdit(id) {
+  document.getElementById(`view-${id}`).classList.add("hidden");
+  document.getElementById(`view-btns-${id}`).classList.add("hidden");
+  document.getElementById(`edit-${id}`).classList.remove("hidden");
+  document.getElementById(`edit-btns-${id}`).classList.remove("hidden");
+}
+function cancelEdit(id) {
+  document.getElementById(`view-${id}`).classList.remove("hidden");
+  document.getElementById(`view-btns-${id}`).classList.remove("hidden");
+  document.getElementById(`edit-${id}`).classList.add("hidden");
+  document.getElementById(`edit-btns-${id}`).classList.add("hidden");
+}
+
+async function reGeocode(id) {
+  const address = document.getElementById(`edit-addr-${id}`).value.trim();
+  if (!address) { alert("Enter an address first."); return; }
+  try {
+    const res  = await fetch("/admin/properties/geocode", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ address })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    document.getElementById(`edit-lat-${id}`).value = data.lat.toFixed(5);
+    document.getElementById(`edit-lng-${id}`).value = data.lng.toFixed(5);
+    alert(`Found: ${data.display_name}\n\nLat: ${data.lat.toFixed(5)}, Lng: ${data.lng.toFixed(5)}\n\nClick Save to confirm.`);
+  } catch(e) {
+    alert("Geocoding failed: " + e.message);
+  }
+}
+
+async function saveEdit(id) {
+  const name    = document.getElementById(`edit-name-${id}`).value.trim();
+  const address = document.getElementById(`edit-addr-${id}`).value.trim();
+  const lat     = parseFloat(document.getElementById(`edit-lat-${id}`).value);
+  const lng     = parseFloat(document.getElementById(`edit-lng-${id}`).value);
+
+  if (!name || !address || isNaN(lat) || isNaN(lng)) {
+    alert("All fields are required."); return;
+  }
+
+  try {
+    const res  = await fetch(`/admin/properties/${id}/update`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ name, address, lat, lng })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    window.location.reload();
+  } catch(e) {
+    alert("Save failed: " + e.message);
+  }
+}
+</script>
+
+{% endblock %}

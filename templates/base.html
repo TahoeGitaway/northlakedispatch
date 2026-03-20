@@ -46,6 +46,11 @@
                           {% if request.endpoint == 'admin_users' %}text-indigo-600{% endif %}">
                     Users
                 </a>
+                <a href="{{ url_for('admin_properties') }}"
+                   class="text-gray-600 hover:text-indigo-600 font-medium
+                          {% if request.endpoint == 'admin_properties' %}text-indigo-600{% endif %}">
+                    Properties
+                </a>
                 {% endif %}
             </div>
             {% endif %}

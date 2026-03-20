@@ -8,6 +8,8 @@ import requests
 import json
 import os
 import secrets
+import csv
+import io
 from datetime import datetime, timedelta
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sendgrid import SendGridAPIClient
@@ -1166,6 +1168,203 @@ def view_route(route_id):
 def download_db():
     # SQLite download no longer applicable — use Railway dashboard to access Postgres backups
     return jsonify({"info": "Database is now PostgreSQL. Use Railway dashboard for backups."}), 200
+
+
+# ══════════════════════════════════════════════════════════════════
+#  PROPERTY MANAGEMENT (admin only)
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/admin/properties")
+@login_required
+@admin_required
+def admin_properties():
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("""
+        SELECT id, "Property Name", "Unit Address", "Latitude", "Longitude"
+        FROM properties
+        ORDER BY "Property Name" ASC
+    """)
+    props = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template("admin_properties.html", properties=props)
+
+
+@app.route("/admin/properties/geocode", methods=["POST"])
+@login_required
+@admin_required
+def geocode_address():
+    """
+    Given a street address, try geocoding with several Tahoe-region suffixes.
+    Returns lat, lng, and the display name Nominatim resolved to.
+    """
+    data    = request.json or {}
+    address = (data.get("address") or "").strip()
+    if not address:
+        return jsonify({"error": "Address is required"}), 400
+
+    suffixes = [
+        ", Lake Tahoe, CA",
+        ", Tahoe City, CA",
+        ", South Lake Tahoe, CA",
+        ", Kings Beach, CA",
+        ", Incline Village, NV",
+        ", California",
+        "",
+    ]
+
+    for suffix in suffixes:
+        query = address + suffix
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": query, "format": "json", "limit": 1},
+                headers={"User-Agent": "TahoeDispatch/1.0"},
+                timeout=10
+            )
+            results = resp.json()
+            if results:
+                r = results[0]
+                lat = float(r["lat"])
+                lng = float(r["lon"])
+                # Sanity check: must be within the broader Tahoe region
+                if 38.5 <= lat <= 40.0 and -120.8 <= lng <= -119.4:
+                    return jsonify({
+                        "lat":          lat,
+                        "lng":          lng,
+                        "display_name": r.get("display_name", ""),
+                        "resolved_query": query,
+                    })
+        except Exception:
+            continue
+
+    return jsonify({"error": "Could not geocode this address in the Tahoe region. Check the address and try again."}), 404
+
+
+@app.route("/admin/properties/add", methods=["POST"])
+@login_required
+@admin_required
+def add_property():
+    data    = request.json or {}
+    name    = (data.get("name") or "").strip()
+    address = (data.get("address") or "").strip()
+    lat     = data.get("lat")
+    lng     = data.get("lng")
+
+    if not name or not address or lat is None or lng is None:
+        return jsonify({"error": "Name, address, lat and lng are all required"}), 400
+
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid coordinates"}), 400
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        'INSERT INTO properties ("Property Name", "Unit Address", "Latitude", "Longitude") VALUES (%s,%s,%s,%s) RETURNING id',
+        (name, address, lat, lng)
+    )
+    new_id = cur.fetchone()["id"]
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True, "id": new_id})
+
+
+@app.route("/admin/properties/<int:prop_id>/update", methods=["POST"])
+@login_required
+@admin_required
+def update_property(prop_id):
+    data    = request.json or {}
+    name    = (data.get("name") or "").strip()
+    address = (data.get("address") or "").strip()
+    lat     = data.get("lat")
+    lng     = data.get("lng")
+
+    if not name or not address or lat is None or lng is None:
+        return jsonify({"error": "All fields required"}), 400
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        'UPDATE properties SET "Property Name"=%s, "Unit Address"=%s, "Latitude"=%s, "Longitude"=%s WHERE id=%s',
+        (name, address, float(lat), float(lng), prop_id)
+    )
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
+@app.route("/admin/properties/<int:prop_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def delete_property(prop_id):
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("DELETE FROM properties WHERE id = %s", (prop_id,))
+    conn.commit()
+    cur.close(); conn.close()
+    flash("Property removed.", "success")
+    return redirect(url_for("admin_properties"))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  CSV UPLOAD — bulk reload (admin only)
+# ══════════════════════════════════════════════════════════════════
+
+@app.route("/admin/upload-csv", methods=["POST"])
+@login_required
+@admin_required
+def upload_csv():
+    f = request.files.get("csv_file")
+    if not f or not f.filename.endswith(".csv"):
+        flash("Please upload a valid .csv file.", "error")
+        return redirect(url_for("admin_users"))
+
+    try:
+        stream  = io.StringIO(f.stream.read().decode("utf-8-sig"), newline=None)
+        reader  = csv.DictReader(stream)
+
+        # Validate required columns
+        required = {"Property Name", "Unit Address", "Latitude", "Longitude"}
+        if not required.issubset(set(reader.fieldnames or [])):
+            missing = required - set(reader.fieldnames or [])
+            flash(f"CSV missing columns: {', '.join(missing)}", "error")
+            return redirect(url_for("admin_users"))
+
+        rows = []
+        for row in reader:
+            try:
+                lat = float(row["Latitude"])
+                lng = float(row["Longitude"])
+                rows.append((row["Property Name"], row["Unit Address"], lat, lng))
+            except (ValueError, KeyError):
+                continue  # skip rows with bad lat/lng
+
+        if not rows:
+            flash("No valid rows found in CSV.", "error")
+            return redirect(url_for("admin_users"))
+
+        conn = get_db()
+        cur  = get_cursor(conn)
+
+        # Clear existing properties and reload fresh
+        cur.execute("DELETE FROM properties")
+        psycopg2.extras.execute_values(
+            cur,
+            'INSERT INTO properties ("Property Name", "Unit Address", "Latitude", "Longitude") VALUES %s',
+            rows
+        )
+        conn.commit()
+        cur.close(); conn.close()
+
+        flash(f"✅ Properties reloaded — {len(rows)} properties imported.", "success")
+
+    except Exception as e:
+        flash(f"Upload failed: {str(e)}", "error")
+
+    return redirect(url_for("admin_users"))
 
 
 # ══════════════════════════════════════════════════════════════════
