@@ -81,7 +81,7 @@
 
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
-    <a href="{{ url_for('home') }}"
+    <a href="{{ url_for('dispatch.home') }}"
        class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
               px-4 py-2 rounded-lg transition-colors">
       + New Route
@@ -161,9 +161,9 @@ allRoutes.forEach(r => {
 });
 
 /* ── Calendar state ── */
-const todayParts  = TODAY_STR.split("-").map(Number); // [y, m, d]
+const todayParts  = TODAY_STR.split("-").map(Number);
 let calYear  = todayParts[0];
-let calMonth = todayParts[1]; // 1-based
+let calMonth = todayParts[1];
 let selectedDate = null;
 
 function dateStr(y, m, d) {
@@ -176,7 +176,7 @@ function daysInMonth(y, m) {
   return new Date(y, m, 0).getDate();
 }
 function firstDayOfWeek(y, m) {
-  return new Date(y, m - 1, 1).getDay(); // 0=Sun
+  return new Date(y, m - 1, 1).getDay();
 }
 
 function buildCalendar() {
@@ -187,7 +187,6 @@ function buildCalendar() {
   const startDow = firstDayOfWeek(calYear, calMonth);
   const days     = daysInMonth(calYear, calMonth);
 
-  // Empty cells before first day
   for (let i = 0; i < startDow; i++) {
     const cell = document.createElement("div");
     cell.className = "cal-cell empty";
@@ -241,7 +240,7 @@ function changeMonth(delta) {
 
 function selectDay(ds) {
   selectedDate = ds;
-  buildCalendar(); // rebuild to update selected highlight
+  buildCalendar();
 
   const routes = routesByDate[ds] || [];
   const date   = new Date(ds + "T00:00:00");
@@ -290,7 +289,6 @@ function selectDay(ds) {
 
     div.appendChild(info);
 
-    // Action buttons
     const btns = document.createElement("div");
     btns.className = "flex items-center gap-2 shrink-0";
 
@@ -324,27 +322,22 @@ function selectDay(ds) {
   });
 }
 
-/* ── Init: build calendar, auto-select today or nearest date with routes ── */
 document.addEventListener("DOMContentLoaded", () => {
   buildCalendar();
 
-  // Try to auto-select today if it has routes, else nearest future date with routes
   if (routesByDate[TODAY_STR]) {
     selectDay(TODAY_STR);
   } else {
-    // Find nearest future date with routes
     const futureDates = Object.keys(routesByDate)
       .filter(d => d !== "no-date" && d >= TODAY_STR)
       .sort();
     if (futureDates.length) {
-      // Navigate to that month if needed
       const parts = futureDates[0].split("-").map(Number);
       calYear  = parts[0];
       calMonth = parts[1];
       buildCalendar();
       selectDay(futureDates[0]);
     } else {
-      // All past — show most recent month with routes
       const pastDates = Object.keys(routesByDate)
         .filter(d => d !== "no-date")
         .sort().reverse();
@@ -359,7 +352,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-/* ── Share ── */
 function shareRoute(routeId, routeName) {
   const url = `${window.location.origin}/view/${routeId}`;
   if (navigator.share) {

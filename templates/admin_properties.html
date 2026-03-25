@@ -12,7 +12,7 @@
       <h2 class="text-2xl font-bold text-gray-800">Properties</h2>
       <p class="text-sm text-gray-500 mt-0.5">{{ properties|length }} properties in the database</p>
     </div>
-    <a href="{{ url_for('admin_users') }}"
+    <a href="{{ url_for('admin.admin_users') }}"
        class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
       ← User Management
     </a>
@@ -152,7 +152,7 @@
                          px-2 py-1.5 rounded hover:bg-indigo-50 transition-colors">
             Edit
           </button>
-          <form method="POST" action="{{ url_for('delete_property', prop_id=p.id) }}"
+          <form method="POST" action="{{ url_for('admin.delete_property', prop_id=p.id) }}"
                 onsubmit="return confirm('Remove {{ p['Property Name']|e }}? This cannot be undone.')">
             <button type="submit"
                     class="text-xs text-red-400 hover:text-red-600 font-medium
@@ -196,7 +196,6 @@ let previewMarker = null;
 let pendingLat   = null;
 let pendingLng   = null;
 
-/* ── GEOCODE new property ── */
 async function geocodeNew() {
   const address = document.getElementById("newAddress").value.trim();
   const name    = document.getElementById("newName").value.trim();
@@ -229,7 +228,6 @@ async function geocodeNew() {
       `${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}  (via "${data.resolved_query}")`;
     document.getElementById("geocodeResult").classList.remove("hidden");
 
-    // Build/update preview map
     if (!previewMap) {
       previewMap = L.map("previewMap", { zoomControl:true, scrollWheelZoom:false })
         .setView([data.lat, data.lng], 15);
@@ -242,7 +240,6 @@ async function geocodeNew() {
     previewMarker = L.marker([data.lat, data.lng]).addTo(previewMap)
       .bindPopup(name || address).openPopup();
 
-    // Invalidate size in case div was hidden
     setTimeout(() => previewMap.invalidateSize(), 50);
 
   } catch(e) {
@@ -266,7 +263,6 @@ async function confirmAdd() {
     });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
-    // Reload to show new property in list
     window.location.reload();
   } catch(e) {
     alert("Failed to add property: " + e.message);
@@ -278,7 +274,6 @@ function cancelGeocode() {
   pendingLat = null; pendingLng = null;
 }
 
-/* ── FILTER ── */
 function filterProps(q) {
   q = q.toLowerCase();
   document.querySelectorAll(".prop-row").forEach(row => {
@@ -286,7 +281,6 @@ function filterProps(q) {
   });
 }
 
-/* ── EDIT ── */
 function startEdit(id) {
   document.getElementById(`view-${id}`).classList.add("hidden");
   document.getElementById(`view-btns-${id}`).classList.add("hidden");

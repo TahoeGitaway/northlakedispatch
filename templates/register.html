@@ -5,7 +5,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 min-h-screen flex items-center justify-center">
-
 <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
     <div class="text-center mb-6">
         <div class="text-4xl mb-2">🏔</div>
@@ -14,13 +13,10 @@
             You've been invited to join Tahoe Dispatch.
         </p>
     </div>
-
-    <!-- Pre-filled locked email -->
     <div class="mb-5 px-4 py-3 bg-indigo-50 border border-indigo-200 rounded-lg text-sm">
         <span class="text-indigo-600 font-medium">Signing up as:</span>
         <span class="text-indigo-900 font-bold ml-1">{{ email }}</span>
     </div>
-
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
         {% for category, message in messages %}
@@ -31,8 +27,7 @@
         {% endfor %}
     {% endif %}
     {% endwith %}
-
-    <form method="POST" action="{{ url_for('register', token=token) }}" class="space-y-4">
+    <form method="POST" action="{{ url_for('auth.register', token=token) }}" class="space-y-4">
         <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
             <input type="text" name="name" required autofocus
@@ -60,12 +55,10 @@
             Create Account
         </button>
     </form>
-
     <p class="text-center text-xs text-gray-400 mt-5">
         Already have an account?
-        <a href="{{ url_for('login') }}" class="text-indigo-600 hover:underline">Log in</a>
+        <a href="{{ url_for('auth.login') }}" class="text-indigo-600 hover:underline">Log in</a>
     </p>
 </div>
-
 </body>
 </html>
