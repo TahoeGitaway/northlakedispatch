@@ -39,6 +39,11 @@
                           {% if request.endpoint == 'portfolio' %}text-indigo-600{% endif %}">
                     Portfolio
                 </a>
+                <a href="{{ url_for('carpet_log') }}"
+                   class="text-gray-600 hover:text-indigo-600 font-medium
+                          {% if request.endpoint == 'carpet_log' %}text-indigo-600{% endif %}">
+                    Carpet Log
+                </a>
                 {% if current_user.is_admin %}
                 <a href="{{ url_for('admin_users') }}"
                    class="text-gray-600 hover:text-indigo-600 font-medium

@@ -1,0 +1,447 @@
+{% extends "base.html" %}
+{% block title %}Carpet Log — Tahoe Dispatch{% endblock %}
+{% block content %}
+
+<style>
+  .cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+  .cal-day-header {
+    text-align:center; font-size:0.7rem; font-weight:700;
+    color:#9ca3af; padding:6px 0; text-transform:uppercase; letter-spacing:0.05em;
+  }
+  .cal-cell {
+    min-height: 64px;
+    border-radius: 8px;
+    padding: 4px 5px;
+    cursor: pointer;
+    transition: background 0.1s;
+    background: #f9fafb;
+    position: relative;
+  }
+  .cal-cell:hover { background: #e0e7ff; }
+  .cal-cell.empty { background: transparent; cursor: default; pointer-events:none; }
+  .cal-cell.today { background: #4f46e5; }
+  .cal-cell.today .cal-date { color: #fff; }
+  .cal-cell.selected { background: #312e81; box-shadow: 0 0 0 2px #4f46e5; }
+  .cal-cell.selected .cal-date { color: #fff; }
+  .cal-date { font-size:0.8rem; font-weight:600; color:#374151; line-height:1; }
+  .cal-cell.today .cal-name,
+  .cal-cell.selected .cal-name { color: #c7d2fe; }
+  .cal-name {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: #4f46e5;
+    line-height: 1.3;
+    margin-top: 2px;
+    overflow: hidden;
+  }
+  .month-nav button {
+    padding:4px 10px; border-radius:6px; border:1px solid #e5e7eb;
+    background:#fff; cursor:pointer; font-size:0.85rem; color:#374151;
+  }
+  .month-nav button:hover { background:#f3f4f6; }
+
+  /* cleaner color dots */
+  .cleaner-dot {
+    display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; flex-shrink:0;
+  }
+</style>
+
+<div class="max-w-4xl mx-auto px-6 py-8">
+
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-800">Carpet Log</h2>
+      <p class="text-sm text-gray-500 mt-0.5">Track carpet cleans by cleaner · max once per week per person</p>
+    </div>
+    <button onclick="document.getElementById('addPanel').classList.toggle('hidden')"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                   px-4 py-2 rounded-lg transition-colors">
+      + Log a Clean
+    </button>
+  </div>
+
+  <!-- ── ADD PANEL ── -->
+  <div id="addPanel" class="hidden bg-indigo-50 border border-indigo-200 rounded-xl p-5 mb-6">
+    <h3 class="font-semibold text-indigo-900 mb-4">Log a Carpet Clean</h3>
+    <div id="addError" class="hidden mb-3 px-3 py-2 bg-red-100 text-red-700 rounded text-sm"></div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div>
+        <label class="block text-xs font-medium text-indigo-800 uppercase tracking-wide mb-1">Date *</label>
+        <input type="date" id="addDate"
+               class="w-full border border-indigo-300 rounded-lg px-3 py-2 text-sm bg-white
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-indigo-800 uppercase tracking-wide mb-1">Cleaner *</label>
+        <select id="addCleaner"
+                class="w-full border border-indigo-300 rounded-lg px-3 py-2 text-sm bg-white
+                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="">Select cleaner…</option>
+          {% for c in cleaners %}
+          <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-indigo-800 uppercase tracking-wide mb-1">Notes (optional)</label>
+        <input type="text" id="addNotes" placeholder="e.g. Cabin 5, Dollar property"
+               class="w-full border border-indigo-300 rounded-lg px-3 py-2 text-sm bg-white
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+    </div>
+    <div class="flex gap-3 mt-4">
+      <button onclick="submitLog()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-5 py-2 rounded-lg transition-colors">
+        Save Entry
+      </button>
+      <button onclick="document.getElementById('addPanel').classList.add('hidden')"
+              class="bg-white border border-gray-200 text-gray-600 text-sm font-medium
+                     px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors">
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <!-- ── MONTHLY SUMMARY ── -->
+  <div id="summaryBar" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+    <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">This Month</div>
+    <div id="summaryContent" class="flex flex-wrap gap-4"></div>
+  </div>
+
+  <!-- ── CALENDAR ── -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
+    <div class="month-nav flex items-center justify-between mb-4">
+      <button onclick="changeMonth(-1)">← Prev</button>
+      <div id="monthLabel" class="font-bold text-gray-800 text-base"></div>
+      <button onclick="changeMonth(1)">Next →</button>
+    </div>
+    <div class="cal-grid mb-1">
+      {% for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
+      <div class="cal-day-header">{{ d }}</div>
+      {% endfor %}
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+  </div>
+
+  <!-- ── DAY DETAIL ── -->
+  <div id="dayDetail">
+    <div id="dayDetailEmpty" class="text-center py-8 text-gray-400 text-sm">
+      Click a day to see carpet cleans.
+    </div>
+    <div id="dayDetailContent" class="hidden">
+      <div class="flex items-center justify-between mb-3">
+        <h3 id="dayDetailTitle" class="font-bold text-gray-800 text-lg"></h3>
+        <span id="dayDetailCount" class="text-xs text-gray-400"></span>
+      </div>
+      <div id="dayDetailEntries" class="space-y-3"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ── Data from backend ── */
+const allEntries = [
+  {% for e in entries %}
+  {
+    id:           {{ e.id }},
+    log_date:     {{ e.log_date | tojson }},
+    cleaner_name: {{ e.cleaner_name | tojson }},
+    notes:        {{ (e.notes or '') | tojson }},
+    logged_by:    {{ e.logged_by_name | tojson }},
+    created_at:   {{ e.created_at | tojson }}
+  }{{ "," if not loop.last }}
+  {% endfor %}
+];
+
+const TODAY_STR  = "{{ now_date }}";
+const IS_ADMIN   = {{ 'true' if current_user.is_admin else 'false' }};
+const CURRENT_USER = {{ current_user.name | tojson }};
+
+/* Cleaner colors — consistent across the app */
+const CLEANER_COLORS = {
+  "Irving":  "#6366f1", "Trevor": "#16a34a", "Julie":  "#db2777",
+  "Chris":   "#ea580c", "Andy":   "#0891b2", "Alec":   "#7c3aed",
+  "Calder":  "#ca8a04", "Jonah":  "#dc2626"
+};
+function cleanerColor(name) { return CLEANER_COLORS[name] || "#6b7280"; }
+
+/* ── Build lookup: dateStr → [entry, ...] ── */
+const entriesByDate = {};
+allEntries.forEach(e => {
+  if (!entriesByDate[e.log_date]) entriesByDate[e.log_date] = [];
+  entriesByDate[e.log_date].push(e);
+});
+
+/* ── Calendar state ── */
+const todayParts = TODAY_STR.split("-").map(Number);
+let calYear  = todayParts[0];
+let calMonth = todayParts[1];
+let selectedDate = null;
+
+function dateStr(y, m, d) {
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
+function firstDow(y, m)    { return new Date(y, m-1, 1).getDay(); }
+function monthLabel(y, m)  {
+  return new Date(y, m-1, 1).toLocaleString('default', { month:'long', year:'numeric' });
+}
+
+function buildCalendar() {
+  document.getElementById("monthLabel").textContent = monthLabel(calYear, calMonth);
+  const grid = document.getElementById("calGrid");
+  grid.innerHTML = "";
+
+  const days    = daysInMonth(calYear, calMonth);
+  const startDow = firstDow(calYear, calMonth);
+
+  for (let i = 0; i < startDow; i++) {
+    const empty = document.createElement("div");
+    empty.className = "cal-cell empty";
+    grid.appendChild(empty);
+  }
+
+  for (let d = 1; d <= days; d++) {
+    const ds      = dateStr(calYear, calMonth, d);
+    const entries = entriesByDate[ds] || [];
+    const isToday    = ds === TODAY_STR;
+    const isSelected = ds === selectedDate;
+
+    const cell = document.createElement("div");
+    cell.className = "cal-cell" +
+      (isToday    ? " today"    : "") +
+      (isSelected ? " selected" : "");
+
+    const dateDiv = document.createElement("div");
+    dateDiv.className = "cal-date";
+    dateDiv.textContent = d;
+    cell.appendChild(dateDiv);
+
+    if (entries.length) {
+      // Show cleaner names with colored dots
+      const namesDiv = document.createElement("div");
+      namesDiv.className = "cal-name";
+      entries.forEach(e => {
+        const line = document.createElement("div");
+        line.style.display = "flex";
+        line.style.alignItems = "center";
+        const dot = document.createElement("span");
+        dot.className = "cleaner-dot";
+        dot.style.background = cleanerColor(e.cleaner_name);
+        line.appendChild(dot);
+        const name = document.createElement("span");
+        name.textContent = e.cleaner_name;
+        name.style.overflow = "hidden";
+        name.style.textOverflow = "ellipsis";
+        name.style.whiteSpace = "nowrap";
+        line.appendChild(name);
+        namesDiv.appendChild(line);
+      });
+      cell.appendChild(namesDiv);
+    }
+
+    cell.addEventListener("click", () => selectDay(ds));
+    grid.appendChild(cell);
+  }
+
+  // Update monthly summary
+  buildMonthlySummary();
+}
+
+function buildMonthlySummary() {
+  const monthPrefix = `${calYear}-${String(calMonth).padStart(2,'0')}`;
+  const counts = {};
+  allEntries.forEach(e => {
+    if (e.log_date.startsWith(monthPrefix)) {
+      counts[e.cleaner_name] = (counts[e.cleaner_name] || 0) + 1;
+    }
+  });
+
+  const bar = document.getElementById("summaryBar");
+  const content = document.getElementById("summaryContent");
+  content.innerHTML = "";
+
+  const entries = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  if (!entries.length) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+
+  entries.forEach(([name, count]) => {
+    const chip = document.createElement("div");
+    chip.className = "flex items-center gap-2 text-sm";
+    chip.innerHTML = `
+      <span class="cleaner-dot" style="background:${cleanerColor(name)};width:10px;height:10px;border-radius:50%;display:inline-block;"></span>
+      <span class="font-medium text-gray-800">${name}</span>
+      <span class="text-gray-500">${count} clean${count!==1?'s':''}</span>
+      ${count >= 2 ? '<span class="text-xs bg-amber-100 text-amber-700 font-semibold px-2 py-0.5 rounded-full">⚠ Busy</span>' : ''}
+    `;
+    content.appendChild(chip);
+  });
+}
+
+function changeMonth(delta) {
+  calMonth += delta;
+  if (calMonth > 12) { calMonth = 1;  calYear++; }
+  if (calMonth < 1)  { calMonth = 12; calYear--; }
+  buildCalendar();
+  if (selectedDate) selectDay(selectedDate);
+}
+
+function selectDay(ds) {
+  selectedDate = ds;
+  buildCalendar();
+
+  const entries = entriesByDate[ds] || [];
+  const date    = new Date(ds + "T00:00:00");
+  const label   = date.toLocaleDateString('default', {
+    weekday:'long', month:'long', day:'numeric', year:'numeric'
+  });
+
+  document.getElementById("dayDetailEmpty").classList.add("hidden");
+  document.getElementById("dayDetailContent").classList.remove("hidden");
+  document.getElementById("dayDetailTitle").textContent = label;
+  document.getElementById("dayDetailCount").textContent =
+    entries.length ? `${entries.length} clean${entries.length!==1?'s':''}` : "No cleans logged";
+
+  const container = document.getElementById("dayDetailEntries");
+  container.innerHTML = "";
+
+  if (!entries.length) {
+    container.innerHTML = `
+      <div class="text-center py-8 text-gray-400 text-sm">
+        No carpet cleans logged for this day.
+        <button onclick="prefillDate('${ds}')"
+                class="block mx-auto mt-2 text-indigo-600 hover:text-indigo-800 font-medium text-sm">
+          + Log a clean for this day
+        </button>
+      </div>`;
+    return;
+  }
+
+  entries.forEach(e => {
+    const div = document.createElement("div");
+    div.className = "bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-4 flex items-center justify-between gap-4";
+
+    div.innerHTML = `
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-3 h-3 rounded-full shrink-0" style="background:${cleanerColor(e.cleaner_name)}"></div>
+        <div class="min-w-0">
+          <div class="font-semibold text-gray-800">${e.cleaner_name}</div>
+          ${e.notes ? `<div class="text-xs text-gray-500 mt-0.5">${e.notes}</div>` : ''}
+          <div class="text-xs text-gray-400 mt-0.5">Logged by ${e.logged_by}</div>
+        </div>
+      </div>
+      <button onclick="deleteEntry(${e.id}, this)"
+              class="text-red-400 hover:text-red-600 text-xs font-medium px-2 py-1
+                     rounded hover:bg-red-50 transition-colors shrink-0">
+        Remove
+      </button>`;
+
+    container.appendChild(div);
+  });
+
+  // Quick-add for this day
+  const addBtn = document.createElement("button");
+  addBtn.className = "mt-2 text-sm text-indigo-600 hover:text-indigo-800 font-medium";
+  addBtn.textContent = "+ Log another clean for this day";
+  addBtn.onclick = () => prefillDate(ds);
+  container.appendChild(addBtn);
+}
+
+function prefillDate(ds) {
+  document.getElementById("addDate").value = ds;
+  document.getElementById("addPanel").classList.remove("hidden");
+  document.getElementById("addPanel").scrollIntoView({ behavior: "smooth" });
+}
+
+/* ── Submit ── */
+async function submitLog() {
+  const log_date     = document.getElementById("addDate").value;
+  const cleaner_name = document.getElementById("addCleaner").value;
+  const notes        = document.getElementById("addNotes").value.trim();
+  const errorEl      = document.getElementById("addError");
+  errorEl.classList.add("hidden");
+
+  if (!log_date)     { errorEl.textContent = "Please select a date.";    errorEl.classList.remove("hidden"); return; }
+  if (!cleaner_name) { errorEl.textContent = "Please select a cleaner."; errorEl.classList.remove("hidden"); return; }
+
+  try {
+    const res  = await fetch("/carpet-log/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ log_date, cleaner_name, notes })
+    });
+    const data = await res.json();
+    if (data.error) {
+      errorEl.textContent = data.error; errorEl.classList.remove("hidden"); return;
+    }
+
+    // Add to local data and re-render
+    const newEntry = {
+      id: data.id, log_date, cleaner_name, notes,
+      logged_by: CURRENT_USER, created_at: new Date().toISOString()
+    };
+    allEntries.push(newEntry);
+    if (!entriesByDate[log_date]) entriesByDate[log_date] = [];
+    entriesByDate[log_date].push(newEntry);
+
+    // Navigate calendar to the logged month
+    const parts = log_date.split("-").map(Number);
+    calYear = parts[0]; calMonth = parts[1];
+    buildCalendar();
+    selectDay(log_date);
+
+    // Reset form
+    document.getElementById("addDate").value    = "";
+    document.getElementById("addCleaner").value = "";
+    document.getElementById("addNotes").value   = "";
+    document.getElementById("addPanel").classList.add("hidden");
+
+  } catch(e) {
+    errorEl.textContent = "Failed: " + e.message; errorEl.classList.remove("hidden");
+  }
+}
+
+/* ── Delete ── */
+async function deleteEntry(id, btn) {
+  if (!confirm("Remove this entry?")) return;
+  try {
+    const res  = await fetch(`/carpet-log/${id}/delete`, { method: "POST" });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+
+    // Remove from local data
+    const idx = allEntries.findIndex(e => e.id === id);
+    if (idx >= 0) {
+      const e = allEntries[idx];
+      entriesByDate[e.log_date] = (entriesByDate[e.log_date] || []).filter(x => x.id !== id);
+      if (!entriesByDate[e.log_date].length) delete entriesByDate[e.log_date];
+      allEntries.splice(idx, 1);
+    }
+
+    buildCalendar();
+    if (selectedDate) selectDay(selectedDate);
+  } catch(e) {
+    alert("Delete failed: " + e.message);
+  }
+}
+
+/* ── Init ── */
+document.addEventListener("DOMContentLoaded", () => {
+  // Default date to today
+  document.getElementById("addDate").value = TODAY_STR;
+  buildCalendar();
+
+  // Auto-select today if it has entries, else just show current month
+  if (entriesByDate[TODAY_STR]) {
+    selectDay(TODAY_STR);
+  }
+});
+</script>
+
+{% endblock %}
