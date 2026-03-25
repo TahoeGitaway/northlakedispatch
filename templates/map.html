@@ -834,6 +834,16 @@ function setServiceMinutes(id, val) {
 function renderStops() {
   const container = document.getElementById("selectedStops");
   const countEl   = document.getElementById("stopCount");
+
+  // Once optimized, hide pre-opt UI — schedule is the source of truth
+  if (isOptimized) {
+    document.getElementById("preOptSection").classList.add("hidden");
+    document.getElementById("preOptSearch").classList.add("hidden");
+    return;
+  }
+
+  document.getElementById("preOptSection").classList.remove("hidden");
+  document.getElementById("preOptSearch").classList.remove("hidden");
   container.innerHTML = "";
   countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
 
@@ -846,29 +856,55 @@ function renderStops() {
     const div = document.createElement("div");
     div.className = "stop-card bg-gray-50 p-2 rounded shadow-sm text-sm";
 
-    const priorityRow = s.arrival ? `
-      <label class="flex items-center gap-1 cursor-pointer">
-        <input type="checkbox" class="accent-violet-600"
-               onchange="setPriorityCheckin('${s._id}', this.checked)" ${s.priority_checkin ? "checked" : ""}>
-        <span class="text-violet-700 font-medium text-xs">Priority (by 12PM)</span>
-      </label>` : "";
-
     div.innerHTML = `
       <div class="font-medium text-gray-800 truncate mb-1" title="${s.name}">${s.name}</div>
-      <div class="stop-card-row">
+      <div class="stop-card-row items-center">
         <label class="flex items-center gap-1 cursor-pointer">
-          <input type="checkbox" class="accent-green-600"
-                 onchange="setArrival('${s._id}', this.checked)" ${s.arrival ? "checked" : ""}>
-          <span class="text-gray-600">Check-in</span>
+          <input type="checkbox" class="accent-green-600" data-role="checkin"
+                 ${s.arrival ? "checked" : ""}>
+          <span class="text-gray-600 text-xs">Check-in</span>
         </label>
-        ${priorityRow}
-        <select class="border rounded px-1 py-0.5 text-xs"
-                onchange="setServiceMinutes('${s._id}', parseInt(this.value))">
+        <label class="flex items-center gap-1 cursor-pointer priority-label"
+               style="${s.arrival ? '' : 'display:none'}">
+          <input type="checkbox" class="accent-violet-600" data-role="priority"
+                 ${s.priority_checkin ? "checked" : ""}>
+          <span class="text-violet-700 font-medium text-xs">Priority (by 12PM)</span>
+        </label>
+        <select class="border rounded px-1 py-0.5 text-xs" data-role="service">
           ${generateTimeOptions(s.serviceMinutes)}
         </select>
       </div>
-      <button onclick="removeStop('${s._id}')"
+      <button data-role="remove"
               class="text-red-400 hover:text-red-600 text-xs mt-1">✕ Remove</button>`;
+
+    const checkinCb   = div.querySelector('[data-role="checkin"]');
+    const priorityCb  = div.querySelector('[data-role="priority"]');
+    const priorityLbl = div.querySelector('.priority-label');
+    const serviceEl   = div.querySelector('[data-role="service"]');
+    const removeBtn   = div.querySelector('[data-role="remove"]');
+
+    checkinCb.addEventListener("change", () => {
+      s.arrival = checkinCb.checked;
+      if (!s.arrival) { s.priority_checkin = false; priorityCb.checked = false; }
+      priorityLbl.style.display = s.arrival ? "" : "none";
+    });
+
+    priorityCb.addEventListener("change", () => {
+      s.priority_checkin = priorityCb.checked;
+    });
+
+    serviceEl.addEventListener("change", () => {
+      s.serviceMinutes = parseInt(serviceEl.value);
+    });
+
+    removeBtn.addEventListener("click", () => {
+      selectedStops = selectedStops.filter(x => x._id !== s._id);
+      div.remove();
+      countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
+      if (!selectedStops.length)
+        container.innerHTML = '<p class="text-sm text-gray-400">No stops added yet.</p>';
+    });
+
     container.appendChild(div);
   });
 }
@@ -922,6 +958,8 @@ function restartRoute() {
   lastStats = { total_duration:0, driving_duration:0, service_duration:0, distance:0 };
   clearRouteMarkers();
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  document.getElementById("preOptSection").classList.remove("hidden");
+  document.getElementById("preOptSearch").classList.remove("hidden");
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
   document.getElementById("workInSection").classList.add("hidden");
