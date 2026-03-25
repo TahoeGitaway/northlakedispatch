@@ -54,7 +54,6 @@ def carpet_log_add():
 
     if not log_date or not cleaner_name:
         return jsonify({"error": "Date and cleaner name are required"}), 400
-
     if cleaner_name not in CARPET_CLEANERS:
         return jsonify({"error": "Invalid cleaner name"}), 400
 
@@ -71,6 +70,42 @@ def carpet_log_add():
     return jsonify({"success": True, "id": new_id})
 
 
+@carpet_bp.route("/carpet-log/<int:entry_id>/update", methods=["POST"])
+@login_required
+def carpet_log_update(entry_id):
+    data          = request.json or {}
+    log_date      = (data.get("log_date") or "").strip()
+    cleaner_name  = (data.get("cleaner_name") or "").strip()
+    property_name = (data.get("property_name") or "").strip() or None
+    notes         = (data.get("notes") or "").strip()
+
+    if not log_date or not cleaner_name:
+        return jsonify({"error": "Date and cleaner name are required"}), 400
+    if cleaner_name not in CARPET_CLEANERS:
+        return jsonify({"error": "Invalid cleaner name"}), 400
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT logged_by FROM carpet_log WHERE id = %s", (entry_id,))
+    row = cur.fetchone()
+
+    if not row:
+        cur.close(); conn.close()
+        return jsonify({"error": "Entry not found"}), 404
+    if not current_user.is_admin and row["logged_by"] != current_user.id:
+        cur.close(); conn.close()
+        return jsonify({"error": "Not authorized"}), 403
+
+    cur.execute("""
+        UPDATE carpet_log
+        SET log_date=%s, cleaner_name=%s, property_name=%s, notes=%s
+        WHERE id=%s
+    """, (log_date, cleaner_name, property_name, notes or None, entry_id))
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True, "log_date": log_date})
+
+
 @carpet_bp.route("/carpet-log/<int:entry_id>/delete", methods=["POST"])
 @login_required
 def carpet_log_delete(entry_id):
@@ -82,7 +117,6 @@ def carpet_log_delete(entry_id):
     if not row:
         cur.close(); conn.close()
         return jsonify({"error": "Entry not found"}), 404
-
     if not current_user.is_admin and row["logged_by"] != current_user.id:
         cur.close(); conn.close()
         return jsonify({"error": "Not authorized"}), 403

@@ -13,13 +13,8 @@
     color:#9ca3af; padding:6px 0; text-transform:uppercase; letter-spacing:0.05em;
   }
   .cal-cell {
-    min-height: 64px;
-    border-radius: 8px;
-    padding: 4px 5px;
-    cursor: pointer;
-    transition: background 0.1s;
-    background: #f9fafb;
-    position: relative;
+    min-height: 64px; border-radius: 8px; padding: 4px 5px;
+    cursor: pointer; transition: background 0.1s; background: #f9fafb; position: relative;
   }
   .cal-cell:hover { background: #e0e7ff; }
   .cal-cell.empty { background: transparent; cursor: default; pointer-events:none; }
@@ -31,19 +26,14 @@
   .cal-cell.today .cal-name,
   .cal-cell.selected .cal-name { color: #c7d2fe; }
   .cal-name {
-    font-size: 0.62rem;
-    font-weight: 600;
-    color: #4f46e5;
-    line-height: 1.3;
-    margin-top: 2px;
-    overflow: hidden;
+    font-size: 0.62rem; font-weight: 600; color: #4f46e5;
+    line-height: 1.3; margin-top: 2px; overflow: hidden;
   }
   .month-nav button {
     padding:4px 10px; border-radius:6px; border:1px solid #e5e7eb;
     background:#fff; cursor:pointer; font-size:0.85rem; color:#374151;
   }
   .month-nav button:hover { background:#f3f4f6; }
-
   .cleaner-dot {
     display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; flex-shrink:0;
   }
@@ -154,6 +144,59 @@
 
 </div>
 
+<!-- ── EDIT MODAL ── -->
+<div id="editModal"
+     class="hidden fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+    <h3 class="font-bold text-lg text-gray-800 mb-4">Edit Entry</h3>
+    <div id="editError" class="hidden mb-3 px-3 py-2 bg-red-100 text-red-700 rounded text-sm"></div>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Date *</label>
+        <input type="date" id="editDate"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Cleaner *</label>
+        <select id="editCleaner"
+                class="w-full border rounded-lg px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="">Select cleaner…</option>
+          {% for c in cleaners %}
+          <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Property</label>
+        <select id="editProperty"
+                class="w-full border rounded-lg px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="">No property selected</option>
+          {% for p in properties %}
+          <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+        <input type="text" id="editNotes" placeholder="Any additional notes…"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+    </div>
+    <div class="flex gap-2 mt-5">
+      <button id="editSaveBtn" onclick="submitEdit()"
+              class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                     py-2 rounded-lg text-sm transition-colors">Save</button>
+      <button onclick="closeEditModal()"
+              class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium
+                     py-2 rounded-lg text-sm transition-colors">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const allEntries = [
   {% for e in entries %}
@@ -190,6 +233,8 @@ const todayParts = TODAY_STR.split("-").map(Number);
 let calYear  = todayParts[0];
 let calMonth = todayParts[1];
 let selectedDate = null;
+let editingId    = null;
+let editingOldDate = null;
 
 function dateStr(y, m, d) {
   return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
@@ -204,7 +249,6 @@ function buildCalendar() {
   document.getElementById("monthLabel").textContent = monthLabel(calYear, calMonth);
   const grid = document.getElementById("calGrid");
   grid.innerHTML = "";
-
   const days     = daysInMonth(calYear, calMonth);
   const startDow = firstDow(calYear, calMonth);
 
@@ -235,17 +279,14 @@ function buildCalendar() {
       namesDiv.className = "cal-name";
       entries.forEach(e => {
         const line = document.createElement("div");
-        line.style.display = "flex";
-        line.style.alignItems = "center";
+        line.style.cssText = "display:flex;align-items:center;";
         const dot = document.createElement("span");
         dot.className = "cleaner-dot";
         dot.style.background = cleanerColor(e.cleaner_name);
         line.appendChild(dot);
         const name = document.createElement("span");
         name.textContent = e.cleaner_name;
-        name.style.overflow = "hidden";
-        name.style.textOverflow = "ellipsis";
-        name.style.whiteSpace = "nowrap";
+        name.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
         line.appendChild(name);
         namesDiv.appendChild(line);
       });
@@ -255,7 +296,6 @@ function buildCalendar() {
     cell.addEventListener("click", () => selectDay(ds));
     grid.appendChild(cell);
   }
-
   buildMonthlySummary();
 }
 
@@ -263,20 +303,18 @@ function buildMonthlySummary() {
   const monthPrefix = `${calYear}-${String(calMonth).padStart(2,'0')}`;
   const counts = {};
   allEntries.forEach(e => {
-    if (e.log_date.startsWith(monthPrefix)) {
+    if (e.log_date.startsWith(monthPrefix))
       counts[e.cleaner_name] = (counts[e.cleaner_name] || 0) + 1;
-    }
   });
 
   const bar     = document.getElementById("summaryBar");
   const content = document.getElementById("summaryContent");
   content.innerHTML = "";
-
-  const entries = Object.entries(counts).sort((a,b) => b[1]-a[1]);
-  if (!entries.length) { bar.classList.add("hidden"); return; }
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  if (!sorted.length) { bar.classList.add("hidden"); return; }
   bar.classList.remove("hidden");
 
-  entries.forEach(([name, count]) => {
+  sorted.forEach(([name, count]) => {
     const chip = document.createElement("div");
     chip.className = "flex items-center gap-2 text-sm";
     chip.innerHTML = `
@@ -333,7 +371,7 @@ function selectDay(ds) {
 
     const propertyLine = e.property_name
       ? `<div class="text-xs font-medium text-indigo-700 mt-0.5">🏠 ${e.property_name}</div>`
-      : '';
+      : `<div class="text-xs text-gray-400 mt-0.5 italic">No property set</div>`;
     const notesLine = e.notes
       ? `<div class="text-xs text-gray-500 mt-0.5">${e.notes}</div>`
       : '';
@@ -348,11 +386,18 @@ function selectDay(ds) {
           <div class="text-xs text-gray-400 mt-0.5">Logged by ${e.logged_by}</div>
         </div>
       </div>
-      <button onclick="deleteEntry(${e.id}, this)"
-              class="text-red-400 hover:text-red-600 text-xs font-medium px-2 py-1
-                     rounded hover:bg-red-50 transition-colors shrink-0">
-        Remove
-      </button>`;
+      <div class="flex items-center gap-2 shrink-0">
+        <button onclick="openEditModal(${e.id})"
+                class="text-indigo-500 hover:text-indigo-700 text-xs font-medium px-2 py-1
+                       rounded hover:bg-indigo-50 transition-colors">
+          Edit
+        </button>
+        <button onclick="deleteEntry(${e.id}, this)"
+                class="text-red-400 hover:text-red-600 text-xs font-medium px-2 py-1
+                       rounded hover:bg-red-50 transition-colors">
+          Remove
+        </button>
+      </div>`;
 
     container.appendChild(div);
   });
@@ -370,6 +415,7 @@ function prefillDate(ds) {
   document.getElementById("addPanel").scrollIntoView({ behavior: "smooth" });
 }
 
+/* ── ADD ── */
 async function submitLog() {
   const log_date      = document.getElementById("addDate").value;
   const cleaner_name  = document.getElementById("addCleaner").value;
@@ -378,9 +424,9 @@ async function submitLog() {
   const errorEl       = document.getElementById("addError");
   errorEl.classList.add("hidden");
 
-  if (!log_date)     { errorEl.textContent = "Please select a date.";     errorEl.classList.remove("hidden"); return; }
-  if (!cleaner_name) { errorEl.textContent = "Please select a cleaner.";  errorEl.classList.remove("hidden"); return; }
-  if (!property_name){ errorEl.textContent = "Please select a property."; errorEl.classList.remove("hidden"); return; }
+  if (!log_date)      { errorEl.textContent = "Please select a date.";     errorEl.classList.remove("hidden"); return; }
+  if (!cleaner_name)  { errorEl.textContent = "Please select a cleaner.";  errorEl.classList.remove("hidden"); return; }
+  if (!property_name) { errorEl.textContent = "Please select a property."; errorEl.classList.remove("hidden"); return; }
 
   try {
     const res  = await fetch("/carpet-log/add", {
@@ -389,14 +435,10 @@ async function submitLog() {
       body: JSON.stringify({ log_date, cleaner_name, property_name, notes })
     });
     const data = await res.json();
-    if (data.error) {
-      errorEl.textContent = data.error; errorEl.classList.remove("hidden"); return;
-    }
+    if (data.error) { errorEl.textContent = data.error; errorEl.classList.remove("hidden"); return; }
 
-    const newEntry = {
-      id: data.id, log_date, cleaner_name, property_name, notes,
-      logged_by: CURRENT_USER, created_at: new Date().toISOString()
-    };
+    const newEntry = { id: data.id, log_date, cleaner_name, property_name, notes,
+                       logged_by: CURRENT_USER, created_at: new Date().toISOString() };
     allEntries.push(newEntry);
     if (!entriesByDate[log_date]) entriesByDate[log_date] = [];
     entriesByDate[log_date].push(newEntry);
@@ -411,12 +453,97 @@ async function submitLog() {
     document.getElementById("addProperty").value = "";
     document.getElementById("addNotes").value    = "";
     document.getElementById("addPanel").classList.add("hidden");
-
   } catch(e) {
     errorEl.textContent = "Failed: " + e.message; errorEl.classList.remove("hidden");
   }
 }
 
+/* ── EDIT MODAL ── */
+function openEditModal(id) {
+  const e = allEntries.find(x => x.id === id);
+  if (!e) return;
+  editingId      = id;
+  editingOldDate = e.log_date;
+
+  document.getElementById("editDate").value     = e.log_date;
+  document.getElementById("editCleaner").value  = e.cleaner_name;
+  document.getElementById("editProperty").value = e.property_name || "";
+  document.getElementById("editNotes").value    = e.notes || "";
+  document.getElementById("editError").classList.add("hidden");
+  document.getElementById("editModal").classList.remove("hidden");
+}
+
+function closeEditModal() {
+  document.getElementById("editModal").classList.add("hidden");
+  editingId = null; editingOldDate = null;
+}
+
+async function submitEdit() {
+  const log_date      = document.getElementById("editDate").value;
+  const cleaner_name  = document.getElementById("editCleaner").value;
+  const property_name = document.getElementById("editProperty").value;
+  const notes         = document.getElementById("editNotes").value.trim();
+  const errorEl       = document.getElementById("editError");
+  const saveBtn       = document.getElementById("editSaveBtn");
+  errorEl.classList.add("hidden");
+
+  if (!log_date)     { errorEl.textContent = "Please select a date.";    errorEl.classList.remove("hidden"); return; }
+  if (!cleaner_name) { errorEl.textContent = "Please select a cleaner."; errorEl.classList.remove("hidden"); return; }
+
+  saveBtn.disabled = true;
+  try {
+    const res  = await fetch(`/carpet-log/${editingId}/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ log_date, cleaner_name, property_name, notes })
+    });
+    const data = await res.json();
+    if (data.error) {
+      errorEl.textContent = data.error; errorEl.classList.remove("hidden");
+      saveBtn.disabled = false; return;
+    }
+
+    // Update local entry
+    const idx = allEntries.findIndex(x => x.id === editingId);
+    if (idx >= 0) {
+      const old = allEntries[idx];
+
+      // Remove from old date bucket
+      if (entriesByDate[old.log_date]) {
+        entriesByDate[old.log_date] = entriesByDate[old.log_date].filter(x => x.id !== editingId);
+        if (!entriesByDate[old.log_date].length) delete entriesByDate[old.log_date];
+      }
+
+      // Update entry
+      allEntries[idx] = { ...old, log_date, cleaner_name, property_name, notes };
+
+      // Add to new date bucket
+      if (!entriesByDate[log_date]) entriesByDate[log_date] = [];
+      entriesByDate[log_date].push(allEntries[idx]);
+    }
+
+    closeEditModal();
+
+    // Navigate to the new date on the calendar
+    const parts = log_date.split("-").map(Number);
+    calYear = parts[0]; calMonth = parts[1];
+    buildCalendar();
+    selectDay(log_date);
+
+  } catch(e) {
+    errorEl.textContent = "Save failed: " + e.message; errorEl.classList.remove("hidden");
+    saveBtn.disabled = false;
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+// Close modal on backdrop click
+document.getElementById("editModal").addEventListener("click", function(e) {
+  if (e.target === this) closeEditModal();
+});
+
+/* ── DELETE ── */
 async function deleteEntry(id, btn) {
   if (!confirm("Remove this entry?")) return;
   try {
@@ -439,6 +566,7 @@ async function deleteEntry(id, btn) {
   }
 }
 
+/* ── Init ── */
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("addDate").value = TODAY_STR;
   buildCalendar();
