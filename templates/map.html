@@ -191,17 +191,17 @@
         <button id="updateRouteBtn" onclick="submitUpdateRoute()"
                 class="hidden flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
                        rounded-lg font-medium transition-colors text-sm">↑ Update</button>
-        <button id="addMoreBtn" onclick="openAddMore()"
-                class="hidden flex-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-4 py-2
-                       rounded-lg font-medium transition-colors text-sm border border-indigo-200">
-          + Add Stops
-        </button>
         <button onclick="restartRoute()"
                 class="flex-1 bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2
                        rounded-lg font-medium transition-colors text-sm border border-red-200">
           ↺ Restart
         </button>
       </div>
+      <button id="addMoreBtn" onclick="openAddMore()"
+              class="hidden w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-4 py-2
+                     rounded-lg font-medium transition-colors text-sm border border-indigo-200">
+        + Add Stops &amp; Re-optimize
+      </button>
     </div>
 
     <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
