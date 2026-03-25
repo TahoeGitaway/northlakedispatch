@@ -1179,11 +1179,10 @@ function optimizeRoute() {
     });
     isOptimized = true;
 
-    // Insert lunch at the chosen time
+    // Insert lunch at the chosen time, then recalculate to shift post-lunch stops
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
-    // Note: backend times are already correct, recalculateTimes() not needed here
-    // because the matrix lookup would match what the backend computed
+    recalculateTimes(); // shifts all stops after lunch by 30 min
 
     lastStats = {
       total_duration:   data.total_duration,
