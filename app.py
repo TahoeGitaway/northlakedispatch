@@ -17,7 +17,7 @@ from db import get_db, get_cursor, User, init_db
 # ── Create app ────────────────────────────────────────────────────
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-in-production")
-app.permanent_session_lifetime = timedelta(hours=12)
+app.permanent_session_lifetime = timedelta(hours=8)
 
 # ── Flask-Login ───────────────────────────────────────────────────
 login_manager = LoginManager(app)
