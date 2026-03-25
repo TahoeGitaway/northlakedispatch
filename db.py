@@ -97,6 +97,7 @@ def init_db():
         id SERIAL PRIMARY KEY,
         log_date TEXT NOT NULL,
         cleaner_name TEXT NOT NULL,
+        property_name TEXT,
         notes TEXT,
         logged_by INTEGER NOT NULL,
         created_at TEXT
@@ -104,6 +105,7 @@ def init_db():
 
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
+    cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
 
     # Ensure admin user exists
     cur.execute("SELECT id FROM users WHERE role='admin'")
