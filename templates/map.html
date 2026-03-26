@@ -380,6 +380,15 @@ const startLocation = { name:"Tahoe Getaways Office", lat:39.34207, lng:-120.214
 const DEADLINE_MINS  = 16 * 60;
 const PRIORITY_MINS  = 12 * 60;
 
+// Live-recalculate when start time changes after optimize
+document.getElementById("startTime").addEventListener("change", function() {
+  startMinutes = hhmmToMinutes(this.value);
+  if (isOptimized) {
+    recalculateTimes();
+    renderSchedule();
+  }
+});
+
 /* ================================================================
    SESSION GUARD
 ================================================================ */
@@ -1603,7 +1612,6 @@ async function submitUpdateRoute() {
     }));
 
     isOptimized  = true;
-    startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
 
     try {
       const allLocs = [
@@ -1617,7 +1625,26 @@ async function submitUpdateRoute() {
       const mData = await mResp.json();
       durationMatrix = mData.durations || [];
       optimizedSchedule.forEach((s, i) => { s.matrix_index = i + 1; });
-    } catch(_) { durationMatrix = []; }
+
+      // Derive startMinutes from first stop's saved eta minus depot drive time
+      // This recovers the original departure time from the office
+      if (optimizedSchedule.length > 0 && durationMatrix.length > 0) {
+        const firstStop = optimizedSchedule[0];
+        const depotDriveSec = durationMatrix[0][1] || 0;
+        const derivedStart = firstStop.eta_minutes - (depotDriveSec / 60);
+        startMinutes = Math.max(0, Math.round(derivedStart));
+        // Also update the time input to reflect the actual start
+        const h = Math.floor(startMinutes / 60) % 24;
+        const m = startMinutes % 60;
+        document.getElementById("startTime").value =
+          `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      } else {
+        startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
+      }
+    } catch(_) {
+      durationMatrix = [];
+      startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
+    }
 
     lastStats = {
       total_duration:   data.total_duration   || 0,
