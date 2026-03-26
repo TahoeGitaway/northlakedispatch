@@ -100,7 +100,25 @@
   }
   #sessionBanner a { color:#fef2f2; text-decoration:underline; margin-left:12px; font-weight:700; }
 
-  /* ── LUNCH ROW ── */
+  /* ── MUSTACHED BANANA ── */
+  #workInOverlay {
+    display:none; position:fixed; bottom:32px; right:32px;
+    background:rgba(15,15,15,0.82); border-radius:20px;
+    padding:18px 22px; z-index:8000;
+    flex-direction:column; align-items:center; gap:8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  #workInOverlay.active { display:flex; }
+  #workInOverlay .banana-wrap { position:relative; width:90px; height:90px; }
+  #workInOverlay .banana-wrap img { width:90px; image-rendering:pixelated; }
+  #workInOverlay .mustache {
+    position:absolute; bottom:26px; left:50%; transform:translateX(-50%);
+    font-size:1.8rem; line-height:1; pointer-events:none; user-select:none;
+  }
+  #workInOverlay .workin-label {
+    color:#fff; font-size:0.75rem; font-weight:600; text-align:center;
+    letter-spacing:0.03em;
+  }
   .lunch-row {
     border:1px solid #fed7aa; border-radius:6px; background:#fff7ed;
     padding:6px 8px; cursor:default;
@@ -115,6 +133,15 @@
   <div class="banana">
     <img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="Optimizing...">
   </div>
+</div>
+
+<!-- MUSTACHED BANANA — work-in overlay -->
+<div id="workInOverlay">
+  <div class="banana-wrap">
+    <img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="Working in...">
+    <span class="mustache">🥸</span>
+  </div>
+  <div class="workin-label">Working it in…</div>
 </div>
 
 <div class="flex h-[calc(100vh-72px)]">
@@ -147,6 +174,18 @@
         <input id="routeDateField" type="date"
                class="w-full border rounded-lg px-3 py-2 text-sm
                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Notes</label>
+        <textarea id="routeNotesField" rows="2" placeholder="Internal notes, reminders, anything…"
+                  class="w-full border rounded-lg px-3 py-2 text-sm resize-none
+                         focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        <div class="flex items-center gap-3 mt-1">
+          <label class="flex items-center gap-1.5 cursor-pointer text-xs text-gray-500">
+            <input type="checkbox" id="notesPublicField" class="accent-indigo-600">
+            <span>Show in employee share link</span>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -764,6 +803,9 @@ async function workInStop(property, asCheckin, asPriority) {
     ...existingReal.map(s => ({ lat: s.lat, lng: s.lng }))
   ];
 
+  const overlay = document.getElementById("workInOverlay");
+  overlay.classList.add("active");
+
   let fromNew = [], toNew = [];
   try {
     const res  = await fetch("/matrix-row", {
@@ -775,6 +817,8 @@ async function workInStop(property, asCheckin, asPriority) {
     fromNew = data.from_new || [];
     toNew   = data.to_new   || [];
   } catch(_) {}
+
+  overlay.classList.remove("active");
 
   const newIdx = durationMatrix.length;
   const newRow = [0, ...fromNew];
@@ -1026,6 +1070,8 @@ function restartRoute() {
   document.getElementById("routeNameField").value  = "";
   document.getElementById("assignedToField").value = "";
   document.getElementById("routeDateField").value  = "";
+  document.getElementById("routeNotesField").value   = "";
+  document.getElementById("notesPublicField").checked = false;
   ["totalTime","drivingTime","serviceTime","distance"].forEach(id =>
     document.getElementById(id).textContent = "—");
 }
@@ -1435,6 +1481,8 @@ function optimizeRoute() {
     }
     if (!document.getElementById("saveRouteDate").value)
       document.getElementById("saveRouteDate").value = new Date().toISOString().split("T")[0];
+    if (!document.getElementById("routeDateField").value)
+      document.getElementById("routeDateField").value = new Date().toISOString().split("T")[0];
 
     clearRouteMarkers();
     if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
@@ -1494,12 +1542,14 @@ function openSaveModal() {
 function closeSaveModal() { document.getElementById("saveModal").classList.add("hidden"); }
 
 async function submitSaveRoute() {
-  const name       = document.getElementById("saveRouteName").value.trim();
-  const assignedTo = document.getElementById("saveAssignedTo").value.trim();
-  const routeDate  = document.getElementById("saveRouteDate").value;
-  const errorEl    = document.getElementById("saveError");
-  const successEl  = document.getElementById("saveSuccess");
-  const saveBtn    = document.getElementById("saveSubmitBtn");
+  const name        = document.getElementById("saveRouteName").value.trim();
+  const assignedTo  = document.getElementById("saveAssignedTo").value.trim();
+  const routeDate   = document.getElementById("saveRouteDate").value;
+  const notes       = document.getElementById("routeNotesField").value.trim();
+  const notesPublic = document.getElementById("notesPublicField").checked;
+  const errorEl     = document.getElementById("saveError");
+  const successEl   = document.getElementById("saveSuccess");
+  const saveBtn     = document.getElementById("saveSubmitBtn");
   errorEl.classList.add("hidden"); successEl.classList.add("hidden");
 
   if (!name)      { errorEl.textContent = "Please enter a route name."; errorEl.classList.remove("hidden"); return; }
@@ -1513,7 +1563,7 @@ async function submitSaveRoute() {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic })
     });
     const ct = res.headers.get("content-type") || "";
     if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
@@ -1541,10 +1591,12 @@ async function submitSaveRoute() {
    UPDATE ROUTE
 ================================================================ */
 async function submitUpdateRoute() {
-  const name       = document.getElementById("saveRouteName").value.trim();
-  const assignedTo = document.getElementById("saveAssignedTo").value.trim();
-  const routeDate  = document.getElementById("saveRouteDate").value;
-  const btn        = document.getElementById("updateRouteBtn");
+  const name        = document.getElementById("routeNameField").value.trim();
+  const assignedTo  = document.getElementById("assignedToField").value.trim();
+  const routeDate   = document.getElementById("routeDateField").value;
+  const notes       = document.getElementById("routeNotesField").value.trim();
+  const notesPublic = document.getElementById("notesPublicField").checked;
+  const btn         = document.getElementById("updateRouteBtn");
 
   if (!currentRouteId) { alert("No loaded route to update. Use Save Route instead."); return; }
   if (!name)            { alert("Please enter a route name before updating."); return; }
@@ -1557,7 +1609,7 @@ async function submitUpdateRoute() {
     const res = await fetch(`/routes/${currentRouteId}/update`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic })
     });
     const ct = res.headers.get("content-type") || "";
     if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
@@ -1666,9 +1718,11 @@ async function submitUpdateRoute() {
     document.getElementById("saveRouteName").value   = data.name;
     document.getElementById("saveAssignedTo").value  = data.assigned_to || "";
     document.getElementById("saveRouteDate").value   = data.route_date;
-    document.getElementById("routeNameField").value  = data.name;
-    document.getElementById("assignedToField").value = data.assigned_to || "";
-    document.getElementById("routeDateField").value  = data.route_date;
+    document.getElementById("routeNameField").value   = data.name;
+    document.getElementById("assignedToField").value  = data.assigned_to || "";
+    document.getElementById("routeDateField").value   = data.route_date;
+    document.getElementById("routeNotesField").value  = data.notes || "";
+    document.getElementById("notesPublicField").checked = data.notes_public || false;
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
