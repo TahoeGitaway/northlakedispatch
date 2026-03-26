@@ -325,6 +325,17 @@ function selectDay(ds) {
 document.addEventListener("DOMContentLoaded", () => {
   buildCalendar();
 
+  // If redirected from save with ?date=, jump straight to that day
+  const urlDate = new URLSearchParams(window.location.search).get("date");
+  if (urlDate) {
+    const parts = urlDate.split("-").map(Number);
+    calYear = parts[0]; calMonth = parts[1];
+    buildCalendar();
+    selectDay(urlDate);
+    window.history.replaceState({}, "", window.location.pathname);
+    return;
+  }
+
   if (routesByDate[TODAY_STR]) {
     selectDay(TODAY_STR);
   } else {

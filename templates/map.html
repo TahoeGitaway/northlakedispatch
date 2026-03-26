@@ -142,12 +142,18 @@
                class="w-full border rounded-lg px-3 py-2 text-sm
                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
       </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Date</label>
+        <input id="routeDateField" type="date"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
     </div>
 
     <!-- START TIME -->
     <div>
       <label class="text-sm text-gray-600">Start Time</label>
-      <input type="time" id="startTime" value="09:00" class="w-full border rounded-lg p-2 mt-1">
+      <input type="time" id="startTime" value="09:30" class="w-full border rounded-lg p-2 mt-1">
       <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
     </div>
 
@@ -421,7 +427,12 @@ function makeStopId() { return "stop_" + (++_stopIdCounter); }
 
 function minutesToHHMM(m) {
   m = Math.max(0, Math.round(m));
-  return `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+  const totalMins = m % (24 * 60);
+  const h24 = Math.floor(totalMins / 60) % 24;
+  const mins = totalMins % 60;
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  const h12  = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(mins).padStart(2,'0')} ${ampm}`;
 }
 function hhmmToMinutes(hhmm) {
   const [h, m] = hhmm.split(":").map(Number);
@@ -1005,6 +1016,7 @@ function restartRoute() {
   document.getElementById("saveRouteDate").value  = "";
   document.getElementById("routeNameField").value  = "";
   document.getElementById("assignedToField").value = "";
+  document.getElementById("routeDateField").value  = "";
   ["totalTime","drivingTime","serviceTime","distance"].forEach(id =>
     document.getElementById(id).textContent = "—");
 }
@@ -1170,7 +1182,7 @@ function renderSchedule() {
         </div>
       </div>
       <div class="text-xs text-gray-500 mt-0.5 flex items-center gap-3 flex-wrap">
-        <span>Arrive: ${stop.eta} &nbsp;|&nbsp; Depart: ${dep}</span>
+        <span>Arrive: ${stop.eta} &nbsp;|&nbsp; <span class="text-sm font-bold text-gray-800">Depart: ${dep}</span></span>
         <select class="service-time-select"
                 onchange="setServiceMinutes('${stop._id}', parseInt(this.value))">
           ${generateTimeOptions(stop.serviceMinutes)}
@@ -1459,12 +1471,15 @@ function openSaveModal() {
   if (!optimizedSchedule.filter(s => !s.isLunch).length) { alert("Optimize a route first."); return; }
   document.getElementById("saveError").classList.add("hidden");
   document.getElementById("saveSuccess").classList.add("hidden");
+
+  // Pull from sidebar fields into modal for confirmation
   const sidebarName     = document.getElementById("routeNameField").value.trim();
   const sidebarAssigned = document.getElementById("assignedToField").value.trim();
-  if (sidebarName     && !document.getElementById("saveRouteName").value)
-    document.getElementById("saveRouteName").value = sidebarName;
-  if (sidebarAssigned && !document.getElementById("saveAssignedTo").value)
-    document.getElementById("saveAssignedTo").value = sidebarAssigned;
+  const sidebarDate     = document.getElementById("routeDateField").value;
+
+  document.getElementById("saveRouteName").value  = sidebarName;
+  document.getElementById("saveAssignedTo").value = sidebarAssigned;
+  document.getElementById("saveRouteDate").value  = sidebarDate || new Date().toISOString().split("T")[0];
   document.getElementById("saveModal").classList.remove("hidden");
 }
 function closeSaveModal() { document.getElementById("saveModal").classList.add("hidden"); }
@@ -1504,7 +1519,8 @@ async function submitSaveRoute() {
       if (data.id) currentRouteId = data.id;
       successEl.textContent = "Route saved! Redirecting…";
       successEl.classList.remove("hidden");
-      setTimeout(() => { window.location.href = "/routes"; }, 1000);
+      const savedDate = document.getElementById("saveRouteDate").value;
+      setTimeout(() => { window.location.href = `/routes?date=${savedDate}`; }, 1000);
     }
   } catch(e) {
     errorEl.textContent = "Save failed: " + e.message; errorEl.classList.remove("hidden");
@@ -1625,6 +1641,7 @@ async function submitUpdateRoute() {
     document.getElementById("saveRouteDate").value   = data.route_date;
     document.getElementById("routeNameField").value  = data.name;
     document.getElementById("assignedToField").value = data.assigned_to || "";
+    document.getElementById("routeDateField").value  = data.route_date;
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
