@@ -820,10 +820,24 @@ async function workInStop(property, asCheckin, asPriority) {
 
   overlay.classList.remove("active");
 
-  const newIdx = durationMatrix.length;
-  const newRow = [0, ...fromNew];
+  const newIdx = durationMatrix.length; // will be the index of the new stop
+
+  // fromNew[i] = drive time FROM new stop TO allExisting[i]
+  // allExisting = [depot, realStop0, realStop1, ...]
+  // durationMatrix indices: 0=depot, 1=realStop0, 2=realStop1, ...
+  // So fromNew maps directly: fromNew[0]=new→depot, fromNew[1]=new→realStop0, etc.
+  // New row needs to be length (newIdx+1): [new→depot, new→rs0, ..., new→new(0)]
+  const newRow = [...fromNew.slice(0, newIdx), 0];
+  // Pad with zeros if fromNew was shorter than expected
+  while (newRow.length <= newIdx) newRow.push(0);
   durationMatrix.push(newRow);
-  durationMatrix.forEach((row, i) => { row.push(i < toNew.length ? toNew[i] : 0); });
+
+  // toNew[i] = drive time FROM allExisting[i] TO new stop
+  // Add new column to each existing row
+  durationMatrix.forEach((row, i) => {
+    if (i === newIdx) return; // skip the row we just added
+    row.push(i < toNew.length ? toNew[i] : 0);
+  });
 
   const newStop = {
     _id: makeStopId(), name: property.name, lat: property.lat, lng: property.lng,
