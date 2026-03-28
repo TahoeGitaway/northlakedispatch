@@ -1287,6 +1287,7 @@ function renderSchedule() {
       durationMatrix[fromIdx][stop.matrix_index] != null
     ) {
       driveMin = Math.round(durationMatrix[fromIdx][stop.matrix_index] / 60);
+      if (si < 3) console.log(`Stop ${si}: fromIdx=${fromIdx} toIdx=${stop.matrix_index} raw=${durationMatrix[fromIdx][stop.matrix_index]} driveMin=${driveMin}`);
     }
 
     // Insert drive time pill between stops (not before stop 1 which shows from depot)
@@ -1800,6 +1801,7 @@ async function submitUpdateRoute() {
       );
       const mData = await mResp.json();
       durationMatrix = mData.durations || [];
+      console.log('Matrix loaded:', durationMatrix.length, 'x', durationMatrix[0]?.length, 'sample[0][1]:', durationMatrix[0]?.[1]);
 
       // Assign matrix indices: depot=0, stop[0]=1, stop[1]=2, ...
       optimizedSchedule.forEach((s, i) => { s.matrix_index = i + 1; });
