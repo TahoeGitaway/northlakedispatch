@@ -1817,6 +1817,9 @@ async function submitUpdateRoute() {
       document.getElementById("startTime").value =
         `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 
+      // Re-render now that matrix is loaded so drive time pills show correctly
+      renderSchedule();
+
     } catch(_) {
       durationMatrix = [];
       // Fall back: keep eta_minutes as-is from saved data, just display them
