@@ -1224,6 +1224,9 @@ function renderSchedule() {
         </div>`;
       wireDragEvents(li, si);
       list.appendChild(li); return;
+    }
+
+    // ── DRIVE TIMES VIEW ──
     if (viewMode === 'drive') {
       const prevStop = si > 0 ? optimizedSchedule[si-1] : null;
       let driveMin = 0;
