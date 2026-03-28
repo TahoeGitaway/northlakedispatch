@@ -542,12 +542,21 @@ function recalculateTimes() {
       stop.eta_minutes = Math.round(running);
       stop.eta         = minutesToHHMM(stop.eta_minutes);
       running         += 30;
+      // Do NOT update prevMatrixIdx — lunch is not a real stop
       return;
     }
 
-    const driveSec = (durationMatrix[prevMatrixIdx] && durationMatrix[prevMatrixIdx][stop.matrix_index])
-      ? durationMatrix[prevMatrixIdx][stop.matrix_index]
-      : 0;
+    // Defensive lookup — only use matrix if both indices are valid
+    let driveSec = 0;
+    if (
+      durationMatrix.length > 0 &&
+      prevMatrixIdx != null &&
+      stop.matrix_index != null &&
+      durationMatrix[prevMatrixIdx] != null &&
+      durationMatrix[prevMatrixIdx][stop.matrix_index] != null
+    ) {
+      driveSec = durationMatrix[prevMatrixIdx][stop.matrix_index];
+    }
 
     running          += driveSec / 60;
     stop.eta_minutes  = Math.round(running);
@@ -560,7 +569,6 @@ function recalculateTimes() {
     stop.priority_late = stop.priority_checkin && fin > PRIORITY_MINS;
   });
 
-  // Update stats box live
   updateStatsDisplay();
 }
 
@@ -1024,7 +1032,8 @@ function renderStops() {
 ================================================================ */
 function moveUp(btn) {
   const li     = btn.closest("li");
-  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+  const lis    = [...document.getElementById("routeList").querySelectorAll("li")];
+  const domIdx = lis.indexOf(li);
   if (domIdx <= 0) return;
   [optimizedSchedule[domIdx-1], optimizedSchedule[domIdx]] =
     [optimizedSchedule[domIdx], optimizedSchedule[domIdx-1]];
@@ -1034,7 +1043,8 @@ function moveUp(btn) {
 }
 function moveDown(btn) {
   const li     = btn.closest("li");
-  const domIdx = [...document.getElementById("routeList").children].indexOf(li);
+  const lis    = [...document.getElementById("routeList").querySelectorAll("li")];
+  const domIdx = lis.indexOf(li);
   if (domIdx >= optimizedSchedule.length - 1) return;
   [optimizedSchedule[domIdx], optimizedSchedule[domIdx+1]] =
     [optimizedSchedule[domIdx+1], optimizedSchedule[domIdx]];
@@ -1205,6 +1215,45 @@ function renderSchedule() {
 
     // ── FULL SCHEDULE VIEW ──
     const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
+
+    // Drive time from previous stop (or depot) to this stop
+    let driveMin = 0;
+    const prevStop = si > 0 ? optimizedSchedule[si - 1] : null;
+    const fromIdx  = prevStop && !prevStop.isLunch
+      ? prevStop.matrix_index
+      : prevStop && prevStop.isLunch
+        ? (() => {
+            // find last real stop before lunch
+            for (let j = si - 2; j >= 0; j--) {
+              if (!optimizedSchedule[j].isLunch) return optimizedSchedule[j].matrix_index;
+            }
+            return 0;
+          })()
+        : 0; // depot
+    if (
+      durationMatrix.length > 0 &&
+      fromIdx != null &&
+      stop.matrix_index != null &&
+      durationMatrix[fromIdx] != null &&
+      durationMatrix[fromIdx][stop.matrix_index] != null
+    ) {
+      driveMin = Math.round(durationMatrix[fromIdx][stop.matrix_index] / 60);
+    }
+
+    // Insert drive time pill between stops (not before stop 1 which shows from depot)
+    if (si > 0) {
+      const driveEl = document.createElement("div");
+      driveEl.className = "flex items-center gap-2 px-1 py-0.5";
+      const prevWasLunch = prevStop && prevStop.isLunch;
+      driveEl.innerHTML = `
+        <div class="flex-1 border-t border-dashed border-gray-200"></div>
+        <span class="text-xs text-gray-400 font-medium shrink-0">
+          🚗 ${driveMin < 1 ? '&lt;1' : driveMin} min${prevWasLunch ? ' (after lunch)' : ''}
+        </span>
+        <div class="flex-1 border-t border-dashed border-gray-200"></div>`;
+      list.appendChild(driveEl);
+    }
+
     let badge = "";
     if (stop.priority_checkin && stop.priority_late)
       badge = `<span class="late-badge">PRIORITY LATE</span>`;
