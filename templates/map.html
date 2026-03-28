@@ -1848,16 +1848,13 @@ async function submitUpdateRoute() {
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
 
-    if (durationMatrix.length > 0) {
-      // Matrix loaded — recalculate from startMinutes for accurate drive times
-      recalculateTimes();
-    } else {
-      // Matrix failed — convert saved eta_minutes to display format as fallback
-      optimizedSchedule.forEach(s => {
-        if (!s.isLunch && s.eta_minutes != null)
-          s.eta = minutesToHHMM(s.eta_minutes);
-      });
-    }
+    // Convert saved eta_minutes to display format — do NOT recalculate,
+    // saved times already have correct drive times baked in from optimize.
+    // recalculateTimes() will fire if the user edits anything.
+    optimizedSchedule.forEach(s => {
+      if (!s.isLunch && s.eta_minutes != null)
+        s.eta = minutesToHHMM(s.eta_minutes);
+    });
 
     renderStops();
     renderSchedule();
