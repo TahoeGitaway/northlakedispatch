@@ -123,6 +123,13 @@
     border:1px solid #fed7aa; border-radius:6px; background:#fff7ed;
     padding:6px 8px; cursor:default;
   }
+
+  /* ── DRAG AND DROP ── */
+  #routeList li { cursor: grab; }
+  #routeList li:active { cursor: grabbing; }
+  #routeList li.drag-over { outline: 2px dashed #6366f1; outline-offset:2px; background:#eef2ff !important; }
+  #routeList li.dragging { opacity: 0.35; }
+  .drag-handle { color:#cbd5e1; font-size:0.9rem; cursor:grab; padding:0 2px; user-select:none; }
 </style>
 
 <div id="sessionBanner">
@@ -1146,6 +1153,48 @@ async function redrawRouteOnMap() {
 }
 
 /* ================================================================
+   DRAG AND DROP
+================================================================ */
+let dragSrcIdx = null;
+
+function wireDragEvents(li, scheduleIdx) {
+  li.addEventListener("dragstart", e => {
+    dragSrcIdx = scheduleIdx;
+    li.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+  });
+  li.addEventListener("dragend", () => {
+    li.classList.remove("dragging");
+    document.querySelectorAll("#routeList li").forEach(el => el.classList.remove("drag-over"));
+  });
+  li.addEventListener("dragover", e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    document.querySelectorAll("#routeList li").forEach(el => el.classList.remove("drag-over"));
+    li.classList.add("drag-over");
+  });
+  li.addEventListener("dragleave", () => {
+    li.classList.remove("drag-over");
+  });
+  li.addEventListener("drop", e => {
+    e.preventDefault();
+    li.classList.remove("drag-over");
+    const dropIdx = scheduleIdx;
+    if (dragSrcIdx === null || dragSrcIdx === dropIdx) return;
+
+    // Reorder optimizedSchedule
+    const moved = optimizedSchedule.splice(dragSrcIdx, 1)[0];
+    const insertAt = dragSrcIdx < dropIdx ? dropIdx - 1 : dropIdx;
+    optimizedSchedule.splice(insertAt < 0 ? 0 : insertAt, 0, moved);
+
+    dragSrcIdx = null;
+    recalculateTimes();
+    renderSchedule();
+    redrawRouteOnMap();
+  });
+}
+
+/* ================================================================
    RENDER SCHEDULE
 ================================================================ */
 function renderSchedule() {
@@ -1159,25 +1208,22 @@ function renderSchedule() {
     // ── LUNCH ROW ──
     if (stop.isLunch) {
       li.className = "lunch-row";
+      li.draggable = true;
+      li.dataset.scheduleIdx = si;
       li.innerHTML = `
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1 font-medium text-orange-800 text-sm">
+            <span class="drag-handle">⠿</span>
             🍽 Lunch Break <span class="lunch-badge">30 MIN</span>
           </div>
-          <div class="flex gap-1">
-            <button class="move-btn" onclick="moveUp(this)"   ${si===0?"disabled":""}>▲</button>
-            <button class="move-btn" onclick="moveDown(this)" ${si===optimizedSchedule.length-1?"disabled":""}>▼</button>
-            <button onclick="removeStop('lunch')"
-                    class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
-          </div>
+          <button onclick="removeStop('lunch')"
+                  class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
         </div>
         <div class="text-xs text-orange-600 mt-0.5">
           ${stop.eta} – ${minutesToHHMM(stop.eta_minutes + 30)}
         </div>`;
+      wireDragEvents(li, si);
       list.appendChild(li); return;
-    }
-
-    // ── DRIVE TIMES VIEW ──
     if (viewMode === 'drive') {
       const prevStop = si > 0 ? optimizedSchedule[si-1] : null;
       let driveMin = 0;
@@ -1285,16 +1331,17 @@ function renderSchedule() {
     }
 
     li.className = "p-2 border rounded bg-white hover:bg-indigo-50 transition-colors";
+    li.draggable = true;
+    li.dataset.scheduleIdx = si;
     li.innerHTML = `
       <div class="flex items-start justify-between gap-1">
         <div class="font-medium text-sm flex items-center flex-wrap gap-1 flex-1 min-w-0">
+          <span class="drag-handle" title="Drag to reorder">⠿</span>
           <span class="text-indigo-600 font-bold shrink-0">${num}.</span>
           <span class="truncate max-w-[100px]" title="${stop.name}">${stop.name}</span>
           ${badge}
         </div>
         <div class="flex gap-1 shrink-0">
-          <button class="move-btn" onclick="moveUp(this)"   ${si===0?"disabled":""}>▲</button>
-          <button class="move-btn" onclick="moveDown(this)" ${si===optimizedSchedule.length-1?"disabled":""}>▼</button>
           <button onclick="removeStop('${stop._id}')"
                   class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
         </div>
@@ -1310,6 +1357,7 @@ function renderSchedule() {
 
     li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
     li.addEventListener("mouseleave", () => { const m=markers[stop.name]; if(m) m.closePopup(); });
+    wireDragEvents(li, si);
     list.appendChild(li);
     num++;
   });
@@ -1641,8 +1689,8 @@ async function submitSaveRoute() {
       if (data.id) currentRouteId = data.id;
       successEl.textContent = "Route saved! Redirecting…";
       successEl.classList.remove("hidden");
-      const savedDate = document.getElementById("saveRouteDate").value;
-      setTimeout(() => { window.location.href = `/routes?date=${savedDate}`; }, 1000);
+      const savedDate = document.getElementById("routeDateField").value || document.getElementById("saveRouteDate").value;
+      setTimeout(() => { window.location.href = savedDate ? `/routes?date=${savedDate}` : "/routes"; }, 1000);
     }
   } catch(e) {
     errorEl.textContent = "Save failed: " + e.message; errorEl.classList.remove("hidden");
@@ -1728,6 +1776,16 @@ async function submitUpdateRoute() {
 
     isOptimized  = true;
 
+    // Use the saved eta_minutes of the first stop to derive startMinutes.
+    // Don't wait for matrix — this gives us correct clock positions immediately.
+    if (optimizedSchedule.length > 0 && optimizedSchedule[0].eta_minutes != null) {
+      startMinutes = optimizedSchedule[0].eta_minutes;
+      // We'll subtract depot drive time after matrix loads, but set a sane default now
+    } else {
+      startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
+    }
+
+    // Fetch the drive time matrix so recalculateTimes() can compute correct intervals
     try {
       const allLocs = [
         { lat: startLocation.lat, lng: startLocation.lng },
@@ -1739,26 +1797,26 @@ async function submitUpdateRoute() {
       );
       const mData = await mResp.json();
       durationMatrix = mData.durations || [];
+
+      // Assign matrix indices: depot=0, stop[0]=1, stop[1]=2, ...
       optimizedSchedule.forEach((s, i) => { s.matrix_index = i + 1; });
 
-      // Derive startMinutes from first stop's saved eta minus depot drive time
-      // This recovers the original departure time from the office
-      if (optimizedSchedule.length > 0 && durationMatrix.length > 0) {
-        const firstStop = optimizedSchedule[0];
+      // Now derive true startMinutes = first stop eta_minutes minus depot→stop0 drive
+      if (durationMatrix.length > 0 && optimizedSchedule.length > 0) {
         const depotDriveSec = durationMatrix[0][1] || 0;
-        const derivedStart = firstStop.eta_minutes - (depotDriveSec / 60);
-        startMinutes = Math.max(0, Math.round(derivedStart));
-        // Also update the time input to reflect the actual start
-        const h = Math.floor(startMinutes / 60) % 24;
-        const m = startMinutes % 60;
-        document.getElementById("startTime").value =
-          `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-      } else {
-        startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
+        const derived = optimizedSchedule[0].eta_minutes - (depotDriveSec / 60);
+        startMinutes = Math.max(0, Math.round(derived));
       }
+
+      // Update the time input to match
+      const h = Math.floor(startMinutes / 60) % 24;
+      const m = startMinutes % 60;
+      document.getElementById("startTime").value =
+        `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+
     } catch(_) {
       durationMatrix = [];
-      startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
+      // Fall back: keep eta_minutes as-is from saved data, just display them
     }
 
     lastStats = {
@@ -1789,7 +1847,18 @@ async function submitUpdateRoute() {
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
-    recalculateTimes();
+
+    if (durationMatrix.length > 0) {
+      // Matrix loaded — recalculate from startMinutes for accurate drive times
+      recalculateTimes();
+    } else {
+      // Matrix failed — convert saved eta_minutes to display format as fallback
+      optimizedSchedule.forEach(s => {
+        if (!s.isLunch && s.eta_minutes != null)
+          s.eta = minutesToHHMM(s.eta_minutes);
+      });
+    }
+
     renderStops();
     renderSchedule();
     await redrawRouteOnMap();
