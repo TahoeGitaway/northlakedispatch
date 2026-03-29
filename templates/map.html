@@ -1129,7 +1129,7 @@ async function redrawRouteOnMap() {
 
   const coordStr = [startLocation, ...real].map(s => `${s.lng},${s.lat}`).join(";");
   try {
-    const resp  = await fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`);
+    const resp  = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`);
     const rdata = await resp.json();
     const geo   = rdata.routes?.[0]?.geometry;
     if (geo) routeLayer = L.geoJSON(geo, { style:{color:"#6366f1",weight:5} }).addTo(map);
@@ -1797,7 +1797,7 @@ async function submitUpdateRoute() {
       ];
       const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
       const mResp = await fetch(
-        `http://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
+        `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
       );
       const mData = await mResp.json();
       durationMatrix = mData.durations || [];

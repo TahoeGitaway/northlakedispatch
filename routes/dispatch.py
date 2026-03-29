@@ -329,7 +329,7 @@ def optimize():
 
     all_locations = [start] + cleaned_stops
     coords        = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
-    matrix_url    = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+    matrix_url    = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
 
     resp = requests.get(matrix_url, timeout=30)
     if resp.status_code != 200:
@@ -398,7 +398,7 @@ def optimize():
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]
 
     coords_final = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in [start] + ordered_stops)
-    route_url    = f"http://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
+    route_url    = f"https://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
     route_resp   = requests.get(route_url, timeout=30)
     if route_resp.status_code != 200:
         return jsonify({"error": "OSRM route request failed"}), 500
@@ -478,7 +478,7 @@ def matrix_row():
 
     all_coords = [new_stop] + existing
     coords     = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_coords)
-    matrix_url = f"http://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+    matrix_url = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
 
     try:
         resp = requests.get(matrix_url, timeout=15)
