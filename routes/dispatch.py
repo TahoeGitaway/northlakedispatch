@@ -148,31 +148,20 @@ def update_route(route_id):
     conn = get_db()
     cur  = get_cursor(conn)
 
-    if name and route_date:
-        cur.execute(
-            """UPDATE saved_routes SET
-               name=%s, assigned_to=%s, route_date=%s,
-               stops_json=%s, total_duration=%s, driving_duration=%s,
-               service_duration=%s, distance=%s,
-               last_edited_by=%s, updated_at=%s
-               WHERE id=%s""",
-            (name, assigned_to or None, route_date, json.dumps(schedule),
-             stats.get("total_duration", 0), stats.get("driving_duration", 0),
-             stats.get("service_duration", 0), stats.get("distance", 0),
-             current_user.id, now, route_id)
-        )
-    else:
-        cur.execute(
-            """UPDATE saved_routes SET
-               stops_json=%s, total_duration=%s, driving_duration=%s,
-               service_duration=%s, distance=%s,
-               last_edited_by=%s, updated_at=%s
-               WHERE id=%s""",
-            (json.dumps(schedule),
-             stats.get("total_duration", 0), stats.get("driving_duration", 0),
-             stats.get("service_duration", 0), stats.get("distance", 0),
-             current_user.id, now, route_id)
-        )
+    # Always update everything we have
+    cur.execute(
+        """UPDATE saved_routes SET
+           name=%s, assigned_to=%s, route_date=%s,
+           stops_json=%s, total_duration=%s, driving_duration=%s,
+           service_duration=%s, distance=%s,
+           last_edited_by=%s, updated_at=%s
+           WHERE id=%s""",
+        (name or None, assigned_to or None, route_date or None,
+         json.dumps(schedule),
+         stats.get("total_duration", 0), stats.get("driving_duration", 0),
+         stats.get("service_duration", 0), stats.get("distance", 0),
+         current_user.id, now, route_id)
+    )
 
     conn.commit()
     cur.close(); conn.close()
@@ -203,6 +192,8 @@ def load_route(route_id):
         "driving_duration": row["driving_duration"],
         "service_duration": row["service_duration"],
         "distance":         row["distance"],
+        "notes":            row.get("notes") or "",
+        "notes_public":     bool(row.get("notes_public")),
     })
 
 
@@ -242,7 +233,9 @@ def _solve_route(
     routing.AddDimension(transit_cb, horizon, horizon, True, "Time")
     time_dim = routing.GetDimensionOrDie("Time")
 
-    PENALTY = 5000
+    # Penalty must be large enough that violating a deadline is always worse
+    # than any drive time savings. 100000 seconds >> any realistic Tahoe drive time.
+    PENALTY = 100000
     for node_idx in range(1, size):
         idx          = manager.NodeToIndex(node_idx)
         service_here = int(service_times_sec[node_idx] or 0)
@@ -251,17 +244,18 @@ def _solve_route(
 
         if is_priority and priority_deadline_offset_sec is not None:
             latest = max(0, int(priority_deadline_offset_sec - service_here))
-            if hard_deadline:      time_dim.CumulVar(idx).SetRange(0, latest)
+            if hard_deadline:         time_dim.CumulVar(idx).SetRange(0, latest)
             if soft_deadline_penalty: time_dim.SetCumulVarSoftUpperBound(idx, latest, PENALTY * 2)
         elif is_checkin and deadline_offset_sec is not None:
             latest = max(0, int(deadline_offset_sec - service_here))
-            if hard_deadline:      time_dim.CumulVar(idx).SetRange(0, latest)
+            if hard_deadline:         time_dim.CumulVar(idx).SetRange(0, latest)
             if soft_deadline_penalty: time_dim.SetCumulVarSoftUpperBound(idx, latest, PENALTY)
 
     params = pywrapcp.DefaultRoutingSearchParameters()
     params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    params.time_limit.FromSeconds(3)
+    # Give hard deadline pass more time to find a feasible solution
+    params.time_limit.FromSeconds(5 if hard_deadline else 3)
 
     solution = routing.SolveWithParameters(params)
     if not solution:
@@ -287,7 +281,7 @@ def optimize():
     data            = request.json or {}
     stops           = data.get("stops", [])
     start           = data.get("start") or DEFAULT_START
-    start_time_hhmm = (data.get("startTime") or "09:00").strip()
+    start_time_hhmm = (data.get("startTime") or "09:30").strip()
     drive_only      = bool(data.get("drive_only", False))
 
     if not stops:
