@@ -324,6 +324,14 @@ def optimize():
     if not cleaned_stops:
         return jsonify({"error": "No valid stops (missing lat/lng)."}), 400
 
+    # Pre-sort: priority check-ins first, then regular check-ins, then non-check-ins.
+    # This gives the solver a better starting arrangement for deadline constraints.
+    def stop_sort_key(s):
+        if s.get("priority_checkin"): return 0
+        if s.get("arrival"):          return 1
+        return 2
+    cleaned_stops.sort(key=stop_sort_key)
+
     all_locations = [start] + cleaned_stops
     coords        = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
     matrix_url    = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
