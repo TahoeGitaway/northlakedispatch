@@ -1386,8 +1386,8 @@ function closeAddMore() {
   document.getElementById("addMoreSection").classList.add("hidden");
 }
 
-const addMoreBox         = document.getElementById("addMoreBox");
-const addMoreSuggestions = document.getElementById("addMoreSuggestions");
+const addMoreBox         = document.getElementById("addMoreBox") ?? { addEventListener(){}, value:"" };
+const addMoreSuggestions = document.getElementById("addMoreSuggestions") ?? { classList:{add(){},remove(){}}, innerHTML:"", contains(){ return false; }, appendChild(){} };
 let addMoreCurrent = [];
 let addMoreIndex   = -1;
 
