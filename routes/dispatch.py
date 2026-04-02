@@ -252,10 +252,13 @@ def _solve_route(
             if soft_deadline_penalty: time_dim.SetCumulVarSoftUpperBound(idx, latest, PENALTY)
 
     params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    params.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+        if hard_deadline else
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    )
     params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    # Give hard deadline pass more time to find a feasible solution
-    params.time_limit.FromSeconds(5 if hard_deadline else 3)
+    params.time_limit.FromSeconds(8 if hard_deadline else 3)
 
     solution = routing.SolveWithParameters(params)
     if not solution:
