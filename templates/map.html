@@ -100,25 +100,6 @@
   }
   #sessionBanner a { color:#fef2f2; text-decoration:underline; margin-left:12px; font-weight:700; }
 
-  /* ── MUSTACHED BANANA ── */
-  #workInOverlay {
-    display:none; position:fixed; bottom:32px; right:32px;
-    background:rgba(15,15,15,0.82); border-radius:20px;
-    padding:18px 22px; z-index:8000;
-    flex-direction:column; align-items:center; gap:8px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-  }
-  #workInOverlay.active { display:flex; }
-  #workInOverlay .banana-wrap { position:relative; width:90px; height:90px; }
-  #workInOverlay .banana-wrap img { width:90px; image-rendering:pixelated; }
-  #workInOverlay .mustache {
-    position:absolute; bottom:26px; left:50%; transform:translateX(-50%);
-    font-size:1.8rem; line-height:1; pointer-events:none; user-select:none;
-  }
-  #workInOverlay .workin-label {
-    color:#fff; font-size:0.75rem; font-weight:600; text-align:center;
-    letter-spacing:0.03em;
-  }
   .lunch-row {
     border:1px solid #fed7aa; border-radius:6px; background:#fff7ed;
     padding:6px 8px; cursor:default;
@@ -819,7 +800,7 @@ async function workInStop(property, asCheckin, asPriority) {
   ];
 
   const overlay = document.getElementById("workInOverlay");
-  overlay.classList.add("active");
+  overlay.style.display = "flex";
 
   let fromNew = [], toNew = [];
   try {
@@ -833,7 +814,7 @@ async function workInStop(property, asCheckin, asPriority) {
     toNew   = data.to_new   || [];
   } catch(_) {}
 
-  overlay.classList.remove("active");
+  overlay.style.display = "none";
 
   const newIdx = durationMatrix.length; // will be the index of the new stop
 
