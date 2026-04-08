@@ -103,6 +103,8 @@ def save_route():
     route_date  = (data.get("route_date") or "").strip()
     schedule    = data.get("schedule", [])
     stats       = data.get("stats", {})
+    notes       = (data.get("notes") or "").strip() or None
+    notes_public = int(bool(data.get("notes_public", False)))
 
     if not name:
         return jsonify({"error": "Route name is required."}), 400
@@ -118,11 +120,13 @@ def save_route():
         """INSERT INTO saved_routes
            (name, assigned_to, route_date, stops_json, total_duration,
             driving_duration, service_duration, distance,
+            notes, notes_public,
             created_by, last_edited_by, created_at, updated_at)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (name, assigned_to or None, route_date, json.dumps(schedule),
          stats.get("total_duration", 0), stats.get("driving_duration", 0),
          stats.get("service_duration", 0), stats.get("distance", 0),
+         notes, notes_public,
          current_user.id, current_user.id, now, now)
     )
     route_id = cur.fetchone()["id"]
@@ -140,6 +144,8 @@ def update_route(route_id):
     route_date  = (data.get("route_date") or "").strip()
     schedule    = data.get("schedule", [])
     stats       = data.get("stats", {})
+    notes       = (data.get("notes") or "").strip() or None
+    notes_public = int(bool(data.get("notes_public", False)))
 
     if not schedule:
         return jsonify({"error": "No stops to save."}), 400
@@ -154,12 +160,14 @@ def update_route(route_id):
            name=%s, assigned_to=%s, route_date=%s,
            stops_json=%s, total_duration=%s, driving_duration=%s,
            service_duration=%s, distance=%s,
+           notes=%s, notes_public=%s,
            last_edited_by=%s, updated_at=%s
            WHERE id=%s""",
         (name or None, assigned_to or None, route_date or None,
          json.dumps(schedule),
          stats.get("total_duration", 0), stats.get("driving_duration", 0),
          stats.get("service_duration", 0), stats.get("distance", 0),
+         notes, notes_public,
          current_user.id, now, route_id)
     )
 
