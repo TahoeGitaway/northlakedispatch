@@ -356,34 +356,48 @@ def optimize():
         checkin_flags     = [False] + [bool(s.get("arrival", False)) for s in cleaned_stops]
         priority_flags    = [False] + [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
 
-        enforce_deadline          = start_minutes < deadline_minutes
-        enforce_priority_deadline = start_minutes < priority_deadline_minutes
-        deadline_offset_sec       = (deadline_minutes - start_minutes) * 60 if enforce_deadline else None
-        priority_deadline_offset_sec = (priority_deadline_minutes - start_minutes) * 60 if enforce_priority_deadline else None
+        has_checkins = any(checkin_flags[1:])
+        has_priority = any(priority_flags[1:])
+
+        # Always compute offsets. Cap at 0 when already past the deadline so
+        # soft penalties still fire (bound=0 means "as early as possible").
+        deadline_offset_sec          = max(0, (deadline_minutes - start_minutes) * 60)
+        priority_deadline_offset_sec = max(0, (priority_deadline_minutes - start_minutes) * 60)
+
+        # Only pass an offset to _solve_route when the relevant flag type exists.
+        checkin_deadline_sec  = deadline_offset_sec  if has_checkins else None
+        priority_deadline_sec = priority_deadline_offset_sec if has_priority else None
 
         ordered_nodes, arrival_times_sec = None, None
         used_deadline_constraints = used_soft_penalties = False
 
-        if enforce_deadline or enforce_priority_deadline:
+        # Pass 1 — hard constraints. Only attempt when we haven't already blown
+        # past the deadline (a hard bound of 0 would make everything infeasible).
+        before_checkin_deadline  = start_minutes < deadline_minutes
+        before_priority_deadline = start_minutes < priority_deadline_minutes
+        if (has_checkins and before_checkin_deadline) or (has_priority and before_priority_deadline):
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
-                deadline_offset_sec=deadline_offset_sec,
-                priority_deadline_offset_sec=priority_deadline_offset_sec,
+                deadline_offset_sec=checkin_deadline_sec if before_checkin_deadline else None,
+                priority_deadline_offset_sec=priority_deadline_sec if before_priority_deadline else None,
                 hard_deadline=True
             )
             if ordered_nodes is not None:
                 used_deadline_constraints = True
 
-        if ordered_nodes is None:
+        # Pass 2 — soft penalties. Always applied when check-ins exist, including
+        # when starting past the deadline (offset=0 pushes them to the front).
+        if ordered_nodes is None and (has_checkins or has_priority):
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
-                deadline_offset_sec=deadline_offset_sec if enforce_deadline else None,
-                priority_deadline_offset_sec=priority_deadline_offset_sec if enforce_priority_deadline else None,
+                deadline_offset_sec=checkin_deadline_sec,
+                priority_deadline_offset_sec=priority_deadline_sec,
                 soft_deadline_penalty=True
             )
             if ordered_nodes is not None:
                 used_soft_penalties = True
 
+        # Pass 3 — unconstrained fallback (no check-ins, or truly unsolvable).
         if ordered_nodes is None:
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags
