@@ -4,32 +4,52 @@
 ================================================================ */
 
 /* ── OPTIMIZE ── */
-function optimizeRoute() {
+async function optimizeRoute() {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
   document.getElementById("loadingOverlay").classList.add("active");
   document.getElementById("optimizeBtn").disabled = true;
 
-  fetch("/optimize", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      stops: selectedStops.map(s => ({
-        name:s.name, lat:s.lat, lng:s.lng,
-        arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
-      })),
-      start:     startLocation,
-      startTime: document.getElementById("startTime").value,
-      drive_only: false,
-    })
-  })
-  .then(guardResponse)
-  .then(async data => {
+  // Fetch OSRM matrix from the browser — the deploy server can't reach router.project-osrm.org
+  let clientMatrix = null;
+  try {
+    const allLocs  = [startLocation, ...selectedStops];
+    const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
+    const mResp    = await fetch(
+      `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
+    );
+    const mData    = await mResp.json();
+    clientMatrix   = mData.durations || null;
+  } catch(_) {}
+
+  if (!clientMatrix) {
+    document.getElementById("loadingOverlay").classList.remove("active");
+    document.getElementById("optimizeBtn").disabled = false;
+    alert("Could not load drive times from the routing server. Check your connection and try again.");
+    return;
+  }
+
+  try {
+    const res  = await fetch("/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stops: selectedStops.map(s => ({
+          name:s.name, lat:s.lat, lng:s.lng,
+          arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
+        })),
+        start:           startLocation,
+        startTime:       document.getElementById("startTime").value,
+        drive_only:      false,
+        duration_matrix: clientMatrix,
+      })
+    });
+    const data = await guardResponse(res);
     document.getElementById("loadingOverlay").classList.remove("active");
     document.getElementById("optimizeBtn").disabled = false;
     if (data.error) { alert(data.error); return; }
 
-    durationMatrix = data.duration_matrix || [];
-    startMinutes   = data.start_minutes   || hhmmToMinutes(document.getElementById("startTime").value);
+    durationMatrix = clientMatrix;
+    startMinutes   = data.start_minutes || hhmmToMinutes(document.getElementById("startTime").value);
 
     optimizedSchedule = data.schedule.map(entry => {
       const orig = selectedStops.find(s => s.name === entry.name);
@@ -51,7 +71,8 @@ function optimizeRoute() {
     document.getElementById("totalTime").textContent   = (data.total_duration   / 3600).toFixed(2) + " hrs";
     document.getElementById("drivingTime").textContent = (data.driving_duration / 3600).toFixed(2) + " hrs";
     document.getElementById("serviceTime").textContent = (data.service_duration / 3600).toFixed(2) + " hrs";
-    document.getElementById("distance").textContent    = (data.distance / 1609).toFixed(1) + " miles";
+    document.getElementById("distance").textContent    = data.distance
+      ? (data.distance / 1609).toFixed(1) + " miles" : "—";
 
     const wb = document.getElementById("warningBox");
     wb.className = "text-sm hidden p-2 rounded"; wb.innerHTML = "";
@@ -80,41 +101,15 @@ function optimizeRoute() {
     if (!document.getElementById("routeDateField").value)
       document.getElementById("routeDateField").value = new Date().toISOString().split("T")[0];
 
-    clearRouteMarkers();
-    if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-    if (data.geometry) {
-      routeLayer = L.geoJSON(data.geometry, { style:{color:"#6366f1",weight:5} }).addTo(map);
-    }
-
-    const startM = L.marker([startLocation.lat, startLocation.lng], { icon:regularIcon })
-      .addTo(map).bindPopup(`<b>Start / End</b><br>${startLocation.name}`);
-    activeRouteMarkers.push(startM);
-
-    let num = 1;
-    optimizedSchedule.filter(s => !s.isLunch && s.lat && s.lng).forEach(stop => {
-      const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
-      let sh = "";
-      if (stop.priority_checkin && stop.priority_late) sh = "<span style='color:#dc2626;font-weight:700;'>PRIORITY — LATE</span>";
-      else if (stop.priority_checkin) sh = "<span style='color:#7c3aed;font-weight:700;'>PRIORITY CHECK-IN</span>";
-      else if (stop.arrival && stop.late) sh = "<span style='color:#dc2626;font-weight:700;'>LATE CHECK-IN</span>";
-      else if (stop.arrival) sh = "<span style='color:#16a34a;font-weight:700;'>CHECK-IN</span>";
-      const m = L.marker([stop.lat, stop.lng], { icon:pickStopIcon(stop) })
-        .addTo(map)
-        .bindPopup(`<b>${stop.name}</b><br>Arrive: ${stop.eta}<br>Depart: ${dep}<br>${sh}`);
-      m.bindTooltip(`${num++}`, { permanent:true, direction:"top", className:"route-number" });
-      activeRouteMarkers.push(m);
-      markers[stop.name] = m;
-    });
-
     renderStops();
     renderSchedule();
-  })
-  .catch(err => {
+    await redrawRouteOnMap();
+  } catch(err) {
     if (err === "session_expired") return;
     document.getElementById("loadingOverlay").classList.remove("active");
     document.getElementById("optimizeBtn").disabled = false;
-    alert("Request failed: " + err.message);
-  });
+    alert("Optimize failed: " + (err.message || err));
+  }
 }
 
 /* ── SAVE MODAL ── */

@@ -330,23 +330,29 @@ def optimize():
         return jsonify({"error": "No valid stops (missing lat/lng)."}), 400
 
     all_locations = [start] + cleaned_stops
-    coords        = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
-    matrix_url    = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+    n             = len(all_locations)
 
-    try:
-        resp = requests.get(matrix_url, timeout=30)
-    except requests.exceptions.RequestException:
-        return jsonify({"error": "Could not reach routing server. Check your connection and try again."}), 503
-
-    if resp.status_code != 200:
-        return jsonify({"error": "OSRM matrix request failed"}), 500
-
-    try:
-        duration_matrix = resp.json().get("durations")
-    except ValueError:
-        return jsonify({"error": "Invalid matrix response from routing server"}), 500
-    if not duration_matrix:
-        return jsonify({"error": "Invalid matrix response"}), 500
+    # Accept a pre-fetched matrix from the client (browser → OSRM directly).
+    # Fall back to a server-side OSRM call only when not provided.
+    provided_matrix = data.get("duration_matrix")
+    if (isinstance(provided_matrix, list) and len(provided_matrix) == n
+            and all(isinstance(r, list) and len(r) == n for r in provided_matrix)):
+        duration_matrix = provided_matrix
+    else:
+        coords     = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
+        matrix_url = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+        try:
+            resp = requests.get(matrix_url, timeout=30)
+        except requests.exceptions.RequestException:
+            return jsonify({"error": "Could not reach routing server. Check your connection and try again."}), 503
+        if resp.status_code != 200:
+            return jsonify({"error": "OSRM matrix request failed"}), 500
+        try:
+            duration_matrix = resp.json().get("durations")
+        except ValueError:
+            return jsonify({"error": "Invalid matrix response from routing server"}), 500
+        if not duration_matrix:
+            return jsonify({"error": "Invalid matrix response"}), 500
 
     if drive_only:
         service_times_sec = [0] * len(all_locations)
@@ -420,25 +426,15 @@ def optimize():
     ordered_stop_nodes = [n for n in ordered_nodes[1:] if n != 0]
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]
 
-    coords_final = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in [start] + ordered_stops)
-    route_url    = f"https://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
-    try:
-        route_resp = requests.get(route_url, timeout=30)
-    except requests.exceptions.RequestException:
-        return jsonify({"error": "Could not reach routing server for route geometry. Try again."}), 503
+    # Compute driving duration from the matrix (no server-side OSRM route call needed —
+    # the browser calls OSRM directly in redrawRouteOnMap for the map polyline).
+    driving_duration = 0.0
+    prev = 0  # depot index
+    for node in ordered_stop_nodes:
+        row = duration_matrix[prev] if prev < len(duration_matrix) else []
+        driving_duration += float(row[node]) if node < len(row) and row[node] else 0.0
+        prev = node
 
-    if route_resp.status_code != 200:
-        return jsonify({"error": "OSRM route request failed"}), 500
-
-    try:
-        routes_list = route_resp.json().get("routes") or []
-    except ValueError:
-        return jsonify({"error": "Invalid route response from routing server"}), 500
-    route_data = routes_list[0] if routes_list else None
-    if not route_data:
-        return jsonify({"error": "Invalid OSRM route response"}), 500
-
-    driving_duration = float(route_data.get("duration", 0.0))
     service_duration = 0 if drive_only else sum(
         int(s.get("serviceMinutes", 60)) * 60 for s in ordered_stops
     )
@@ -476,11 +472,10 @@ def optimize():
         })
 
     return jsonify({
-        "distance":                  route_data.get("distance", 0.0),
+        "distance":                  0,
         "total_duration":            total_duration,
         "driving_duration":          driving_duration,
         "service_duration":          service_duration,
-        "geometry":                  route_data.get("geometry"),
         "start_time":                start_time_hhmm,
         "checkin_deadline":          CHECKIN_DEADLINE_HHMM,
         "priority_checkin_deadline": PRIORITY_CHECKIN_DEADLINE_HHMM,
