@@ -70,10 +70,17 @@
 
     <!-- ACTIONS -->
     <div class="flex flex-col gap-2 pt-2">
-      <button id="optimizeBtn" onclick="optimizeRoute()"
+      <button id="optimizeBtn" onclick="optimizeRoute(false)"
               class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2
                      rounded-lg w-full font-medium transition-colors">
         Optimize Route
+      </button>
+      <button id="googleOptimizeBtn" onclick="optimizeRoute(true)"
+              class="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-2
+                     rounded-lg w-full font-medium transition-colors text-sm
+                     flex items-center justify-between gap-2">
+        <span>🗺 Optimize with Google Maps</span>
+        <span id="googleCostHint" class="text-emerald-200 text-xs font-normal whitespace-nowrap">~$0.60 / 10 stops</span>
       </button>
       <div class="flex gap-2">
         <button onclick="reverseRoute()"

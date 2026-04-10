@@ -447,8 +447,14 @@ def optimize():
     all_locations = [start] + cleaned_stops
     n             = len(all_locations)
 
-    # Build drive-time matrix via Google Distance Matrix API (haversine fallback on error).
-    duration_matrix = _google_distance_matrix(all_locations)
+    # Build drive-time matrix.
+    # Default: haversine approximation (free, fast, good enough for ordering).
+    # Optional: Google Distance Matrix API (accurate real drive times; ~$0.005/element).
+    use_google_matrix = bool(data.get("use_google_matrix", False))
+    duration_matrix = (
+        _google_distance_matrix(all_locations) if use_google_matrix
+        else _haversine_matrix(all_locations)
+    )
 
     if drive_only:
         service_times_sec = [0] * len(all_locations)

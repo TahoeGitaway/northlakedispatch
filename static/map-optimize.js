@@ -4,10 +4,13 @@
 ================================================================ */
 
 /* ── OPTIMIZE ── */
-async function optimizeRoute() {
+async function optimizeRoute(useGoogleMatrix = false) {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
   document.getElementById("loadingOverlay").classList.add("active");
+  document.getElementById("loadingOverlay").querySelector(".lo-label").textContent =
+    useGoogleMatrix ? "Optimizing with Google Maps…" : "Optimizing…";
   document.getElementById("optimizeBtn").disabled = true;
+  document.getElementById("googleOptimizeBtn").disabled = true;
 
   try {
     const res  = await fetch("/optimize", {
@@ -18,14 +21,16 @@ async function optimizeRoute() {
           name:s.name, lat:s.lat, lng:s.lng,
           arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
         })),
-        start:      startLocation,
-        startTime:  document.getElementById("startTime").value,
-        drive_only: false,
+        start:             startLocation,
+        startTime:         document.getElementById("startTime").value,
+        drive_only:        false,
+        use_google_matrix: useGoogleMatrix,
       })
     });
     const data = await guardResponse(res);
     document.getElementById("loadingOverlay").classList.remove("active");
     document.getElementById("optimizeBtn").disabled = false;
+    document.getElementById("googleOptimizeBtn").disabled = false;
     if (data.error) { alert(data.error); return; }
 
     durationMatrix = data.duration_matrix || [];
@@ -88,6 +93,7 @@ async function optimizeRoute() {
     if (err === "session_expired") return;
     document.getElementById("loadingOverlay").classList.remove("active");
     document.getElementById("optimizeBtn").disabled = false;
+    document.getElementById("googleOptimizeBtn").disabled = false;
     alert("Optimize failed: " + (err.message || err));
   }
 }

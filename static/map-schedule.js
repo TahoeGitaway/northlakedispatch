@@ -230,6 +230,18 @@ function renderStops() {
 
     container.appendChild(div);
   });
+
+  // Update live cost hint on the Google optimize button
+  const hint = document.getElementById("googleCostHint");
+  if (hint) {
+    const n = selectedStops.length;
+    if (!n) {
+      hint.textContent = "~$0.60 / 10 stops";
+    } else {
+      const cost = ((n + 1) * (n + 1) * 0.005).toFixed(2);
+      hint.textContent = `~$${cost} / ${n} stop${n !== 1 ? "s" : ""}`;
+    }
+  }
 }
 
 /* ── MOVE UP / DOWN ── */
