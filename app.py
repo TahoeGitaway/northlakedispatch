@@ -43,11 +43,13 @@ from routes.auth     import auth_bp
 from routes.admin    import admin_bp
 from routes.dispatch import dispatch_bp
 from routes.carpet   import carpet_bp
+from routes.briefing import briefing_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(dispatch_bp)
 app.register_blueprint(carpet_bp)
+app.register_blueprint(briefing_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():
