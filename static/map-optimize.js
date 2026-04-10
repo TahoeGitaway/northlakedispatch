@@ -9,10 +9,11 @@ async function optimizeRoute() {
   document.getElementById("loadingOverlay").classList.add("active");
   document.getElementById("optimizeBtn").disabled = true;
 
-  // Fetch OSRM matrix from the browser — the deploy server can't reach router.project-osrm.org
+  // Fetch OSRM matrix from the browser — the deploy server can't reach router.project-osrm.org.
+  // Fall back to haversine approximation if OSRM is unavailable so the app always works.
+  const allLocs = [startLocation, ...selectedStops];
   let clientMatrix = null;
   try {
-    const allLocs  = [startLocation, ...selectedStops];
     const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
     const mResp    = await fetch(
       `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
@@ -22,10 +23,7 @@ async function optimizeRoute() {
   } catch(_) {}
 
   if (!clientMatrix) {
-    document.getElementById("loadingOverlay").classList.remove("active");
-    document.getElementById("optimizeBtn").disabled = false;
-    alert("Could not load drive times from the routing server. Check your connection and try again.");
-    return;
+    clientMatrix = haversineMatrix(allLocs);
   }
 
   try {

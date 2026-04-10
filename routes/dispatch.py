@@ -4,6 +4,7 @@ optimize, matrix-row, public route viewer, portfolio.
 """
 
 import json
+import math
 from datetime import datetime
 
 import requests
@@ -18,6 +19,24 @@ from db import (get_db, get_cursor, DEFAULT_START,
 from routes.auth import admin_required
 
 dispatch_bp = Blueprint("dispatch", __name__)
+
+
+def _haversine_matrix(locations):
+    """Fallback NxN drive-time matrix (seconds) when OSRM is unreachable."""
+    n   = len(locations)
+    mat = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            lat1, lng1 = math.radians(locations[i]["lat"]), math.radians(locations[i]["lng"])
+            lat2, lng2 = math.radians(locations[j]["lat"]), math.radians(locations[j]["lng"])
+            dlat, dlng = lat2 - lat1, lng2 - lng1
+            a    = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlng/2)**2
+            dist = 6_371_000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            # Tahoe mountain roads ≈ 1.4× straight-line, avg 35 mph (15.6 m/s)
+            mat[i][j] = dist * 1.4 / 15.6
+    return mat
 
 
 # ── Home (map) ────────────────────────────────────────────────────
@@ -332,27 +351,14 @@ def optimize():
     all_locations = [start] + cleaned_stops
     n             = len(all_locations)
 
-    # Accept a pre-fetched matrix from the client (browser → OSRM directly).
-    # Fall back to a server-side OSRM call only when not provided.
+    # Use client-provided matrix (browser fetched it from OSRM directly).
+    # Fall back to haversine approximation if missing or wrong size — never 503.
     provided_matrix = data.get("duration_matrix")
     if (isinstance(provided_matrix, list) and len(provided_matrix) == n
             and all(isinstance(r, list) and len(r) == n for r in provided_matrix)):
         duration_matrix = provided_matrix
     else:
-        coords     = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
-        matrix_url = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
-        try:
-            resp = requests.get(matrix_url, timeout=30)
-        except requests.exceptions.RequestException:
-            return jsonify({"error": "Could not reach routing server. Check your connection and try again."}), 503
-        if resp.status_code != 200:
-            return jsonify({"error": "OSRM matrix request failed"}), 500
-        try:
-            duration_matrix = resp.json().get("durations")
-        except ValueError:
-            return jsonify({"error": "Invalid matrix response from routing server"}), 500
-        if not duration_matrix:
-            return jsonify({"error": "Invalid matrix response"}), 500
+        duration_matrix = _haversine_matrix(all_locations)
 
     if drive_only:
         service_times_sec = [0] * len(all_locations)
