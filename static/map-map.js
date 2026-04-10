@@ -22,11 +22,11 @@ function clearRouteMarkers() {
   activeRouteMarkers = []; markers = {};
 }
 
-// In-flight OSRM request — aborted when a newer redraw starts
+// In-flight geometry request — aborted when a newer redraw starts
 let _routeAbortCtrl = null;
 
-async function redrawRouteOnMap() {
-  // Cancel any pending OSRM call from a previous redraw
+async function redrawRouteOnMap(precomputedPolyline = null) {
+  // Cancel any pending geometry fetch from a previous redraw
   if (_routeAbortCtrl) { _routeAbortCtrl.abort(); _routeAbortCtrl = null; }
 
   clearRouteMarkers();
@@ -42,14 +42,18 @@ async function redrawRouteOnMap() {
 
   const allPoints = [startLocation, ...real];
 
-  // ── Draw fallback polyline immediately so the map is always responsive ──
-  // Dashed style signals "approximate". Replaced by real geometry if OSRM responds.
-  const latlngs = allPoints.map(s => [s.lat, s.lng]);
-  routeLayer = L.polyline(latlngs, {
-    color: "#6366f1", weight: 4, dashArray: "10,7", opacity: 0.75
-  }).addTo(map);
+  // ── If Google Maps geometry was pre-computed (e.g. from /optimize response), draw it now ──
+  if (precomputedPolyline && precomputedPolyline.length > 1) {
+    routeLayer = L.polyline(precomputedPolyline, { color:"#6366f1", weight:5 }).addTo(map);
+  } else {
+    // Draw dashed straight-line fallback immediately while fetching real geometry
+    const latlngs = allPoints.map(s => [s.lat, s.lng]);
+    routeLayer = L.polyline(latlngs, {
+      color:"#6366f1", weight:4, dashArray:"10,7", opacity:0.75
+    }).addTo(map);
+  }
 
-  // ── Add markers now (no OSRM dependency) ──
+  // ── Add markers now (no geometry dependency) ──
   let num = 1;
   real.forEach(stop => {
     const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
@@ -70,25 +74,29 @@ async function redrawRouteOnMap() {
     markers[stop.name] = m;
   });
 
-  // ── Try OSRM in the background; replace dashed line with real geometry if it responds ──
+  // Pre-computed geometry already drawn — no need to fetch again
+  if (precomputedPolyline && precomputedPolyline.length > 1) return;
+
+  // ── Fetch real road geometry from server (Google Directions API) in the background ──
   const ctrl = new AbortController();
   _routeAbortCtrl = ctrl;
   setTimeout(() => ctrl.abort(), 10000); // give up after 10 s
 
-  const coordStr = allPoints.map(s => `${s.lng},${s.lat}`).join(";");
+  const locations = allPoints.map(s => ({ lat: s.lat, lng: s.lng }));
   try {
-    const resp  = await fetch(
-      `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=simplified&geometries=geojson`,
-      { signal: ctrl.signal }
-    );
+    const resp  = await fetch("/route-geometry", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ locations }),
+      signal:  ctrl.signal,
+    });
     const rdata = await resp.json();
-    const geo   = rdata.routes?.[0]?.geometry;
-    if (geo && !ctrl.signal.aborted) {
+    if (rdata.coords && rdata.coords.length > 1 && !ctrl.signal.aborted) {
       if (routeLayer) map.removeLayer(routeLayer);
-      routeLayer = L.geoJSON(geo, { style: { color:"#6366f1", weight:5 } }).addTo(map);
+      routeLayer = L.polyline(rdata.coords, { color:"#6366f1", weight:5 }).addTo(map);
     }
   } catch(_) {
-    // Timeout or network error — dashed fallback stays
+    // Timeout or error — dashed fallback stays
   } finally {
     if (_routeAbortCtrl === ctrl) _routeAbortCtrl = null;
   }

@@ -5,6 +5,7 @@ optimize, matrix-row, public route viewer, portfolio.
 
 import json
 import math
+import os
 from datetime import datetime
 
 import requests
@@ -20,9 +21,11 @@ from routes.auth import admin_required
 
 dispatch_bp = Blueprint("dispatch", __name__)
 
+GOOGLE_MAPS_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+
 
 def _haversine_matrix(locations):
-    """Fallback NxN drive-time matrix (seconds) when OSRM is unreachable."""
+    """Fallback NxN drive-time matrix (seconds) when Google Maps API is unavailable."""
     n   = len(locations)
     mat = [[0.0] * n for _ in range(n)]
     for i in range(n):
@@ -37,6 +40,88 @@ def _haversine_matrix(locations):
             # Tahoe mountain roads ≈ 1.4× straight-line, avg 35 mph (15.6 m/s)
             mat[i][j] = dist * 1.4 / 15.6
     return mat
+
+
+def _decode_polyline(encoded):
+    """Decode a Google Maps encoded polyline string to [[lat, lng], ...]."""
+    coords = []
+    index = lat = lng = 0
+    while index < len(encoded):
+        shift = result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1f) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        lat += ~(result >> 1) if result & 1 else result >> 1
+        shift = result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1f) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        lng += ~(result >> 1) if result & 1 else result >> 1
+        coords.append([lat / 1e5, lng / 1e5])
+    return coords
+
+
+def _google_distance_matrix(locations):
+    """NxN drive-time matrix (seconds) via Google Distance Matrix API.
+    Falls back to haversine if the key is missing or the request fails."""
+    if not GOOGLE_MAPS_KEY:
+        return _haversine_matrix(locations)
+    n    = len(locations)
+    pipe = "|".join(f"{loc['lat']},{loc['lng']}" for loc in locations)
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/distancematrix/json",
+            params={"origins": pipe, "destinations": pipe,
+                    "mode": "driving", "key": GOOGLE_MAPS_KEY},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("status") != "OK":
+            return _haversine_matrix(locations)
+        mat = [[0.0] * n for _ in range(n)]
+        for i, row in enumerate(data.get("rows", [])):
+            for j, elem in enumerate(row.get("elements", [])):
+                if elem.get("status") == "OK":
+                    mat[i][j] = float(elem["duration"]["value"])
+                elif i != j:
+                    mat[i][j] = _haversine_matrix([locations[i], locations[j]])[0][1]
+        return mat
+    except Exception:
+        return _haversine_matrix(locations)
+
+
+def _google_route_polyline(locations):
+    """Decoded route coords [[lat, lng], ...] via Google Directions API.
+    Returns None on failure — callers should draw a straight-line fallback."""
+    if not GOOGLE_MAPS_KEY or len(locations) < 2:
+        return None
+    try:
+        origin = f"{locations[0]['lat']},{locations[0]['lng']}"
+        dest   = f"{locations[-1]['lat']},{locations[-1]['lng']}"
+        params = {"origin": origin, "destination": dest,
+                  "mode": "driving", "key": GOOGLE_MAPS_KEY}
+        if len(locations) > 2:
+            params["waypoints"] = "|".join(
+                f"{loc['lat']},{loc['lng']}" for loc in locations[1:-1]
+            )
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params=params, timeout=10,
+        )
+        data = resp.json()
+        if data.get("status") != "OK" or not data.get("routes"):
+            return None
+        return _decode_polyline(data["routes"][0]["overview_polyline"]["points"])
+    except Exception:
+        return None
 
 
 # ── Home (map) ────────────────────────────────────────────────────
@@ -362,14 +447,8 @@ def optimize():
     all_locations = [start] + cleaned_stops
     n             = len(all_locations)
 
-    # Use client-provided matrix (browser fetched it from OSRM directly).
-    # Fall back to haversine approximation if missing or wrong size — never 503.
-    provided_matrix = data.get("duration_matrix")
-    if (isinstance(provided_matrix, list) and len(provided_matrix) == n
-            and all(isinstance(r, list) and len(r) == n for r in provided_matrix)):
-        duration_matrix = provided_matrix
-    else:
-        duration_matrix = _haversine_matrix(all_locations)
+    # Build drive-time matrix via Google Distance Matrix API (haversine fallback on error).
+    duration_matrix = _google_distance_matrix(all_locations)
 
     if drive_only:
         service_times_sec = [0] * len(all_locations)
@@ -443,8 +522,7 @@ def optimize():
     ordered_stop_nodes = [n for n in ordered_nodes[1:] if n != 0]
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]
 
-    # Compute driving duration from the matrix (no server-side OSRM route call needed —
-    # the browser calls OSRM directly in redrawRouteOnMap for the map polyline).
+    # Compute driving duration by summing matrix legs along the ordered route.
     driving_duration = 0.0
     prev = 0  # depot index
     for node in ordered_stop_nodes:
@@ -488,6 +566,12 @@ def optimize():
             "matrix_index":     node,
         })
 
+    # Compute route polyline for the map via Google Directions API.
+    polyline_locs = [{"lat": start["lat"], "lng": start["lng"]}] + [
+        {"lat": s["lat"], "lng": s["lng"]} for s in ordered_stops
+    ]
+    route_polyline = _google_route_polyline(polyline_locs)
+
     return jsonify({
         "distance":                  0,
         "total_duration":            total_duration,
@@ -503,6 +587,7 @@ def optimize():
         "soft_penalties_used":       used_soft_penalties,
         "drive_only":                drive_only,
         "duration_matrix":           duration_matrix,
+        "route_polyline":            route_polyline,
         "start_minutes":             start_minutes,
     })
 
@@ -519,21 +604,25 @@ def matrix_row():
     if not new_stop or not existing:
         return jsonify({"error": "Missing new_stop or existing_stops"}), 400
 
-    all_coords = [new_stop] + existing
-    coords     = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_coords)
-    matrix_url = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
+    all_locs = [new_stop] + existing
+    mat      = _google_distance_matrix(all_locs)
+    return jsonify({
+        "from_new": mat[0][1:],
+        "to_new":   [mat[i + 1][0] for i in range(len(existing))],
+    })
 
-    try:
-        resp = requests.get(matrix_url, timeout=15)
-        if resp.status_code != 200:
-            return jsonify({"error": "OSRM request failed"}), 500
-        matrix = resp.json().get("durations", [])
-        return jsonify({
-            "from_new": matrix[0][1:],
-            "to_new":   [row[0] for row in matrix[1:]]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+# ── Route geometry (Google Directions polyline for Leaflet map) ───
+
+@dispatch_bp.route("/route-geometry", methods=["POST"])
+@login_required
+def route_geometry():
+    data      = request.json or {}
+    locations = data.get("locations", [])
+    if len(locations) < 2:
+        return jsonify({"coords": None})
+    coords = _google_route_polyline(locations)
+    return jsonify({"coords": coords})
 
 
 # ── Public route viewer ───────────────────────────────────────────
@@ -558,6 +647,14 @@ def view_route(route_id):
         return render_template("view_route.html", error="Route not found."), 404
 
     schedule = json.loads(row["stops_json"])
+
+    # Pre-compute the route polyline so view_route.html needs no external API calls.
+    stops_with_coords = [s for s in schedule if s.get("lat") and s.get("lng")]
+    polyline_locs = [{"lat": DEFAULT_START["lat"], "lng": DEFAULT_START["lng"]}] + [
+        {"lat": float(s["lat"]), "lng": float(s["lng"])} for s in stops_with_coords
+    ]
+    route_polyline = _google_route_polyline(polyline_locs) if len(polyline_locs) >= 2 else None
+
     return render_template("view_route.html",
         route_id         = row["id"],
         route_name       = row["name"],
@@ -568,5 +665,6 @@ def view_route(route_id):
         driving_duration = row["driving_duration"],
         distance         = row["distance"],
         created_by       = row["created_by_name"],
+        route_polyline   = json.dumps(route_polyline or []),
         error            = None,
     )

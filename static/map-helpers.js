@@ -50,29 +50,6 @@ function pickStopIcon(stop) {
   return regularIcon;
 }
 
-/* ── HAVERSINE MATRIX (OSRM fallback) ── */
-// Returns an NxN drive-time matrix in seconds using straight-line distance
-// × a mountain-road detour factor ÷ average speed. Used when OSRM is down.
-function haversineMatrix(locs) {
-  const n   = locs.length;
-  const mat = Array.from({length: n}, () => Array(n).fill(0));
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      if (i === j) continue;
-      const R  = 6371000;
-      const φ1 = locs[i].lat * Math.PI / 180;
-      const φ2 = locs[j].lat * Math.PI / 180;
-      const Δφ = (locs[j].lat - locs[i].lat) * Math.PI / 180;
-      const Δλ = (locs[j].lng - locs[i].lng) * Math.PI / 180;
-      const a  = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-      const d  = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      // Tahoe mountain roads ≈ 1.4× straight-line, avg 35 mph (15.6 m/s)
-      mat[i][j] = Math.round(d * 1.4 / 15.6);
-    }
-  }
-  return mat;
-}
-
 /* ── SESSION GUARD ── */
 function guardResponse(res) {
   if (res.redirected || res.url.includes("/login")) {

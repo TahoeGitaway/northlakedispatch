@@ -256,22 +256,11 @@ schedule.forEach(stop => {
   num++;
 });
 
-// Draw route polyline
-const stops = schedule.filter(s => s.lat && s.lng);
-if (stops.length > 0) {
-  const locs = [startLocation, ...stops];
-  const coordStr = locs.map(s => `${s.lng},${s.lat}`).join(";");
-  fetch(`http://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`)
-    .then(r => r.json())
-    .then(data => {
-      const geo = data.routes?.[0]?.geometry;
-      if (geo) {
-        L.geoJSON(geo, { style:{ color:"#4f46e5", weight:4, opacity:0.8 } }).addTo(map);
-        // Fit map to route
-        const bounds = L.geoJSON(geo).getBounds();
-        map.fitBounds(bounds, { padding:[16,16] });
-      }
-    }).catch(() => {});
+// Draw route polyline (pre-fetched server-side via Google Directions API)
+const routePolyline = {{ route_polyline|safe }};
+if (routePolyline && routePolyline.length > 1) {
+  const layer = L.polyline(routePolyline, { color:"#4f46e5", weight:4, opacity:0.8 }).addTo(map);
+  map.fitBounds(layer.getBounds(), { padding:[16,16] });
 }
 
 // Google Maps full route navigation

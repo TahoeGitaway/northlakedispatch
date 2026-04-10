@@ -9,23 +9,6 @@ async function optimizeRoute() {
   document.getElementById("loadingOverlay").classList.add("active");
   document.getElementById("optimizeBtn").disabled = true;
 
-  // Fetch OSRM matrix from the browser — the deploy server can't reach router.project-osrm.org.
-  // Fall back to haversine approximation if OSRM is unavailable so the app always works.
-  const allLocs = [startLocation, ...selectedStops];
-  let clientMatrix = null;
-  try {
-    const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
-    const mResp    = await fetch(
-      `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
-    );
-    const mData    = await mResp.json();
-    clientMatrix   = mData.durations || null;
-  } catch(_) {}
-
-  if (!clientMatrix) {
-    clientMatrix = haversineMatrix(allLocs);
-  }
-
   try {
     const res  = await fetch("/optimize", {
       method: "POST",
@@ -35,10 +18,9 @@ async function optimizeRoute() {
           name:s.name, lat:s.lat, lng:s.lng,
           arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
         })),
-        start:           startLocation,
-        startTime:       document.getElementById("startTime").value,
-        drive_only:      false,
-        duration_matrix: clientMatrix,
+        start:      startLocation,
+        startTime:  document.getElementById("startTime").value,
+        drive_only: false,
       })
     });
     const data = await guardResponse(res);
@@ -46,7 +28,7 @@ async function optimizeRoute() {
     document.getElementById("optimizeBtn").disabled = false;
     if (data.error) { alert(data.error); return; }
 
-    durationMatrix = clientMatrix;
+    durationMatrix = data.duration_matrix || [];
     startMinutes   = data.start_minutes || hhmmToMinutes(document.getElementById("startTime").value);
 
     optimizedSchedule = data.schedule.map(entry => {
@@ -101,7 +83,7 @@ async function optimizeRoute() {
 
     renderStops();
     renderSchedule();
-    await redrawRouteOnMap();
+    await redrawRouteOnMap(data.route_polyline || null);
   } catch(err) {
     if (err === "session_expired") return;
     document.getElementById("loadingOverlay").classList.remove("active");
@@ -278,9 +260,9 @@ async function submitUpdateRoute() {
       startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
     }
 
-    // Build drive-time matrix directly from saved eta_minutes — no OSRM call needed.
-    // These values were computed from the real matrix when the route was first optimized,
-    // so drive-time pills are exact and the route loads instantly.
+    // Build drive-time matrix directly from saved eta_minutes — no API call needed.
+    // These values were computed from the Google Maps matrix when the route was first
+    // optimized, so drive-time pills are exact and the route loads instantly.
     {
       const n = optimizedSchedule.length + 1;
       durationMatrix = Array.from({length: n}, () => Array(n).fill(0));
