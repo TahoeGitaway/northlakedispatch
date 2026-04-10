@@ -1,10 +1,13 @@
 """
-routes/admin.py — admin routes: user management, invites, properties.
+routes/admin.py — admin routes: user management, invites, properties, CSV upload.
 """
 
 import secrets
+import csv
+import io
 from datetime import datetime, timedelta
 
+import psycopg2.extras
 import requests
 from flask import (Blueprint, render_template, request, redirect,
                    url_for, flash, current_app, jsonify)
@@ -338,3 +341,64 @@ def delete_property(prop_id):
     return redirect(url_for("admin.admin_properties"))
 
 
+# ── CSV upload ────────────────────────────────────────────────────
+
+@admin_bp.route("/admin/upload-csv", methods=["POST"])
+@login_required
+@admin_required
+def upload_csv():
+    f = request.files.get("csv_file")
+    if not f or not f.filename.endswith(".csv"):
+        flash("Please upload a valid .csv file.", "error")
+        return redirect(url_for("admin.admin_users"))
+
+    try:
+        stream  = io.StringIO(f.stream.read().decode("utf-8-sig"), newline=None)
+        reader  = csv.DictReader(stream)
+
+        required = {"Property Name", "Unit Address", "Latitude", "Longitude"}
+        if not required.issubset(set(reader.fieldnames or [])):
+            missing = required - set(reader.fieldnames or [])
+            flash(f"CSV missing columns: {', '.join(missing)}", "error")
+            return redirect(url_for("admin.admin_users"))
+
+        rows = []
+        for row in reader:
+            try:
+                rows.append((
+                    row["Property Name"], row["Unit Address"],
+                    float(row["Latitude"]), float(row["Longitude"])
+                ))
+            except (ValueError, KeyError):
+                continue
+
+        if not rows:
+            flash("No valid rows found in CSV.", "error")
+            return redirect(url_for("admin.admin_users"))
+
+        conn = get_db()
+        cur  = get_cursor(conn)
+        cur.execute("DELETE FROM properties")
+        psycopg2.extras.execute_values(
+            cur,
+            'INSERT INTO properties ("Property Name", "Unit Address", '
+            '"Latitude", "Longitude") VALUES %s',
+            rows
+        )
+        conn.commit()
+        cur.close(); conn.close()
+        flash(f"✅ Properties reloaded — {len(rows)} properties imported.", "success")
+
+    except Exception as e:
+        flash(f"Upload failed: {str(e)}", "error")
+
+    return redirect(url_for("admin.admin_users"))
+
+
+# ── DB download stub ──────────────────────────────────────────────
+
+@admin_bp.route("/admin/download-db")
+@login_required
+@admin_required
+def download_db():
+    return jsonify({"info": "Database is PostgreSQL. Use Railway dashboard for backups."}), 200
