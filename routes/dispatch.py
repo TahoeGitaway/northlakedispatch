@@ -654,6 +654,21 @@ def view_route(route_id):
 
     schedule = json.loads(row["stops_json"])
 
+    # Compute totals dynamically from the saved stop data so they always
+    # reflect the current serviceMinutes, not the cached value from optimize time.
+    real_stops = [s for s in schedule if not s.get("isLunch")]
+    computed_service = sum(s.get("serviceMinutes", 0) * 60 for s in real_stops)
+    computed_driving = 0
+    for i in range(1, len(real_stops)):
+        gap = (
+            real_stops[i]["eta_minutes"]
+            - real_stops[i - 1]["eta_minutes"]
+            - real_stops[i - 1]["serviceMinutes"]
+        ) * 60
+        if gap > 0:
+            computed_driving += gap
+    computed_total = computed_service + computed_driving
+
     # Pre-compute the route polyline so view_route.html needs no external API calls.
     stops_with_coords = [s for s in schedule if s.get("lat") and s.get("lng")]
     polyline_locs = [{"lat": DEFAULT_START["lat"], "lng": DEFAULT_START["lng"]}] + [
@@ -667,8 +682,8 @@ def view_route(route_id):
         assigned_to      = row["assigned_to"] or "",
         route_date       = row["route_date"],
         schedule         = schedule,
-        total_duration   = row["total_duration"],
-        driving_duration = row["driving_duration"],
+        total_duration   = computed_total,
+        driving_duration = computed_driving,
         distance         = row["distance"],
         created_by       = row["created_by_name"],
         route_polyline   = json.dumps(route_polyline or []),

@@ -222,37 +222,44 @@ const map = L.map('map', { zoomControl: true, scrollWheelZoom: false })
   .setView([39.3279, -120.1833], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18 }).addTo(map);
 
-function makeIcon(color) {
-  return new L.Icon({
-    iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
-    shadowUrl: "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
-    iconSize:[25,41], iconAnchor:[12,41]
+// Numbered div-icon — no external CDN dependency, guaranteed to render
+function makeStopIcon(num, bg) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="background:${bg};color:#fff;width:28px;height:28px;border-radius:50%;
+                       display:flex;align-items:center;justify-content:center;
+                       font-size:11px;font-weight:700;
+                       box-shadow:0 2px 6px rgba(0,0,0,0.35);
+                       border:2px solid rgba(255,255,255,0.85);">${num}</div>`,
+    iconSize:   [28, 28],
+    iconAnchor: [14, 14],
   });
 }
 
-// Start marker
-L.marker([startLocation.lat, startLocation.lng], { icon: makeIcon("blue") })
+// Start marker (plain Leaflet default icon — no number needed)
+L.marker([startLocation.lat, startLocation.lng])
   .addTo(map)
   .bindPopup("<b>Start / End</b><br>Tahoe Getaways Office");
 
-// Stop markers
+// Stop markers — numbered circles, color-coded by check-in type
 let num = 1;
 schedule.forEach(stop => {
-  if (!stop.lat || !stop.lng) return;
-  let color = "blue";
-  if (stop.priority_checkin && stop.priority_late) color = "red";
-  else if (stop.priority_checkin) color = "violet";
-  else if (stop.arrival && stop.late) color = "red";
-  else if (stop.arrival) color = "green";
+  const lat = parseFloat(stop.lat);
+  const lng = parseFloat(stop.lng);
+  if (isNaN(lat) || isNaN(lng)) return;
 
-  const dep = stop.eta_minutes + stop.serviceMinutes;
+  let bg = "#4f46e5"; // indigo default
+  if (stop.priority_checkin && stop.priority_late) bg = "#dc2626";      // red
+  else if (stop.priority_checkin)                  bg = "#7c3aed";      // violet
+  else if (stop.arrival && stop.late)              bg = "#dc2626";      // red
+  else if (stop.arrival)                           bg = "#16a34a";      // green
+
+  const dep    = stop.eta_minutes + stop.serviceMinutes;
   const depStr = `${String(Math.floor(dep/60)%24).padStart(2,'0')}:${String(dep%60).padStart(2,'0')}`;
 
-  L.marker([stop.lat, stop.lng], { icon: makeIcon(color) })
+  L.marker([lat, lng], { icon: makeStopIcon(num, bg) })
     .addTo(map)
-    .bindPopup(`<b>${stop.name}</b><br>Arrive: ${stop.eta}<br>Depart: ${depStr}`)
-    .bindTooltip(`${num}`, { permanent:true, direction:"top",
-      className: "route-number" });
+    .bindPopup(`<b>${stop.name}</b><br>Arrive: ${stop.eta}<br>Depart: ${depStr}`);
   num++;
 });
 
@@ -324,15 +331,6 @@ if (isIOS2) {
   document.getElementById("installBtn").style.display = "none";
 }
 </script>
-
-<!-- Leaflet tooltip style -->
-<style>
-  .route-number {
-    background:#4f46e5; color:#fff; border:none; border-radius:50%;
-    width:20px; height:20px; display:flex; align-items:center; justify-content:center;
-    font-size:0.65rem; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,0.3);
-  }
-</style>
 
 {% endif %}
 </body>
