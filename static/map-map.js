@@ -73,12 +73,12 @@ async function redrawRouteOnMap() {
   // ── Try OSRM in the background; replace dashed line with real geometry if it responds ──
   const ctrl = new AbortController();
   _routeAbortCtrl = ctrl;
-  setTimeout(() => ctrl.abort(), 5000); // give up after 5 s
+  setTimeout(() => ctrl.abort(), 10000); // give up after 10 s
 
   const coordStr = allPoints.map(s => `${s.lng},${s.lat}`).join(";");
   try {
     const resp  = await fetch(
-      `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`,
+      `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=simplified&geometries=geojson`,
       { signal: ctrl.signal }
     );
     const rdata = await resp.json();
