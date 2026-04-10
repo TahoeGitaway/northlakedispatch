@@ -278,41 +278,10 @@ async function submitUpdateRoute() {
       startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
     }
 
-    // Fetch the drive time matrix so drive-time pills show real values.
-    // 5-second abort — fall through to synthesis fallback immediately if OSRM is slow.
-    try {
-      const allLocs = [
-        { lat: startLocation.lat, lng: startLocation.lng },
-        ...optimizedSchedule.map(s => ({ lat: s.lat, lng: s.lng }))
-      ];
-      const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 5000);
-      const mResp = await fetch(
-        `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`,
-        { signal: ctrl.signal }
-      );
-      const mData = await mResp.json();
-      durationMatrix = mData.durations || [];
-
-      optimizedSchedule.forEach((s, i) => { s.matrix_index = i + 1; });
-
-      // Derive true startMinutes = first stop ETA minus depot→stop[0] drive time
-      if (durationMatrix.length > 0 && optimizedSchedule.length > 0) {
-        const depotDriveSec = durationMatrix[0][1] || 0;
-        const derived = optimizedSchedule[0].eta_minutes - (depotDriveSec / 60);
-        startMinutes = Math.max(0, Math.round(derived));
-      }
-
-      const h = Math.floor(startMinutes / 60) % 24;
-      const m = startMinutes % 60;
-      document.getElementById("startTime").value =
-        `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-
-    } catch(_) {
-      // OSRM unavailable — synthesize drive times from saved eta_minutes.
-      // These are the exact values used when the route was originally optimized,
-      // so drive-time pills will be accurate even without a live matrix.
+    // Build drive-time matrix directly from saved eta_minutes — no OSRM call needed.
+    // These values were computed from the real matrix when the route was first optimized,
+    // so drive-time pills are exact and the route loads instantly.
+    {
       const n = optimizedSchedule.length + 1;
       durationMatrix = Array.from({length: n}, () => Array(n).fill(0));
       for (let i = 0; i < optimizedSchedule.length; i++) {
@@ -323,6 +292,7 @@ async function submitUpdateRoute() {
         durationMatrix[i][i + 1] = driveSec;
         durationMatrix[i + 1][i] = driveSec;
       }
+      optimizedSchedule.forEach((s, i) => { s.matrix_index = i + 1; });
     }
 
     lastStats = {
