@@ -100,6 +100,37 @@
   }
   #sessionBanner a { color:#fef2f2; text-decoration:underline; margin-left:12px; font-weight:700; }
 
+  /* ── ROUTE LOAD SPINNER ── */
+  #routeLoadOverlay {
+    display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55);
+    z-index:99998; align-items:center; justify-content:center; flex-direction:column; gap:14px;
+  }
+  #routeLoadOverlay.active { display:flex; }
+  #routeLoadOverlay .spinner {
+    width:44px; height:44px; border:4px solid rgba(255,255,255,0.25);
+    border-top-color:#fff; border-radius:50%;
+    animation:rl-spin 0.75s linear infinite;
+  }
+  #routeLoadOverlay .label {
+    color:#fff; font-size:0.95rem; font-weight:600; letter-spacing:0.01em;
+  }
+  @keyframes rl-spin { to { transform:rotate(360deg); } }
+
+  /* ── ROUTE LOAD ERROR BANNER ── */
+  #routeLoadError {
+    display:none; position:fixed; top:0; left:0; right:0;
+    background:#b91c1c; color:#fff; z-index:99997;
+    padding:12px 20px; font-size:0.88rem; font-weight:500;
+    align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  #routeLoadError.active { display:flex; }
+  #routeLoadError .rl-msg { flex:1; min-width:0; }
+  #routeLoadError button {
+    background:rgba(255,255,255,0.2); border:none; color:#fff;
+    padding:3px 10px; border-radius:4px; cursor:pointer; font-size:0.82rem; white-space:nowrap;
+  }
+  #routeLoadError button:hover { background:rgba(255,255,255,0.35); }
+
   /* ── MUSTACHED BANANA ── */
   #workInOverlay {
     display:none; position:fixed; bottom:32px; right:32px;
@@ -134,6 +165,16 @@
 
 <div id="sessionBanner">
   Your session has expired. <a href="/login">Log in again →</a>
+</div>
+
+<div id="routeLoadOverlay" role="status" aria-live="polite">
+  <div class="spinner"></div>
+  <div class="label">Loading route…</div>
+</div>
+
+<div id="routeLoadError" role="alert">
+  <span class="rl-msg" id="routeLoadErrorMsg"></span>
+  <button onclick="document.getElementById('routeLoadError').classList.remove('active')">Dismiss</button>
 </div>
 
 <div id="loadingOverlay">
@@ -1756,14 +1797,27 @@ async function submitUpdateRoute() {
   const loadId = new URLSearchParams(window.location.search).get("load");
   if (!loadId) return;
   window.history.replaceState({}, "", window.location.pathname);
+
+  const overlay  = document.getElementById("routeLoadOverlay");
+  const errorBar = document.getElementById("routeLoadError");
+  const errorMsg = document.getElementById("routeLoadErrorMsg");
+
+  function showLoadError(msg) {
+    overlay.classList.remove("active");
+    errorMsg.textContent = msg;
+    errorBar.classList.add("active");
+  }
+
+  overlay.classList.add("active");
   try {
     const res = await fetch(`/routes/${loadId}`);
     const ct  = res.headers.get("content-type") || "";
     if (res.redirected || res.url.includes("/login") || !ct.includes("json")) {
+      overlay.classList.remove("active");
       document.getElementById("sessionBanner").style.display = "block"; return;
     }
     const data = await res.json();
-    if (data.error) { alert(data.error); return; }
+    if (data.error) { showLoadError("Could not load route: " + data.error); return; }
 
     currentRouteId = data.id;
     _stopIdCounter = 0;
@@ -1822,7 +1876,7 @@ async function submitUpdateRoute() {
 
     } catch(_) {
       durationMatrix = [];
-      // Fall back: keep eta_minutes as-is from saved data, just display them
+      // Fall back: keep eta_minutes as-is from saved data, display without live drive times
     }
 
     lastStats = {
@@ -1865,7 +1919,13 @@ async function submitUpdateRoute() {
     renderStops();
     renderSchedule();
     await redrawRouteOnMap();
-  } catch(e) { alert("Could not load route: " + e.message); }
+    overlay.classList.remove("active");
+  } catch(e) {
+    const msg = e?.message && e.message !== "session_expired"
+      ? "Could not load route: " + e.message
+      : "Could not load route. Check your connection and try again.";
+    showLoadError(msg);
+  }
 })();
 
 document.getElementById("saveModal").addEventListener("click", function(e) {
