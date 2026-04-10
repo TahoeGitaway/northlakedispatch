@@ -333,11 +333,18 @@ def optimize():
     coords        = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
     matrix_url    = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
 
-    resp = requests.get(matrix_url, timeout=30)
+    try:
+        resp = requests.get(matrix_url, timeout=30)
+    except requests.exceptions.RequestException:
+        return jsonify({"error": "Could not reach routing server. Check your connection and try again."}), 503
+
     if resp.status_code != 200:
         return jsonify({"error": "OSRM matrix request failed"}), 500
 
-    duration_matrix = resp.json().get("durations")
+    try:
+        duration_matrix = resp.json().get("durations")
+    except ValueError:
+        return jsonify({"error": "Invalid matrix response from routing server"}), 500
     if not duration_matrix:
         return jsonify({"error": "Invalid matrix response"}), 500
 
@@ -415,11 +422,19 @@ def optimize():
 
     coords_final = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in [start] + ordered_stops)
     route_url    = f"https://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
-    route_resp   = requests.get(route_url, timeout=30)
+    try:
+        route_resp = requests.get(route_url, timeout=30)
+    except requests.exceptions.RequestException:
+        return jsonify({"error": "Could not reach routing server for route geometry. Try again."}), 503
+
     if route_resp.status_code != 200:
         return jsonify({"error": "OSRM route request failed"}), 500
 
-    route_data = route_resp.json().get("routes", [{}])[0]
+    try:
+        routes_list = route_resp.json().get("routes") or []
+    except ValueError:
+        return jsonify({"error": "Invalid route response from routing server"}), 500
+    route_data = routes_list[0] if routes_list else None
     if not route_data:
         return jsonify({"error": "Invalid OSRM route response"}), 500
 
