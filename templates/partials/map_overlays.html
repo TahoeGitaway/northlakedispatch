@@ -1,0 +1,28 @@
+<div id="sessionBanner">
+  Your session has expired. <a href="/login">Log in again →</a>
+</div>
+
+<div id="routeLoadOverlay" role="status" aria-live="polite">
+  <div class="spinner"></div>
+  <div class="label">Loading route…</div>
+</div>
+
+<div id="routeLoadError" role="alert">
+  <span class="rl-msg" id="routeLoadErrorMsg"></span>
+  <button onclick="document.getElementById('routeLoadError').classList.remove('active')">Dismiss</button>
+</div>
+
+<div id="loadingOverlay">
+  <div class="banana">
+    <img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="Optimizing...">
+  </div>
+</div>
+
+<!-- MUSTACHED BANANA — work-in overlay -->
+<div id="workInOverlay">
+  <div class="banana-wrap">
+    <img src="https://peanutbutterjellytime.net/img/peanut-butter-jelly-time.gif" alt="Working in...">
+    <span class="mustache">🥸</span>
+  </div>
+  <div class="workin-label">Working it in…</div>
+</div>

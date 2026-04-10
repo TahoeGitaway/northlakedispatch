@@ -4,9 +4,13 @@ optimize, matrix-row, public route viewer, portfolio.
 """
 
 import json
+import logging
+import time
 from datetime import datetime
 
 import requests
+
+log = logging.getLogger(__name__)
 from flask import (Blueprint, render_template, request, jsonify,
                    redirect, url_for, flash)
 from flask_login import login_required, current_user
@@ -333,7 +337,12 @@ def optimize():
     coords        = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in all_locations)
     matrix_url    = f"https://router.project-osrm.org/table/v1/driving/{coords}?annotations=duration"
 
+    _t0 = time.perf_counter()
     resp = requests.get(matrix_url, timeout=30)
+    _t_matrix = time.perf_counter()
+    log.info("[PERF] OSRM matrix (%d stops): %.2fs | status=%s",
+             len(all_locations), _t_matrix - _t0, resp.status_code)
+
     if resp.status_code != 200:
         return jsonify({"error": "OSRM matrix request failed"}), 500
 
@@ -341,10 +350,14 @@ def optimize():
     if not duration_matrix:
         return jsonify({"error": "Invalid matrix response"}), 500
 
+    _t_solver_start = time.perf_counter()
+    _solver_passes  = 0
+
     if drive_only:
         service_times_sec = [0] * len(all_locations)
         checkin_flags     = [False] * len(all_locations)
         priority_flags    = [False] * len(all_locations)
+        _solver_passes += 1
         ordered_nodes, arrival_times_sec = _solve_route(
             duration_matrix, service_times_sec, checkin_flags, priority_flags
         )
@@ -376,6 +389,7 @@ def optimize():
         before_checkin_deadline  = start_minutes < deadline_minutes
         before_priority_deadline = start_minutes < priority_deadline_minutes
         if (has_checkins and before_checkin_deadline) or (has_priority and before_priority_deadline):
+            _solver_passes += 1
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec if before_checkin_deadline else None,
@@ -388,6 +402,7 @@ def optimize():
         # Pass 2 — soft penalties. Always applied when check-ins exist, including
         # when starting past the deadline (offset=0 pushes them to the front).
         if ordered_nodes is None and (has_checkins or has_priority):
+            _solver_passes += 1
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec,
@@ -399,11 +414,18 @@ def optimize():
 
         # Pass 3 — unconstrained fallback (no check-ins, or truly unsolvable).
         if ordered_nodes is None:
+            _solver_passes += 1
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags
             )
             if ordered_nodes is None:
                 return jsonify({"error": "No solution found"}), 500
+
+    _t_solver_end = time.perf_counter()
+    log.info("[PERF] OR-Tools solver: %.2fs | passes=%d | stops=%d | checkins=%s | priority=%s",
+             _t_solver_end - _t_solver_start, _solver_passes, len(cleaned_stops),
+             any(s.get("arrival") for s in cleaned_stops),
+             any(s.get("priority_checkin") for s in cleaned_stops))
 
     node_arrival_sec   = {}
     for pos, node in enumerate(ordered_nodes):
@@ -415,7 +437,17 @@ def optimize():
 
     coords_final = ";".join(f"{float(s['lng'])},{float(s['lat'])}" for s in [start] + ordered_stops)
     route_url    = f"https://router.project-osrm.org/route/v1/driving/{coords_final}?overview=full&geometries=geojson"
-    route_resp   = requests.get(route_url, timeout=30)
+
+    _t_route_start = time.perf_counter()
+    route_resp     = requests.get(route_url, timeout=30)
+    _t_route_end   = time.perf_counter()
+    log.info("[PERF] OSRM route: %.2fs | status=%s", _t_route_end - _t_route_start, route_resp.status_code)
+    log.info("[PERF] TOTAL /optimize: %.2fs  (matrix=%.2fs  solver=%.2fs  route=%.2fs)",
+             _t_route_end - _t0,
+             _t_matrix - _t0,
+             _t_solver_end - _t_solver_start,
+             _t_route_end - _t_route_start)
+
     if route_resp.status_code != 200:
         return jsonify({"error": "OSRM route request failed"}), 500
 

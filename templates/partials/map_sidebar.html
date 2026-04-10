@@ -1,0 +1,210 @@
+<div class="flex h-[calc(100vh-72px)]">
+
+  <!-- ═══════════════ SIDEBAR ═══════════════ -->
+  <div class="w-96 bg-white shadow-xl p-6 overflow-y-auto flex flex-col gap-4">
+
+    <h2 class="text-xl font-bold">Tahoe Dispatch</h2>
+
+    <div class="p-3 bg-gray-100 rounded-lg text-sm text-gray-600">
+      <span class="font-medium text-gray-800">Start &amp; End:</span> Tahoe Getaways Office
+    </div>
+
+    <!-- ROUTE INFO -->
+    <div class="space-y-2">
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Name</label>
+        <input id="routeNameField" type="text" placeholder="e.g. Friday Cleans – North Shore"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Assigned To</label>
+        <input id="assignedToField" type="text" placeholder="e.g. Sarah"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Date</label>
+        <input id="routeDateField" type="date"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Notes</label>
+        <textarea id="routeNotesField" rows="2" placeholder="Internal notes, reminders, anything…"
+                  class="w-full border rounded-lg px-3 py-2 text-sm resize-none
+                         focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        <div class="flex items-center gap-3 mt-1">
+          <label class="flex items-center gap-1.5 cursor-pointer text-xs text-gray-500">
+            <input type="checkbox" id="notesPublicField" class="accent-indigo-600">
+            <span>Show in employee share link</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- START TIME -->
+    <div>
+      <label class="text-sm text-gray-600">Start Time</label>
+      <input type="time" id="startTime" value="09:30" class="w-full border rounded-lg p-2 mt-1">
+      <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
+    </div>
+
+    <!-- PRE-OPT: Property search -->
+    <div id="preOptSearch" class="relative">
+      <input id="searchBox" placeholder="Add property…"
+             class="w-full border rounded-lg p-2" autocomplete="off">
+      <div id="suggestions"
+           class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
+                  shadow-lg hidden overflow-hidden">
+      </div>
+    </div>
+
+    <!-- PRE-OPTIMIZATION STOP LIST -->
+    <div id="preOptSection">
+      <h4 class="font-semibold text-sm mb-2">
+        Selected Stops <span id="stopCount" class="text-gray-400 font-normal"></span>
+      </h4>
+      <div id="selectedStops" class="space-y-2"></div>
+    </div>
+
+    <!-- ACTIONS -->
+    <div class="flex flex-col gap-2 pt-2">
+      <button id="optimizeBtn" onclick="optimizeRoute()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2
+                     rounded-lg w-full font-medium transition-colors">
+        Optimize Route
+      </button>
+      <div class="flex gap-2">
+        <button onclick="reverseRoute()"
+                class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-3 py-2
+                       rounded-lg text-sm font-medium transition-colors">↕ Reverse</button>
+        <button onclick="exportToGoogleMaps()"
+                class="flex-1 bg-green-600 hover:bg-green-700 text-white px-3 py-2
+                       rounded-lg text-sm font-medium transition-colors">📍 Google Maps</button>
+      </div>
+      <div class="flex gap-2">
+        <button id="saveRouteBtn" onclick="openSaveModal()"
+                class="hidden flex-1 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors text-sm">💾 Save Route</button>
+        <button id="updateRouteBtn" onclick="submitUpdateRoute()"
+                class="hidden flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2
+                       rounded-lg font-medium transition-colors text-sm">↑ Update</button>
+        <button onclick="restartRoute()"
+                class="flex-1 bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2
+                       rounded-lg font-medium transition-colors text-sm border border-red-200">
+          ↺ Restart
+        </button>
+      </div>
+      <button id="addMoreBtn" onclick="openAddMore()"
+              class="hidden w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-4 py-2
+                     rounded-lg font-medium transition-colors text-sm border border-indigo-200">
+        + Add Stops &amp; Re-optimize
+      </button>
+    </div>
+
+    <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
+
+    <!-- POST-OPTIMIZATION SCHEDULE -->
+    <div id="scheduleSection" class="hidden">
+      <h3 class="font-semibold mb-2">Route Schedule</h3>
+      <ol id="routeList" class="space-y-2"></ol>
+
+    <!-- ADD STOPS & RE-OPTIMIZE (shown after optimize/load) -->
+    <div id="addMoreSection" class="hidden mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-semibold text-gray-700 uppercase tracking-wide">➕ Add Stops & Re-optimize</span>
+        <button onclick="closeAddMore()"
+                class="text-xs text-gray-400 hover:text-gray-600">✕ Cancel</button>
+      </div>
+      <div class="relative mb-2">
+        <input id="addMoreBox" placeholder="Search for a property…"
+               class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400"
+               autocomplete="off">
+        <div id="addMoreSuggestions"
+             class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
+                    shadow-lg hidden overflow-hidden">
+        </div>
+      </div>
+      <div id="addMoreStops" class="space-y-1 mb-3"></div>
+      <button onclick="reOptimize()"
+              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     py-2 rounded-lg transition-colors">
+        Re-optimize with New Stops
+      </button>
+    </div>
+
+    <!-- WORK IN A STOP -->
+      <div id="workInSection" class="hidden mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold text-indigo-800 uppercase tracking-wide">➕ Work In a Stop</span>
+          <span class="text-xs text-indigo-500">No re-optimize needed</span>
+        </div>
+        <div class="relative">
+          <input id="workInBox" placeholder="Search for a property to insert…"
+                 class="w-full border border-indigo-300 rounded-lg p-2 text-sm bg-white
+                        focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                 autocomplete="off">
+          <div id="workInSuggestions"
+               class="absolute z-10 left-0 right-0 bg-white border rounded-lg mt-1
+                      shadow-lg hidden overflow-hidden">
+          </div>
+        </div>
+        <p class="text-xs text-indigo-500 mt-1.5">
+          Stop added at end of list — drag it to the right position.
+        </p>
+      </div>
+
+      <!-- STATS -->
+      <div class="mt-4 text-sm space-y-1 bg-gray-50 rounded-lg p-3">
+        <div><b>Total:</b>     <span id="totalTime">—</span></div>
+        <div><b>Driving:</b>   <span id="drivingTime">—</span></div>
+        <div><b>At Houses:</b> <span id="serviceTime">—</span></div>
+        <div><b>Distance:</b>  <span id="distance">—</span></div>
+      </div>
+
+      <!-- LUNCH TOGGLE -->
+      <div class="mt-3 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-medium text-orange-800">🍽 Lunch Break (30 min)</span>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="lunchEnabled" class="accent-orange-500" checked
+                   onchange="toggleLunch()">
+            <span class="text-orange-700 text-xs font-medium">Include</span>
+          </label>
+        </div>
+        <div class="flex items-center gap-4" id="lunchTimeRow">
+          <span class="text-orange-700 text-xs">At:</span>
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="lunchTime" value="14:00" checked class="accent-orange-500"
+                   onchange="moveLunchTo(14*60)">
+            <span class="text-xs text-orange-800 font-medium">2:00 PM</span>
+          </label>
+          <label class="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="lunchTime" value="16:00" class="accent-orange-500"
+                   onchange="moveLunchTo(16*60)">
+            <span class="text-xs text-orange-800 font-medium">4:00 PM</span>
+          </label>
+          <span class="text-xs text-orange-500 italic">or drag it in the list</span>
+        </div>
+      </div>
+
+      <!-- MODE TOGGLE -->
+      <div class="mt-3">
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">View Mode</label>
+        <div class="mode-toggle">
+          <button id="modeFullBtn" class="active" onclick="setViewMode('full')">
+            📋 Full Schedule
+          </button>
+          <button id="modeDriveBtn" onclick="setViewMode('drive')">
+            🚗 Drive Times
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /sidebar -->
+
+  <div id="map" class="flex-1"></div>
+</div>

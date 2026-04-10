@@ -3,6 +3,7 @@ app.py — application factory. Registers blueprints and Flask-Login.
 All route logic lives in routes/ and db.py.
 """
 
+import logging
 import os
 from datetime import timedelta
 
@@ -11,6 +12,11 @@ from flask_login import LoginManager
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 from db import get_db, get_cursor, User, init_db
 

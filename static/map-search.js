@@ -1,0 +1,364 @@
+/* ================================================================
+   SEARCH — main search box, work-in search, add-more search
+   Depends on: properties, selectedStops, optimizedSchedule,
+               durationMatrix, startLocation (globals)
+================================================================ */
+
+/* ── MAIN SEARCH BOX ── */
+const searchBox   = document.getElementById("searchBox");
+const suggestions = document.getElementById("suggestions");
+
+searchBox.addEventListener("input", function() {
+  const text = this.value.toLowerCase().trim();
+  currentSuggestions = []; activeIndex = -1;
+  if (text.length < 2) { closeSuggestions(false); return; }
+
+  const already = new Set([
+    ...selectedStops.map(s => s.name),
+    ...optimizedSchedule.filter(s => !s.isLunch).map(s => s.name)
+  ]);
+  currentSuggestions = properties
+    .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
+    .slice(0, 10);
+  renderSuggestions();
+});
+
+searchBox.addEventListener("keydown", function(e) {
+  if (!currentSuggestions.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault(); activeIndex = (activeIndex + 1) % currentSuggestions.length; updateHighlight();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault(); activeIndex = (activeIndex - 1 + currentSuggestions.length) % currentSuggestions.length; updateHighlight();
+  } else if (e.key === "Enter") {
+    e.preventDefault(); addStop(currentSuggestions[activeIndex >= 0 ? activeIndex : 0], false, false); closeSuggestions(true);
+  } else if (e.key === "c" || e.key === "C") {
+    if (activeIndex >= 0) { e.preventDefault(); addStop(currentSuggestions[activeIndex], true, false); closeSuggestions(true); }
+  } else if (e.key === "p" || e.key === "P") {
+    if (activeIndex >= 0) { e.preventDefault(); addStop(currentSuggestions[activeIndex], true, true); closeSuggestions(true); }
+  } else if (e.key === "Escape") { closeSuggestions(false); }
+});
+
+document.addEventListener("click", e => {
+  if (!suggestions.contains(e.target) && e.target !== searchBox) closeSuggestions();
+});
+
+function renderSuggestions() {
+  suggestions.innerHTML = "";
+  if (!currentSuggestions.length) { suggestions.classList.add("hidden"); return; }
+  suggestions.classList.remove("hidden");
+
+  currentSuggestions.forEach((p, idx) => {
+    const div = document.createElement("div");
+    div.className = `sugg-item${idx === activeIndex ? " active" : ""}`;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "sugg-item-name";
+    nameSpan.textContent = p.name;
+    nameSpan.addEventListener("click", () => { addStop(p, false, false); closeSuggestions(true); });
+
+    const btnWrap = document.createElement("span");
+    btnWrap.className = "sugg-type-btns";
+    [["stop","+ Stop",false,false],["checkin","✓ Check-in",true,false],["priority","★ Priority",true,true]]
+      .forEach(([cls, label, ci, pr]) => {
+        const btn = document.createElement("button");
+        btn.className = `sugg-type-btn ${cls}`;
+        btn.textContent = label;
+        btn.addEventListener("click", e => { e.stopPropagation(); addStop(p, ci, pr); closeSuggestions(true); });
+        btnWrap.appendChild(btn);
+      });
+
+    div.addEventListener("mouseenter", () => { activeIndex = idx; updateHighlight(); });
+    div.appendChild(nameSpan);
+    div.appendChild(btnWrap);
+    suggestions.appendChild(div);
+  });
+
+  const hint = document.createElement("div");
+  hint.className = "suggestion-hint";
+  hint.innerHTML = `<kbd>Enter</kbd> add &nbsp;<kbd>C</kbd> check-in &nbsp;<kbd>P</kbd> priority &nbsp;<kbd>↑↓</kbd> navigate`;
+  suggestions.appendChild(hint);
+}
+
+function updateHighlight() {
+  [...suggestions.querySelectorAll(".sugg-item")].forEach((el, i) =>
+    el.classList.toggle("active", i === activeIndex));
+}
+function closeSuggestions(clearInput = false) {
+  suggestions.classList.add("hidden"); suggestions.innerHTML = "";
+  if (clearInput) searchBox.value = "";
+  currentSuggestions = []; activeIndex = -1;
+}
+
+/* ── WORK-IN SEARCH BOX ── */
+const workInBox         = document.getElementById("workInBox");
+const workInSuggestions = document.getElementById("workInSuggestions");
+let workInCurrent = [];
+let workInIndex   = -1;
+
+workInBox.addEventListener("input", function() {
+  const text = this.value.toLowerCase().trim();
+  workInCurrent = []; workInIndex = -1;
+  if (text.length < 2) { closeWorkIn(false); return; }
+
+  const already = new Set(optimizedSchedule.filter(s => !s.isLunch).map(s => s.name));
+  workInCurrent = properties
+    .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
+    .slice(0, 10);
+  renderWorkInSuggestions();
+});
+
+workInBox.addEventListener("keydown", function(e) {
+  if (!workInCurrent.length) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); workInIndex = (workInIndex + 1) % workInCurrent.length; updateWorkInHighlight(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); workInIndex = (workInIndex - 1 + workInCurrent.length) % workInCurrent.length; updateWorkInHighlight(); }
+  else if (e.key === "Enter") { e.preventDefault(); workInStop(workInCurrent[workInIndex >= 0 ? workInIndex : 0], false, false); closeWorkIn(true); }
+  else if (e.key === "c" || e.key === "C") { if (workInIndex >= 0) { e.preventDefault(); workInStop(workInCurrent[workInIndex], true, false); closeWorkIn(true); } }
+  else if (e.key === "p" || e.key === "P") { if (workInIndex >= 0) { e.preventDefault(); workInStop(workInCurrent[workInIndex], true, true); closeWorkIn(true); } }
+  else if (e.key === "Escape") { closeWorkIn(false); }
+});
+
+document.addEventListener("click", e => {
+  if (!workInSuggestions.contains(e.target) && e.target !== workInBox) closeWorkIn(false);
+});
+
+function renderWorkInSuggestions() {
+  workInSuggestions.innerHTML = "";
+  if (!workInCurrent.length) { workInSuggestions.classList.add("hidden"); return; }
+  workInSuggestions.classList.remove("hidden");
+
+  workInCurrent.forEach((p, idx) => {
+    const div = document.createElement("div");
+    div.className = `sugg-item${idx === workInIndex ? " active" : ""}`;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "sugg-item-name";
+    nameSpan.textContent = p.name;
+    nameSpan.addEventListener("click", () => { workInStop(p, false, false); closeWorkIn(true); });
+
+    const btnWrap = document.createElement("span");
+    btnWrap.className = "sugg-type-btns";
+    [["stop","+ Stop",false,false],["checkin","✓ Check-in",true,false],["priority","★ Priority",true,true]]
+      .forEach(([cls, label, ci, pr]) => {
+        const btn = document.createElement("button");
+        btn.className = `sugg-type-btn ${cls}`;
+        btn.textContent = label;
+        btn.addEventListener("click", e => { e.stopPropagation(); workInStop(p,ci,pr); closeWorkIn(true); });
+        btnWrap.appendChild(btn);
+      });
+
+    div.addEventListener("mouseenter", () => { workInIndex = idx; updateWorkInHighlight(); });
+    div.appendChild(nameSpan);
+    div.appendChild(btnWrap);
+    workInSuggestions.appendChild(div);
+  });
+
+  const hint = document.createElement("div");
+  hint.className = "suggestion-hint";
+  hint.innerHTML = `<kbd>Enter</kbd> add &nbsp;<kbd>C</kbd> check-in &nbsp;<kbd>P</kbd> priority`;
+  workInSuggestions.appendChild(hint);
+}
+
+function updateWorkInHighlight() {
+  [...workInSuggestions.querySelectorAll(".sugg-item")].forEach((el, i) =>
+    el.classList.toggle("active", i === workInIndex));
+}
+function closeWorkIn(clearInput = false) {
+  workInSuggestions.classList.add("hidden"); workInSuggestions.innerHTML = "";
+  if (clearInput) workInBox.value = "";
+  workInCurrent = []; workInIndex = -1;
+}
+
+/* ── WORK-IN STOP (insert mid-schedule, no re-optimize) ── */
+async function workInStop(property, asCheckin, asPriority) {
+  const existingReal = optimizedSchedule.filter(s => !s.isLunch);
+  const allExisting  = [
+    { lat: startLocation.lat, lng: startLocation.lng },
+    ...existingReal.map(s => ({ lat: s.lat, lng: s.lng }))
+  ];
+
+  const overlay = document.getElementById("workInOverlay");
+  overlay.classList.add("active");
+
+  let fromNew = [], toNew = [];
+  try {
+    const res  = await fetch("/matrix-row", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_stop: { lat: property.lat, lng: property.lng }, existing_stops: allExisting })
+    });
+    const data = await res.json();
+    fromNew = data.from_new || [];
+    toNew   = data.to_new   || [];
+  } catch(_) {}
+
+  overlay.classList.remove("active");
+
+  const newIdx = durationMatrix.length;
+  const newRow = [...fromNew.slice(0, newIdx), 0];
+  while (newRow.length <= newIdx) newRow.push(0);
+  durationMatrix.push(newRow);
+
+  durationMatrix.forEach((row, i) => {
+    if (i === newIdx) return;
+    row.push(i < toNew.length ? toNew[i] : 0);
+  });
+
+  const newStop = {
+    _id: makeStopId(), name: property.name, lat: property.lat, lng: property.lng,
+    arrival: asCheckin || asPriority, priority_checkin: asPriority,
+    serviceMinutes: 60, matrix_index: newIdx,
+    eta_minutes: 0, eta: "—", late: false, priority_late: false,
+  };
+
+  selectedStops.push({
+    _id: newStop._id, name:property.name, lat:property.lat, lng:property.lng,
+    arrival: newStop.arrival, priority_checkin: newStop.priority_checkin, serviceMinutes: 60
+  });
+
+  optimizedSchedule.push(newStop);
+  recalculateTimes(); renderSchedule(); redrawRouteOnMap();
+}
+
+/* ── ADD MORE STOPS SEARCH ── */
+const addMoreBox         = document.getElementById("addMoreBox");
+const addMoreSuggestions = document.getElementById("addMoreSuggestions");
+let addMoreStops   = [];
+let addMoreCurrent = [];
+let addMoreIndex   = -1;
+
+addMoreBox.addEventListener("input", function() {
+  const text = this.value.toLowerCase().trim();
+  addMoreCurrent = []; addMoreIndex = -1;
+  if (text.length < 2) { closeAddMoreSugg(false); return; }
+
+  const already = new Set([
+    ...optimizedSchedule.filter(s => !s.isLunch).map(s => s.name),
+    ...addMoreStops.map(s => s.name)
+  ]);
+  addMoreCurrent = properties
+    .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
+    .slice(0, 10);
+  renderAddMoreSugg();
+});
+
+addMoreBox.addEventListener("keydown", function(e) {
+  if (!addMoreCurrent.length) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); addMoreIndex = (addMoreIndex+1) % addMoreCurrent.length; updateAddMoreHighlight(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); addMoreIndex = (addMoreIndex-1+addMoreCurrent.length) % addMoreCurrent.length; updateAddMoreHighlight(); }
+  else if (e.key === "Enter") { e.preventDefault(); stageStop(addMoreCurrent[addMoreIndex >= 0 ? addMoreIndex : 0], false, false); closeAddMoreSugg(true); }
+  else if (e.key === "c" || e.key === "C") { if (addMoreIndex >= 0) { e.preventDefault(); stageStop(addMoreCurrent[addMoreIndex], true, false); closeAddMoreSugg(true); } }
+  else if (e.key === "p" || e.key === "P") { if (addMoreIndex >= 0) { e.preventDefault(); stageStop(addMoreCurrent[addMoreIndex], true, true); closeAddMoreSugg(true); } }
+  else if (e.key === "Escape") { closeAddMoreSugg(false); }
+});
+
+document.addEventListener("click", e => {
+  if (!addMoreSuggestions.contains(e.target) && e.target !== addMoreBox) closeAddMoreSugg(false);
+});
+
+function renderAddMoreSugg() {
+  addMoreSuggestions.innerHTML = "";
+  if (!addMoreCurrent.length) { addMoreSuggestions.classList.add("hidden"); return; }
+  addMoreSuggestions.classList.remove("hidden");
+
+  addMoreCurrent.forEach((p, idx) => {
+    const div = document.createElement("div");
+    div.className = `sugg-item${idx === addMoreIndex ? " active" : ""}`;
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "sugg-item-name";
+    nameSpan.textContent = p.name;
+    nameSpan.addEventListener("click", () => { stageStop(p, false, false); closeAddMoreSugg(true); });
+
+    const btnWrap = document.createElement("span");
+    btnWrap.className = "sugg-type-btns";
+    [["stop","+ Stop",false,false],["checkin","✓ Check-in",true,false],["priority","★ Priority",true,true]]
+      .forEach(([cls, label, ci, pr]) => {
+        const btn = document.createElement("button");
+        btn.className = `sugg-type-btn ${cls}`;
+        btn.textContent = label;
+        btn.addEventListener("click", ev => { ev.stopPropagation(); stageStop(p,ci,pr); closeAddMoreSugg(true); });
+        btnWrap.appendChild(btn);
+      });
+
+    div.addEventListener("mouseenter", () => { addMoreIndex = idx; updateAddMoreHighlight(); });
+    div.appendChild(nameSpan);
+    div.appendChild(btnWrap);
+    addMoreSuggestions.appendChild(div);
+  });
+
+  const hint = document.createElement("div");
+  hint.className = "suggestion-hint";
+  hint.innerHTML = `<kbd>Enter</kbd> add &nbsp;<kbd>C</kbd> check-in &nbsp;<kbd>P</kbd> priority`;
+  addMoreSuggestions.appendChild(hint);
+}
+
+function updateAddMoreHighlight() {
+  [...addMoreSuggestions.querySelectorAll(".sugg-item")].forEach((el,i) =>
+    el.classList.toggle("active", i === addMoreIndex));
+}
+function closeAddMoreSugg(clearInput = false) {
+  addMoreSuggestions.classList.add("hidden"); addMoreSuggestions.innerHTML = "";
+  if (clearInput) addMoreBox.value = "";
+  addMoreCurrent = []; addMoreIndex = -1;
+}
+
+function stageStop(property, asCheckin, asPriority) {
+  if (addMoreStops.find(s => s.name === property.name)) return;
+  const stop = {
+    _id: makeStopId(), name: property.name, lat: property.lat, lng: property.lng,
+    arrival: asCheckin || asPriority, priority_checkin: asPriority, serviceMinutes: 60
+  };
+  addMoreStops.push(stop);
+  renderAddMoreList();
+}
+
+function renderAddMoreList() {
+  const container = document.getElementById("addMoreStops");
+  container.innerHTML = "";
+  addMoreStops.forEach(s => {
+    const div = document.createElement("div");
+    div.className = "flex items-center justify-between bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm";
+    div.innerHTML = `
+      <span class="truncate text-gray-800 font-medium flex-1">${s.name}</span>
+      <span class="text-xs mx-2 ${s.priority_checkin ? 'text-violet-600 font-bold' : s.arrival ? 'text-green-600 font-medium' : 'text-gray-400'}">
+        ${s.priority_checkin ? '★ Priority' : s.arrival ? '✓ Check-in' : 'Stop'}
+      </span>
+      <button class="text-red-400 hover:text-red-600 text-xs ml-1">✕</button>`;
+    div.querySelector("button").addEventListener("click", () => {
+      addMoreStops = addMoreStops.filter(x => x._id !== s._id);
+      renderAddMoreList();
+    });
+    container.appendChild(div);
+  });
+}
+
+function openAddMore() {
+  addMoreStops = [];
+  document.getElementById("addMoreStops").innerHTML = "";
+  document.getElementById("addMoreBox").value = "";
+  document.getElementById("addMoreSection").classList.remove("hidden");
+  document.getElementById("addMoreSection").scrollIntoView({ behavior: "smooth" });
+}
+
+function closeAddMore() {
+  addMoreStops = [];
+  document.getElementById("addMoreStops").innerHTML = "";
+  document.getElementById("addMoreSection").classList.add("hidden");
+}
+
+function reOptimize() {
+  if (!addMoreStops.length) { alert("Add at least one new stop first."); return; }
+  const currentReal = optimizedSchedule.filter(s => !s.isLunch);
+  selectedStops = [
+    ...currentReal.map(s => ({
+      _id: s._id, name: s.name, lat: s.lat, lng: s.lng,
+      arrival: s.arrival, priority_checkin: s.priority_checkin || false,
+      serviceMinutes: s.serviceMinutes
+    })),
+    ...addMoreStops
+  ];
+  isOptimized = false;
+  optimizedSchedule = [];
+  durationMatrix = [];
+  closeAddMore();
+  optimizeRoute();
+}

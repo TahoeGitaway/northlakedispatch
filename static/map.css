@@ -1,0 +1,159 @@
+/* ── BANANA LOADER ── */
+#loadingOverlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45);
+  z-index:9999; flex-direction:column; align-items:center; justify-content:center;
+}
+#loadingOverlay.active { display:flex; }
+#loadingOverlay .banana img {
+  width:120px; image-rendering:pixelated;
+  filter:drop-shadow(0 4px 16px rgba(0,0,0,0.5));
+}
+
+/* ── BADGES ── */
+.checkin-badge  { display:inline-block; background:#16a34a; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+.priority-badge { display:inline-block; background:#7c3aed; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+.late-badge     { display:inline-block; background:#dc2626; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+.lunch-badge    { display:inline-block; background:#ea580c; color:#fff; font-size:0.65rem; font-weight:700; padding:1px 6px; border-radius:999px; margin-left:4px; vertical-align:middle; white-space:nowrap; }
+
+/* ── WARNINGS ── */
+.shift-warning    { background:#fef9c3; border:1px solid #ca8a04; color:#92400e; }
+.deadline-warning { background:#fee2e2; border:1px solid #dc2626; color:#991b1b; }
+
+/* ── ROUTE NUMBER TOOLTIP ── */
+.route-number {
+  background:#4f46e5; color:#fff; border:none; border-radius:50%;
+  width:22px; height:22px; display:flex; align-items:center; justify-content:center;
+  font-size:0.7rem; font-weight:700; box-shadow:0 1px 4px rgba(0,0,0,0.3);
+}
+
+/* ── STOP CARDS ── */
+.stop-card { transition:box-shadow 0.15s; }
+.stop-card:hover { box-shadow:0 2px 8px rgba(99,102,241,0.18); }
+.stop-card-row { display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; }
+
+/* ── BUTTONS ── */
+.move-btn {
+  padding:2px 7px; border-radius:4px; font-size:0.75rem;
+  background:#e0e7ff; color:#3730a3; border:1px solid #c7d2fe;
+  cursor:pointer; transition:background 0.1s;
+}
+.move-btn:hover { background:#c7d2fe; }
+.move-btn:disabled { opacity:0.35; cursor:default; }
+
+/* ── SUGGESTION ITEMS ── */
+.sugg-item {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:6px 8px; cursor:pointer; border-bottom:1px solid #f3f4f6;
+  font-size:0.85rem; gap:6px;
+}
+.sugg-item:hover, .sugg-item.active { background:#eef2ff; }
+.sugg-item-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sugg-type-btns { display:flex; gap:4px; flex-shrink:0; }
+.sugg-type-btn {
+  font-size:0.6rem; font-weight:700; padding:2px 6px;
+  border-radius:999px; border:none; cursor:pointer; white-space:nowrap;
+}
+.sugg-type-btn.stop     { background:#e0e7ff; color:#3730a3; }
+.sugg-type-btn.checkin  { background:#dcfce7; color:#15803d; }
+.sugg-type-btn.priority { background:#ede9fe; color:#6d28d9; }
+.sugg-type-btn:hover { opacity:0.75; }
+
+/* ── KEYBOARD HINT ── */
+.suggestion-hint {
+  padding:5px 10px; font-size:0.68rem; color:#9ca3af;
+  background:#fafafa; border-top:1px solid #f3f4f6;
+}
+.suggestion-hint kbd {
+  display:inline-block; background:#e5e7eb; color:#374151;
+  border-radius:3px; padding:0 4px; font-size:0.65rem;
+  font-family:monospace; border:1px solid #d1d5db;
+}
+
+/* ── SERVICE TIME IN OUTPUT LIST ── */
+.service-time-select {
+  border:1px solid #e5e7eb; border-radius:4px; padding:1px 4px;
+  font-size:0.7rem; color:#374151; background:#fff; cursor:pointer;
+}
+.service-time-select:focus { outline:none; border-color:#6366f1; }
+
+/* ── MODE TOGGLE (bottom of schedule) ── */
+.mode-toggle {
+  display:flex; background:#f3f4f6; border-radius:8px; padding:3px; gap:3px;
+}
+.mode-toggle button {
+  flex:1; padding:5px 8px; border-radius:6px; font-size:0.75rem; font-weight:600;
+  border:none; cursor:pointer; transition:all 0.15s; color:#6b7280; background:transparent;
+}
+.mode-toggle button.active {
+  background:#fff; color:#1e1b4b; box-shadow:0 1px 4px rgba(0,0,0,0.12);
+}
+
+/* ── SESSION EXPIRED BANNER ── */
+#sessionBanner {
+  display:none; position:fixed; top:0; left:0; right:0;
+  background:#dc2626; color:#fff; text-align:center;
+  padding:12px 16px; font-weight:600; font-size:0.9rem; z-index:99999;
+}
+#sessionBanner a { color:#fef2f2; text-decoration:underline; margin-left:12px; font-weight:700; }
+
+/* ── ROUTE LOAD SPINNER ── */
+#routeLoadOverlay {
+  display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55);
+  z-index:99998; align-items:center; justify-content:center; flex-direction:column; gap:14px;
+}
+#routeLoadOverlay.active { display:flex; }
+#routeLoadOverlay .spinner {
+  width:44px; height:44px; border:4px solid rgba(255,255,255,0.25);
+  border-top-color:#fff; border-radius:50%;
+  animation:rl-spin 0.75s linear infinite;
+}
+#routeLoadOverlay .label {
+  color:#fff; font-size:0.95rem; font-weight:600; letter-spacing:0.01em;
+}
+@keyframes rl-spin { to { transform:rotate(360deg); } }
+
+/* ── ROUTE LOAD ERROR BANNER ── */
+#routeLoadError {
+  display:none; position:fixed; top:0; left:0; right:0;
+  background:#b91c1c; color:#fff; z-index:99997;
+  padding:12px 20px; font-size:0.88rem; font-weight:500;
+  align-items:center; gap:12px; flex-wrap:wrap;
+}
+#routeLoadError.active { display:flex; }
+#routeLoadError .rl-msg { flex:1; min-width:0; }
+#routeLoadError button {
+  background:rgba(255,255,255,0.2); border:none; color:#fff;
+  padding:3px 10px; border-radius:4px; cursor:pointer; font-size:0.82rem; white-space:nowrap;
+}
+#routeLoadError button:hover { background:rgba(255,255,255,0.35); }
+
+/* ── MUSTACHED BANANA ── */
+#workInOverlay {
+  display:none; position:fixed; bottom:32px; right:32px;
+  background:rgba(15,15,15,0.82); border-radius:20px;
+  padding:18px 22px; z-index:8000;
+  flex-direction:column; align-items:center; gap:8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+#workInOverlay.active { display:flex; }
+#workInOverlay .banana-wrap { position:relative; width:90px; height:90px; }
+#workInOverlay .banana-wrap img { width:90px; image-rendering:pixelated; }
+#workInOverlay .mustache {
+  position:absolute; bottom:26px; left:50%; transform:translateX(-50%);
+  font-size:1.8rem; line-height:1; pointer-events:none; user-select:none;
+}
+#workInOverlay .workin-label {
+  color:#fff; font-size:0.75rem; font-weight:600; text-align:center;
+  letter-spacing:0.03em;
+}
+.lunch-row {
+  border:1px solid #fed7aa; border-radius:6px; background:#fff7ed;
+  padding:6px 8px; cursor:default;
+}
+
+/* ── DRAG AND DROP ── */
+#routeList li { cursor: grab; }
+#routeList li:active { cursor: grabbing; }
+#routeList li.drag-over { outline: 2px dashed #6366f1; outline-offset:2px; background:#eef2ff !important; }
+#routeList li.dragging { opacity: 0.35; }
+.drag-handle { color:#cbd5e1; font-size:0.9rem; cursor:grab; padding:0 2px; user-select:none; }
