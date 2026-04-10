@@ -281,8 +281,19 @@ def _solve_route(
     params = pywrapcp.DefaultRoutingSearchParameters()
     params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    # Give hard deadline pass more time to find a feasible solution
-    params.time_limit.FromSeconds(5 if hard_deadline else 3)
+
+    # Scale time limit to problem size. PATH_CHEAPEST_ARC gives a good initial
+    # solution in milliseconds; GLS then improves it. For Tahoe-sized routes
+    # (5-15 stops in a tight geography) meaningful improvements happen early —
+    # running longer rarely changes the result.
+    #   hard pass  : needs time to prove feasibility under constraints
+    #   soft/unconstrained: good initial solution is usually good enough
+    n_stops = max(1, size - 1)
+    if hard_deadline:
+        secs = max(1, min(3, math.ceil(n_stops / 4)))   # 1 s ≤5, 2 s ≤8, 3 s ≤12
+    else:
+        secs = max(1, min(2, math.ceil(n_stops / 6)))   # 1 s ≤6, 2 s 7+
+    params.time_limit.FromSeconds(secs)
 
     solution = routing.SolveWithParameters(params)
     if not solution:

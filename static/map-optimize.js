@@ -278,15 +278,19 @@ async function submitUpdateRoute() {
       startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
     }
 
-    // Fetch the drive time matrix so drive-time pills show real values
+    // Fetch the drive time matrix so drive-time pills show real values.
+    // 5-second abort — fall through to synthesis fallback immediately if OSRM is slow.
     try {
       const allLocs = [
         { lat: startLocation.lat, lng: startLocation.lng },
         ...optimizedSchedule.map(s => ({ lat: s.lat, lng: s.lng }))
       ];
       const coordStr = allLocs.map(s => `${s.lng},${s.lat}`).join(";");
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 5000);
       const mResp = await fetch(
-        `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`
+        `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=duration`,
+        { signal: ctrl.signal }
       );
       const mData = await mResp.json();
       durationMatrix = mData.durations || [];
@@ -305,16 +309,15 @@ async function submitUpdateRoute() {
       document.getElementById("startTime").value =
         `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 
-      renderSchedule();
-
     } catch(_) {
-      // OSRM matrix failed — synthesize drive times from saved eta_minutes so
-      // drive-time pills still show meaningful values instead of all-zero.
+      // OSRM unavailable — synthesize drive times from saved eta_minutes.
+      // These are the exact values used when the route was originally optimized,
+      // so drive-time pills will be accurate even without a live matrix.
       const n = optimizedSchedule.length + 1;
       durationMatrix = Array.from({length: n}, () => Array(n).fill(0));
       for (let i = 0; i < optimizedSchedule.length; i++) {
-        const s    = optimizedSchedule[i];
-        const prev = i === 0 ? null : optimizedSchedule[i - 1];
+        const s       = optimizedSchedule[i];
+        const prev    = i === 0 ? null : optimizedSchedule[i - 1];
         const prevEta = prev ? prev.eta_minutes + prev.serviceMinutes : startMinutes;
         const driveSec = Math.max(0, (s.eta_minutes - prevEta) * 60);
         durationMatrix[i][i + 1] = driveSec;
