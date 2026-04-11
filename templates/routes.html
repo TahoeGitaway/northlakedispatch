@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Saved Routes — Tahoe Dispatch{% endblock %}
+{% block title %}Saved Routes — North Lake Dispatch{% endblock %}
 {% block content %}
 
 <style>
@@ -422,7 +422,7 @@ document.addEventListener("DOMContentLoaded", () => {
 function shareRoute(routeId, routeName) {
   const url = `${window.location.origin}/view/${routeId}`;
   if (navigator.share) {
-    navigator.share({ title: routeName + ' — Tahoe Dispatch', text: 'Your route for today:', url }).catch(() => {});
+    navigator.share({ title: routeName + ' — North Lake Dispatch', text: 'Your route for today:', url }).catch(() => {});
     return;
   }
   navigator.clipboard.writeText(url).then(() => showToast(`Link copied!`)).catch(() => prompt('Copy this link:', url));

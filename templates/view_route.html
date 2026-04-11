@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Tahoe Dispatch">
+  <meta name="apple-mobile-web-app-title" content="North Lake Dispatch">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#4f46e5">
-  <title>{% if not error %}{{ route_name }} — Tahoe Dispatch{% else %}Route Not Found{% endif %}</title>
+  <title>{% if not error %}{{ route_name }} — North Lake Dispatch{% else %}Route Not Found{% endif %}</title>
+  <link rel="icon" type="image/jpeg" href="/static/favicon.jpg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -316,7 +317,7 @@ if (isIOS && !isInStandaloneMode) {
 <!-- ── PWA INSTALL BANNER ── -->
 <div id="installBanner">
   <p id="installText">
-    📲 Add Tahoe Dispatch to your home screen for quick access.
+    📲 Add North Lake Dispatch to your home screen for quick access.
   </p>
   <button onclick="installApp()" id="installBtn">Add to Home</button>
   <button class="dismiss" onclick="dismissBanner()">✕</button>
