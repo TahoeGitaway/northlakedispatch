@@ -389,7 +389,9 @@ async function applyCustomStart() {
     document.getElementById("customStartLabel").textContent = shortName;
     document.getElementById("customStartPanel").classList.add("hidden");
     input.value = "";
-    if (isOptimized) { redrawRouteOnMap(); }
+    if (isOptimized) {
+      _showStartChangedBanner();
+    }
   } catch (e) {
     errEl.textContent = "Address not found — try a more specific address.";
     errEl.classList.remove("hidden");
@@ -405,7 +407,29 @@ function resetStart() {
   document.getElementById("customStartInput").value = "";
   document.getElementById("customStartError").classList.add("hidden");
   document.getElementById("customStartPanel").classList.add("hidden");
-  if (isOptimized) { redrawRouteOnMap(); }
+  if (isOptimized) {
+    _showStartChangedBanner();
+  }
+}
+
+function _showStartChangedBanner() {
+  // Show a prompt in the warningBox telling the user to re-optimize
+  const wb = document.getElementById("warningBox");
+  wb.className = "text-sm p-2 rounded shift-warning";
+  wb.innerHTML = `
+    <div class="font-medium mb-1.5">Start location changed — re-optimize to update stop order.</div>
+    <div class="flex gap-2">
+      <button onclick="optimizeRoute(false)"
+              class="flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium py-1.5 rounded-lg transition-colors">
+        Re-optimize (free)
+      </button>
+      <button onclick="optimizeRoute(true)"
+              class="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-medium py-1.5 rounded-lg transition-colors">
+        Re-optimize (Google Maps)
+      </button>
+    </div>`;
+  wb.classList.remove("hidden");
+  wb.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 // Allow pressing Enter in the custom start input
