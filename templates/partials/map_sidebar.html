@@ -147,11 +147,41 @@
                      rounded-lg font-medium transition-colors text-sm border border-indigo-200">
         + Add Stops &amp; Re-optimize
       </button>
-      <button id="changeStartBtn" onclick="openChangeStart()"
+      <button id="changeStartBtn" onclick="toggleChangeStartForm()"
               class="hidden w-full bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2
                      rounded-lg font-medium transition-colors text-sm border border-gray-200">
         📍 Change Start / End Location
       </button>
+    </div>
+
+    <!-- CHANGE START FORM (inline, shown when user clicks Change Start btn post-optimize) -->
+    <div id="changeStartForm" class="hidden p-3 bg-gray-50 border border-gray-200 rounded-lg">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-semibold text-gray-700 uppercase tracking-wide">📍 Start / End Location</span>
+        <button onclick="closeChangeStartForm()" class="text-xs text-gray-400 hover:text-gray-600">✕ Close</button>
+      </div>
+      <div class="relative mb-2">
+        <input id="changeStartInput" type="text" placeholder="Enter any address…"
+               class="w-full border border-gray-300 rounded-lg px-3 py-2 pr-8 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        <div id="changeStartSpinner" class="hidden absolute inset-y-0 right-2 flex items-center">
+          <div class="w-3.5 h-3.5 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin"></div>
+        </div>
+      </div>
+      <div id="changeStartError" class="hidden text-xs text-red-500 mb-2"></div>
+      <div class="flex gap-1.5">
+        <button onclick="applyChangeStart()"
+                class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs
+                       font-medium py-1.5 rounded-lg transition-colors">
+          Use This Start
+        </button>
+        <button onclick="resetStartFromForm()"
+                class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs
+                       font-medium py-1.5 rounded-lg transition-colors">
+          Reset to Office
+        </button>
+      </div>
+      <p class="text-xs text-gray-400 mt-2">Current: <span id="changeStartCurrent" class="font-medium text-gray-600">Tahoe Getaways Office</span></p>
     </div>
 
     <!-- ADD STOPS & RE-OPTIMIZE (shown after optimize/load, lives here so it opens near the top) -->

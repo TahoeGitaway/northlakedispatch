@@ -364,13 +364,61 @@ function closeAddMore() {
 }
 
 /* ── CUSTOM START LOCATION ── */
-function openChangeStart() {
-  const panel = document.getElementById("customStartPanel");
-  panel.classList.remove("hidden");
-  // Scroll the card into view in the sidebar
-  panel.parentElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  document.getElementById("customStartInput").focus();
+/* ── POST-OPTIMIZE CHANGE START FORM (inline, no scrolling needed) ── */
+function toggleChangeStartForm() {
+  const form = document.getElementById("changeStartForm");
+  const isHidden = form.classList.toggle("hidden");
+  if (!isHidden) {
+    document.getElementById("changeStartInput").value = "";
+    document.getElementById("changeStartError").classList.add("hidden");
+    document.getElementById("changeStartCurrent").textContent = startLocation.name;
+    document.getElementById("changeStartInput").focus();
+  }
 }
+
+function closeChangeStartForm() {
+  document.getElementById("changeStartForm").classList.add("hidden");
+}
+
+async function applyChangeStart() {
+  const input   = document.getElementById("changeStartInput");
+  const errEl   = document.getElementById("changeStartError");
+  const spinner = document.getElementById("changeStartSpinner");
+  const address = input.value.trim();
+  if (!address) return;
+
+  errEl.classList.add("hidden");
+  spinner.classList.remove("hidden");
+  input.disabled = true;
+
+  try {
+    const loc = await geocodeAddress(address);
+    startLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
+    const shortName = loc.name.length > 40 ? loc.name.slice(0, 40) + "…" : loc.name;
+    document.getElementById("customStartLabel").textContent = shortName;
+    document.getElementById("changeStartCurrent").textContent = shortName;
+    closeChangeStartForm();
+    _showStartChangedBanner();
+  } catch (e) {
+    errEl.textContent = "Address not found — try a more specific address.";
+    errEl.classList.remove("hidden");
+  } finally {
+    spinner.classList.add("hidden");
+    input.disabled = false;
+  }
+}
+
+function resetStartFromForm() {
+  startLocation = { ...DEFAULT_START_LOCATION };
+  document.getElementById("customStartLabel").textContent = "Tahoe Getaways Office";
+  document.getElementById("changeStartCurrent").textContent = "Tahoe Getaways Office";
+  closeChangeStartForm();
+  _showStartChangedBanner();
+}
+
+// Enter key support for the inline form
+document.getElementById("changeStartInput")
+  .addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyChangeStart(); } });
 
 function toggleCustomStart() {
   const panel  = document.getElementById("customStartPanel");
