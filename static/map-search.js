@@ -365,6 +365,22 @@ function closeAddMore() {
 
 /* ── CUSTOM START LOCATION ── */
 /* ── POST-OPTIMIZE CHANGE START FORM (inline, no scrolling needed) ── */
+function _updateStartEndPill() {
+  const startName = startLocation.name || "Custom Start";
+  const endName   = endLocation.name   || "Custom End";
+  const short = n => n.length > 35 ? n.slice(0, 35) + "…" : n;
+  document.getElementById("customStartLabel").textContent = short(startName);
+  const endLabel = document.getElementById("customEndLabel");
+  const same = (Math.abs(startLocation.lat - endLocation.lat) < 1e-5 &&
+                Math.abs(startLocation.lng - endLocation.lng) < 1e-5);
+  if (same) {
+    endLabel.classList.add("hidden");
+  } else {
+    endLabel.textContent = "→ End: " + short(endName);
+    endLabel.classList.remove("hidden");
+  }
+}
+
 function toggleChangeStartForm() {
   const form = document.getElementById("changeStartForm");
   const isHidden = form.classList.toggle("hidden");
@@ -372,6 +388,9 @@ function toggleChangeStartForm() {
     document.getElementById("changeStartInput").value = "";
     document.getElementById("changeStartError").classList.add("hidden");
     document.getElementById("changeStartCurrent").textContent = startLocation.name;
+    document.getElementById("changeEndInput").value = "";
+    document.getElementById("changeEndError").classList.add("hidden");
+    document.getElementById("changeEndCurrent").textContent = endLocation.name;
     document.getElementById("changeStartInput").focus();
   }
 }
@@ -394,10 +413,9 @@ async function applyChangeStart() {
   try {
     const loc = await geocodeAddress(address);
     startLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
-    const shortName = loc.name.length > 40 ? loc.name.slice(0, 40) + "…" : loc.name;
-    document.getElementById("customStartLabel").textContent = shortName;
-    document.getElementById("changeStartCurrent").textContent = shortName;
-    closeChangeStartForm();
+    document.getElementById("changeStartCurrent").textContent = loc.name;
+    input.value = "";
+    _updateStartEndPill();
     _showStartChangedBanner();
   } catch (e) {
     errEl.textContent = "Address not found — try a more specific address.";
@@ -410,15 +428,50 @@ async function applyChangeStart() {
 
 function resetStartFromForm() {
   startLocation = { ...DEFAULT_START_LOCATION };
-  document.getElementById("customStartLabel").textContent = "Tahoe Getaways Office";
-  document.getElementById("changeStartCurrent").textContent = "Tahoe Getaways Office";
-  closeChangeStartForm();
+  document.getElementById("changeStartCurrent").textContent = DEFAULT_START_LOCATION.name;
+  _updateStartEndPill();
   _showStartChangedBanner();
 }
 
-// Enter key support for the inline form
+async function applyChangeEnd() {
+  const input   = document.getElementById("changeEndInput");
+  const errEl   = document.getElementById("changeEndError");
+  const spinner = document.getElementById("changeEndSpinner");
+  const address = input.value.trim();
+  if (!address) return;
+
+  errEl.classList.add("hidden");
+  spinner.classList.remove("hidden");
+  input.disabled = true;
+
+  try {
+    const loc = await geocodeAddress(address);
+    endLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
+    document.getElementById("changeEndCurrent").textContent = loc.name;
+    input.value = "";
+    _updateStartEndPill();
+    _showStartChangedBanner();
+  } catch (e) {
+    errEl.textContent = "Address not found — try a more specific address.";
+    errEl.classList.remove("hidden");
+  } finally {
+    spinner.classList.add("hidden");
+    input.disabled = false;
+  }
+}
+
+function resetEndFromForm() {
+  endLocation = { ...DEFAULT_END_LOCATION };
+  document.getElementById("changeEndCurrent").textContent = DEFAULT_END_LOCATION.name;
+  _updateStartEndPill();
+  _showStartChangedBanner();
+}
+
+// Enter key support for the inline form inputs
 document.getElementById("changeStartInput")
   .addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyChangeStart(); } });
+document.getElementById("changeEndInput")
+  .addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyChangeEnd(); } });
 
 function toggleCustomStart() {
   const panel  = document.getElementById("customStartPanel");
@@ -440,11 +493,9 @@ async function applyCustomStart() {
   try {
     const loc = await geocodeAddress(address);
     startLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
-    // Show a short version of the geocoded name in the pill
-    const shortName = loc.name.length > 40 ? loc.name.slice(0, 40) + "…" : loc.name;
-    document.getElementById("customStartLabel").textContent = shortName;
     document.getElementById("customStartPanel").classList.add("hidden");
     input.value = "";
+    _updateStartEndPill();
     if (isOptimized) {
       _showStartChangedBanner();
     }
@@ -459,10 +510,10 @@ async function applyCustomStart() {
 
 function resetStart() {
   startLocation = { ...DEFAULT_START_LOCATION };
-  document.getElementById("customStartLabel").textContent = "Tahoe Getaways Office";
   document.getElementById("customStartInput").value = "";
   document.getElementById("customStartError").classList.add("hidden");
   document.getElementById("customStartPanel").classList.add("hidden");
+  _updateStartEndPill();
   if (isOptimized) {
     _showStartChangedBanner();
   }

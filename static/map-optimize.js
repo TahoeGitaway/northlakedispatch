@@ -22,6 +22,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
           arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
         })),
         start:             startLocation,
+        end:               endLocation,
         startTime:         document.getElementById("startTime").value,
         drive_only:        false,
         use_google_matrix: useGoogleMatrix,
@@ -344,7 +345,7 @@ function exportToGoogleMaps() {
   const coords = [
     `${startLocation.lat},${startLocation.lng}`,
     ...real.map(s => `${s.lat},${s.lng}`),
-    `${startLocation.lat},${startLocation.lng}`
+    `${endLocation.lat},${endLocation.lng}`
   ];
   window.open("https://www.google.com/maps/dir/" + coords.join("/"), "_blank");
 }

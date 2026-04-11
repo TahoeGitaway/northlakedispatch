@@ -325,9 +325,13 @@ def _solve_route(
     duration_matrix, service_times_sec, checkin_flags, priority_flags,
     deadline_offset_sec=None, priority_deadline_offset_sec=None,
     hard_deadline=False, soft_deadline_penalty=False,
+    end_node=0,
 ):
     size    = len(duration_matrix)
-    manager = pywrapcp.RoutingIndexManager(size, 1, 0)
+    if end_node == 0:
+        manager = pywrapcp.RoutingIndexManager(size, 1, 0)
+    else:
+        manager = pywrapcp.RoutingIndexManager(size, 1, [0], [end_node])
     routing = pywrapcp.RoutingModel(manager)
 
     def time_callback(from_index, to_index):
@@ -346,6 +350,8 @@ def _solve_route(
     # than any drive time savings. 100000 seconds >> any realistic Tahoe drive time.
     PENALTY = 100000
     for node_idx in range(1, size):
+        if node_idx == end_node:
+            continue  # end depot has no time-window constraints
         idx          = manager.NodeToIndex(node_idx)
         service_here = int(service_times_sec[node_idx] or 0)
         is_checkin   = bool(checkin_flags[node_idx])
@@ -401,6 +407,7 @@ def optimize():
     data            = request.json or {}
     stops           = data.get("stops", [])
     start           = data.get("start") or DEFAULT_START
+    end_raw         = data.get("end")  or data.get("start") or DEFAULT_START
     start_time_hhmm = (data.get("startTime") or "09:30").strip()
     drive_only      = bool(data.get("drive_only", False))
 
@@ -424,6 +431,19 @@ def optimize():
     except Exception:
         return jsonify({"error": "Start location must have valid lat/lng."}), 400
 
+    try:
+        end = {
+            "name": end_raw.get("name"),
+            "lat":  float(end_raw.get("lat")),
+            "lng":  float(end_raw.get("lng")),
+        }
+    except Exception:
+        end = start
+
+    # Determine whether start and end are the same depot
+    same_depot = (abs(start["lat"] - end["lat"]) < 1e-5 and
+                  abs(start["lng"] - end["lng"]) < 1e-5)
+
     cleaned_stops = []
     for s in stops:
         try:
@@ -441,8 +461,14 @@ def optimize():
     if not cleaned_stops:
         return jsonify({"error": "No valid stops (missing lat/lng)."}), 400
 
-    all_locations = [start] + cleaned_stops
-    n             = len(all_locations)
+    # Build location list. When end differs from start, append it as the
+    # final node so OR-Tools can route to it instead of looping back.
+    if same_depot:
+        all_locations = [start] + cleaned_stops
+        end_node      = 0
+    else:
+        all_locations = [start] + cleaned_stops + [end]
+        end_node      = len(all_locations) - 1
 
     # Build drive-time matrix.
     # Default: haversine approximation (free, fast, good enough for ordering).
@@ -458,15 +484,25 @@ def optimize():
         checkin_flags     = [False] * len(all_locations)
         priority_flags    = [False] * len(all_locations)
         ordered_nodes, arrival_times_sec = _solve_route(
-            duration_matrix, service_times_sec, checkin_flags, priority_flags
+            duration_matrix, service_times_sec, checkin_flags, priority_flags,
+            end_node=end_node
         )
         if ordered_nodes is None:
             return jsonify({"error": "No solution found"}), 500
         used_deadline_constraints = used_soft_penalties = False
     else:
-        service_times_sec = [0] + [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
-        checkin_flags     = [False] + [bool(s.get("arrival", False)) for s in cleaned_stops]
-        priority_flags    = [False] + [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
+        stop_service = [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
+        stop_checkin = [bool(s.get("arrival", False)) for s in cleaned_stops]
+        stop_priority= [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
+        # End node (when different from start) gets zero service time / no flags
+        if same_depot:
+            service_times_sec = [0] + stop_service
+            checkin_flags     = [False] + stop_checkin
+            priority_flags    = [False] + stop_priority
+        else:
+            service_times_sec = [0] + stop_service + [0]
+            checkin_flags     = [False] + stop_checkin + [False]
+            priority_flags    = [False] + stop_priority + [False]
 
         has_checkins = any(checkin_flags[1:])
         has_priority = any(priority_flags[1:])
@@ -492,27 +528,27 @@ def optimize():
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec if before_checkin_deadline else None,
                 priority_deadline_offset_sec=priority_deadline_sec if before_priority_deadline else None,
-                hard_deadline=True
+                hard_deadline=True, end_node=end_node
             )
             if ordered_nodes is not None:
                 used_deadline_constraints = True
 
-        # Pass 2 — soft penalties. Always applied when check-ins exist, including
-        # when starting past the deadline (offset=0 pushes them to the front).
+        # Pass 2 — soft penalties.
         if ordered_nodes is None and (has_checkins or has_priority):
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec,
                 priority_deadline_offset_sec=priority_deadline_sec,
-                soft_deadline_penalty=True
+                soft_deadline_penalty=True, end_node=end_node
             )
             if ordered_nodes is not None:
                 used_soft_penalties = True
 
-        # Pass 3 — unconstrained fallback (no check-ins, or truly unsolvable).
+        # Pass 3 — unconstrained fallback.
         if ordered_nodes is None:
             ordered_nodes, arrival_times_sec = _solve_route(
-                duration_matrix, service_times_sec, checkin_flags, priority_flags
+                duration_matrix, service_times_sec, checkin_flags, priority_flags,
+                end_node=end_node
             )
             if ordered_nodes is None:
                 return jsonify({"error": "No solution found"}), 500
@@ -522,7 +558,7 @@ def optimize():
         if node not in node_arrival_sec:
             node_arrival_sec[node] = arrival_times_sec[pos]
 
-    ordered_stop_nodes = [n for n in ordered_nodes[1:] if n != 0]
+    ordered_stop_nodes = [n for n in ordered_nodes[1:] if n != 0 and n != end_node]
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]
 
     # Compute driving duration by summing matrix legs along the ordered route.
@@ -532,6 +568,10 @@ def optimize():
         row = duration_matrix[prev] if prev < len(duration_matrix) else []
         driving_duration += float(row[node]) if node < len(row) and row[node] else 0.0
         prev = node
+    # Add the final leg from the last stop to the end location (when it differs from start).
+    if end_node != 0:
+        row = duration_matrix[prev] if prev < len(duration_matrix) else []
+        driving_duration += float(row[end_node]) if end_node < len(row) and row[end_node] else 0.0
 
     service_duration = 0 if drive_only else sum(
         int(s.get("serviceMinutes", 60)) * 60 for s in ordered_stops
@@ -573,6 +613,8 @@ def optimize():
     polyline_locs = [{"lat": start["lat"], "lng": start["lng"]}] + [
         {"lat": s["lat"], "lng": s["lng"]} for s in ordered_stops
     ]
+    if not same_depot:
+        polyline_locs.append({"lat": end["lat"], "lng": end["lng"]})
     route_polyline = _google_route_polyline(polyline_locs)
 
     return jsonify({
