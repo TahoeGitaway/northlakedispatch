@@ -74,6 +74,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("addMoreBtn").classList.remove("hidden");
+    document.getElementById("changeStartBtn").classList.remove("hidden");
     if (currentRouteId) {
       document.getElementById("saveRouteBtn").classList.add("hidden");
       document.getElementById("updateRouteBtn").classList.remove("hidden");
@@ -298,6 +299,7 @@ async function submitUpdateRoute() {
     document.getElementById("scheduleSection").classList.remove("hidden");
     document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("addMoreBtn").classList.remove("hidden");
+    document.getElementById("changeStartBtn").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.add("hidden");
     document.getElementById("updateRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value   = data.name;

@@ -292,6 +292,7 @@ function restartRoute() {
   document.getElementById("saveRouteBtn").classList.add("hidden");
   document.getElementById("updateRouteBtn").classList.add("hidden");
   document.getElementById("addMoreBtn").classList.add("hidden");
+  document.getElementById("changeStartBtn").classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   document.getElementById("workInBox").value = "";
   document.getElementById("saveRouteName").value  = "";

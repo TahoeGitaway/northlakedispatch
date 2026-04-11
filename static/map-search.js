@@ -364,6 +364,18 @@ function closeAddMore() {
 }
 
 /* ── CUSTOM START LOCATION ── */
+function openChangeStart() {
+  // Scroll the sidebar to the top so the start card is visible, then open the panel
+  const sidebar = document.querySelector(".overflow-y-auto");
+  if (sidebar) sidebar.scrollTo({ top: 0, behavior: "smooth" });
+  // Open the panel after a brief delay to let the scroll settle
+  setTimeout(() => {
+    const panel = document.getElementById("customStartPanel");
+    panel.classList.remove("hidden");
+    document.getElementById("customStartInput").focus();
+  }, 200);
+}
+
 function toggleCustomStart() {
   const panel  = document.getElementById("customStartPanel");
   const hidden = panel.classList.toggle("hidden");
