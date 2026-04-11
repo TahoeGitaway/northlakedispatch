@@ -62,6 +62,10 @@
 .sugg-type-btn.priority { background:#ede9fe; color:#6d28d9; }
 .sugg-type-btn:hover { opacity:0.75; }
 
+/* Any-address fallback row — visually distinct from DB property rows */
+.sugg-any-address { border-top: 1px dashed #e0e7ff; }
+.sugg-any-address:hover { background: #f5f3ff; }
+
 /* ── KEYBOARD HINT ── */
 .suggestion-hint {
   padding:5px 10px; font-size:0.68rem; color:#9ca3af;

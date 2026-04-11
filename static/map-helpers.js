@@ -50,6 +50,18 @@ function pickStopIcon(stop) {
   return regularIcon;
 }
 
+/* ── GEOCODE (address → {name, lat, lng} via server) ── */
+async function geocodeAddress(address) {
+  const res  = await fetch("/geocode", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ address }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data; // { name, lat, lng }
+}
+
 /* ── SESSION GUARD ── */
 function guardResponse(res) {
   if (res.redirected || res.url.includes("/login")) {

@@ -187,10 +187,7 @@ def saved_routes():
            {where}
            ORDER BY r.route_date DESC, r.updated_at DESC"""
 
-    if current_user.is_admin:
-        cur.execute(q.format(where=""))
-    else:
-        cur.execute(q.format(where="WHERE r.created_by = %s"), (current_user.id,))
+    cur.execute(q.format(where=""))
 
     routes = cur.fetchall()
     cur.close(); conn.close()
@@ -616,6 +613,33 @@ def matrix_row():
         "from_new": mat[0][1:],
         "to_new":   [mat[i + 1][0] for i in range(len(existing))],
     })
+
+
+# ── Geocode (address → lat/lng via Google Geocoding API) ─────────
+
+@dispatch_bp.route("/geocode", methods=["POST"])
+@login_required
+def geocode():
+    address = (request.json or {}).get("address", "").strip()
+    if not address:
+        return jsonify({"error": "No address provided"}), 400
+    if not GOOGLE_MAPS_KEY:
+        return jsonify({"error": "Google Maps API key not configured"}), 500
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": address, "key": GOOGLE_MAPS_KEY},
+            timeout=8,
+        )
+        data = resp.json()
+        if data.get("status") != "OK" or not data.get("results"):
+            return jsonify({"error": "Address not found"}), 404
+        result   = data["results"][0]
+        loc      = result["geometry"]["location"]
+        name     = result.get("formatted_address", address)
+        return jsonify({"name": name, "lat": loc["lat"], "lng": loc["lng"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Route geometry (Google Directions polyline for Leaflet map) ───

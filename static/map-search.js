@@ -73,6 +73,15 @@ function renderSuggestions() {
     suggestions.appendChild(div);
   });
 
+  // "Search any address" fallback row
+  const anyAddr = document.createElement("div");
+  anyAddr.className = "sugg-item sugg-any-address";
+  const anyText = searchBox.value.trim();
+  anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">
+    📍 Add "${anyText}" as address…</span>`;
+  anyAddr.addEventListener("click", () => geocodeAndAddStop(anyText, false, false));
+  suggestions.appendChild(anyAddr);
+
   const hint = document.createElement("div");
   hint.className = "suggestion-hint";
   hint.innerHTML = `<kbd>Enter</kbd> add &nbsp;<kbd>C</kbd> check-in &nbsp;<kbd>P</kbd> priority &nbsp;<kbd>↑↓</kbd> navigate`;
@@ -151,6 +160,15 @@ function renderWorkInSuggestions() {
     div.appendChild(btnWrap);
     workInSuggestions.appendChild(div);
   });
+
+  // "Search any address" fallback row
+  const anyAddr = document.createElement("div");
+  anyAddr.className = "sugg-item sugg-any-address";
+  const anyText = workInBox.value.trim();
+  anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">
+    📍 Add "${anyText}" as address…</span>`;
+  anyAddr.addEventListener("click", () => geocodeAndWorkIn(anyText, false, false));
+  workInSuggestions.appendChild(anyAddr);
 
   const hint = document.createElement("div");
   hint.className = "suggestion-hint";
@@ -343,6 +361,78 @@ function closeAddMore() {
   addMoreStops = [];
   document.getElementById("addMoreStops").innerHTML = "";
   document.getElementById("addMoreSection").classList.add("hidden");
+}
+
+/* ── CUSTOM START LOCATION ── */
+function toggleCustomStart() {
+  const panel    = document.getElementById("customStartPanel");
+  const chevron  = document.getElementById("customStartChevron");
+  const hidden   = panel.classList.toggle("hidden");
+  chevron.textContent = hidden ? "▸" : "▾";
+  if (!hidden) document.getElementById("customStartInput").focus();
+}
+
+async function applyCustomStart() {
+  const input   = document.getElementById("customStartInput");
+  const errEl   = document.getElementById("customStartError");
+  const spinner = document.getElementById("customStartSpinner");
+  const address = input.value.trim();
+  if (!address) return;
+
+  errEl.classList.add("hidden");
+  spinner.classList.remove("hidden");
+  input.disabled = true;
+
+  try {
+    const loc = await geocodeAddress(address);
+    startLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
+    document.getElementById("customStartLabel").textContent =
+      "Start: " + (loc.name.length > 35 ? loc.name.slice(0, 35) + "…" : loc.name);
+    document.getElementById("customStartPanel").classList.add("hidden");
+    document.getElementById("customStartChevron").textContent = "▸";
+    if (isOptimized) { redrawRouteOnMap(); }
+  } catch (e) {
+    errEl.textContent = "Address not found — try a more specific address.";
+    errEl.classList.remove("hidden");
+  } finally {
+    spinner.classList.add("hidden");
+    input.disabled = false;
+  }
+}
+
+function resetStart() {
+  startLocation = { ...DEFAULT_START_LOCATION };
+  document.getElementById("customStartLabel").textContent = "Start: Tahoe Getaways Office";
+  document.getElementById("customStartInput").value = "";
+  document.getElementById("customStartError").classList.add("hidden");
+  document.getElementById("customStartPanel").classList.add("hidden");
+  document.getElementById("customStartChevron").textContent = "▸";
+  if (isOptimized) { redrawRouteOnMap(); }
+}
+
+// Allow pressing Enter in the custom start input
+document.getElementById("customStartInput")
+  .addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyCustomStart(); } });
+
+/* ── ADDRESS FALLBACK in main search (any address outside DB) ── */
+async function geocodeAndAddStop(address, asCheckin, asPriority) {
+  try {
+    const loc = await geocodeAddress(address);
+    addStop({ name: loc.name, lat: loc.lat, lng: loc.lng }, asCheckin, asPriority);
+    closeSuggestions(true);
+  } catch (_) {
+    alert("Address not found. Try a more specific address.");
+  }
+}
+
+async function geocodeAndWorkIn(address, asCheckin, asPriority) {
+  try {
+    const loc = await geocodeAddress(address);
+    workInStop({ name: loc.name, lat: loc.lat, lng: loc.lng }, asCheckin, asPriority);
+    closeWorkIn(true);
+  } catch (_) {
+    alert("Address not found. Try a more specific address.");
+  }
 }
 
 function reOptimize() {
