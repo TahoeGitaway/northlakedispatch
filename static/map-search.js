@@ -365,10 +365,8 @@ function closeAddMore() {
 
 /* ── CUSTOM START LOCATION ── */
 function toggleCustomStart() {
-  const panel    = document.getElementById("customStartPanel");
-  const chevron  = document.getElementById("customStartChevron");
-  const hidden   = panel.classList.toggle("hidden");
-  chevron.textContent = hidden ? "▸" : "▾";
+  const panel  = document.getElementById("customStartPanel");
+  const hidden = panel.classList.toggle("hidden");
   if (!hidden) document.getElementById("customStartInput").focus();
 }
 
@@ -386,10 +384,11 @@ async function applyCustomStart() {
   try {
     const loc = await geocodeAddress(address);
     startLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
-    document.getElementById("customStartLabel").textContent =
-      "Start: " + (loc.name.length > 35 ? loc.name.slice(0, 35) + "…" : loc.name);
+    // Show a short version of the geocoded name in the pill
+    const shortName = loc.name.length > 40 ? loc.name.slice(0, 40) + "…" : loc.name;
+    document.getElementById("customStartLabel").textContent = shortName;
     document.getElementById("customStartPanel").classList.add("hidden");
-    document.getElementById("customStartChevron").textContent = "▸";
+    input.value = "";
     if (isOptimized) { redrawRouteOnMap(); }
   } catch (e) {
     errEl.textContent = "Address not found — try a more specific address.";
@@ -402,11 +401,10 @@ async function applyCustomStart() {
 
 function resetStart() {
   startLocation = { ...DEFAULT_START_LOCATION };
-  document.getElementById("customStartLabel").textContent = "Start: Tahoe Getaways Office";
+  document.getElementById("customStartLabel").textContent = "Tahoe Getaways Office";
   document.getElementById("customStartInput").value = "";
   document.getElementById("customStartError").classList.add("hidden");
   document.getElementById("customStartPanel").classList.add("hidden");
-  document.getElementById("customStartChevron").textContent = "▸";
   if (isOptimized) { redrawRouteOnMap(); }
 }
 
