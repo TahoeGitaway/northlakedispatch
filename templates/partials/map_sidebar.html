@@ -154,15 +154,8 @@
       </button>
     </div>
 
-    <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
-
-    <!-- POST-OPTIMIZATION SCHEDULE -->
-    <div id="scheduleSection" class="hidden">
-      <h3 class="font-semibold mb-2">Route Schedule</h3>
-      <ol id="routeList" class="space-y-2"></ol>
-
-    <!-- ADD STOPS & RE-OPTIMIZE (shown after optimize/load) -->
-    <div id="addMoreSection" class="hidden mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+    <!-- ADD STOPS & RE-OPTIMIZE (shown after optimize/load, lives here so it opens near the top) -->
+    <div id="addMoreSection" class="hidden p-3 bg-gray-50 border border-gray-200 rounded-lg">
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs font-semibold text-gray-700 uppercase tracking-wide">➕ Add Stops & Re-optimize</span>
         <button onclick="closeAddMore()"
@@ -185,6 +178,13 @@
         Re-optimize with New Stops
       </button>
     </div>
+
+    <div id="warningBox" class="text-sm hidden p-2 rounded"></div>
+
+    <!-- POST-OPTIMIZATION SCHEDULE -->
+    <div id="scheduleSection" class="hidden">
+      <h3 class="font-semibold mb-2">Route Schedule</h3>
+      <ol id="routeList" class="space-y-2"></ol>
 
     <!-- WORK IN A STOP -->
       <div id="workInSection" class="hidden mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg">

@@ -354,7 +354,7 @@ function openAddMore() {
   document.getElementById("addMoreStops").innerHTML = "";
   document.getElementById("addMoreBox").value = "";
   document.getElementById("addMoreSection").classList.remove("hidden");
-  document.getElementById("addMoreSection").scrollIntoView({ behavior: "smooth" });
+  document.getElementById("addMoreBox").focus();
 }
 
 function closeAddMore() {
@@ -365,15 +365,11 @@ function closeAddMore() {
 
 /* ── CUSTOM START LOCATION ── */
 function openChangeStart() {
-  // Scroll the sidebar to the top so the start card is visible, then open the panel
-  const sidebar = document.querySelector(".overflow-y-auto");
-  if (sidebar) sidebar.scrollTo({ top: 0, behavior: "smooth" });
-  // Open the panel after a brief delay to let the scroll settle
-  setTimeout(() => {
-    const panel = document.getElementById("customStartPanel");
-    panel.classList.remove("hidden");
-    document.getElementById("customStartInput").focus();
-  }, 200);
+  const panel = document.getElementById("customStartPanel");
+  panel.classList.remove("hidden");
+  // Scroll the card into view in the sidebar
+  panel.parentElement.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  document.getElementById("customStartInput").focus();
 }
 
 function toggleCustomStart() {
