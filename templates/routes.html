@@ -88,15 +88,51 @@
     </a>
   </div>
 
+  <!-- ── BRIEFING NOTES ── -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+    <div class="flex items-center justify-between mb-2">
+      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+        Notes for Today's AI Briefing
+      </label>
+      <span id="notesSaveStatus" class="text-xs text-gray-400"></span>
+    </div>
+    <textarea id="briefingNotes" rows="3"
+              placeholder="Add context for Claude — e.g. road closures, staff changes, special requests, anything unusual today…"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700
+                     focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none
+                     placeholder-gray-300"></textarea>
+    <div class="flex justify-end mt-2">
+      <button onclick="saveNotes()"
+              class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                     px-4 py-1.5 rounded-lg transition-colors">
+        Save Notes
+      </button>
+    </div>
+  </div>
+
   <!-- ── AI DAILY BRIEFING ── -->
+  <!-- Prompt button (shown by default) -->
+  <div id="briefingPrompt" class="mb-6">
+    <button onclick="startBriefing()"
+            class="w-full bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100
+                   rounded-xl px-5 py-4 flex items-center gap-3 text-sm text-indigo-500
+                   hover:border-indigo-300 hover:text-indigo-700 transition-colors text-left">
+      <span class="text-indigo-400 font-bold text-base shrink-0">✦</span>
+      <span class="font-medium">Generate today's AI briefing</span>
+      <span class="ml-auto text-xs text-indigo-300 font-normal">~$0.001 per generation</span>
+    </button>
+  </div>
+
+  <!-- Loading state -->
   <div id="briefingLoading"
-       class="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100
+       class="hidden bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100
               rounded-xl px-5 py-4 mb-6 flex items-center gap-3 text-sm text-indigo-500">
     <div class="w-4 h-4 border-2 border-indigo-200 border-t-indigo-500 rounded-full
                 animate-spin shrink-0"></div>
     <span>Generating today's briefing…</span>
   </div>
 
+  <!-- Result card -->
   <div id="briefingCard"
        class="hidden bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100
               rounded-xl px-5 py-4 mb-6">
@@ -118,6 +154,7 @@
     </div>
   </div>
 
+  <!-- Error state -->
   <div id="briefingError"
        class="hidden bg-red-50 border border-red-200 rounded-xl px-5 py-3 mb-6 text-sm text-red-700">
     <span class="font-semibold">Briefing unavailable.</span>
@@ -173,9 +210,15 @@
 
 <script>
 /* ── AI BRIEFING ── */
+function startBriefing() {
+  document.getElementById("briefingPrompt").classList.add("hidden");
+  loadBriefing(false);
+}
+
 async function loadBriefing(force = false) {
   document.getElementById("briefingCard").classList.add("hidden");
   document.getElementById("briefingError").classList.add("hidden");
+  document.getElementById("briefingPrompt").classList.add("hidden");
   document.getElementById("briefingLoading").classList.remove("hidden");
   try {
     const resp = await fetch(force ? "/briefing?refresh=1" : "/briefing");
@@ -381,8 +424,37 @@ function selectDay(ds) {
   });
 }
 
+/* ── BRIEFING NOTES ── */
+async function loadNotes() {
+  try {
+    const res  = await fetch(`/briefing/notes?date=${TODAY_STR}`);
+    const data = await res.json();
+    if (data.note_text) {
+      document.getElementById("briefingNotes").value = data.note_text;
+      document.getElementById("notesSaveStatus").textContent = "Saved";
+    }
+  } catch (_) {}
+}
+
+async function saveNotes() {
+  const text   = document.getElementById("briefingNotes").value;
+  const status = document.getElementById("notesSaveStatus");
+  status.textContent = "Saving…";
+  try {
+    const res = await fetch("/briefing/notes", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ date: TODAY_STR, note_text: text }),
+    });
+    const data = await res.json();
+    status.textContent = data.success ? "Saved" : "Error saving";
+  } catch (_) {
+    status.textContent = "Error saving";
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  loadBriefing();
+  loadNotes();
   buildCalendar();
 
   // If redirected from save with ?date=, jump straight to that day

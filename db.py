@@ -101,6 +101,14 @@ def init_db():
         created_at TEXT
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS briefing_notes (
+        id SERIAL PRIMARY KEY,
+        note_date TEXT NOT NULL UNIQUE,
+        note_text TEXT NOT NULL DEFAULT '',
+        updated_by INTEGER,
+        updated_at TEXT
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")

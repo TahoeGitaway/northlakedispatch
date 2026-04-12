@@ -16,7 +16,7 @@ from datetime import datetime
 import anthropic
 import requests
 from flask import Blueprint, jsonify, request
-from flask_login import login_required
+from flask_login import login_required, current_user
 
 from db import get_db, get_cursor
 
@@ -98,7 +98,16 @@ def _fmt_time(hhmm: str) -> str:
         return hhmm
 
 
-# ── DB helper ─────────────────────────────────────────────────────
+# ── DB helpers ────────────────────────────────────────────────────
+
+def _fetch_briefing_notes(date_str: str) -> str:
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT note_text FROM briefing_notes WHERE note_date = %s", (date_str,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return (row["note_text"] or "").strip() if row else ""
+
 
 def _fetch_todays_routes(date_str: str) -> list:
     conn = get_db()
@@ -119,7 +128,7 @@ def _fetch_todays_routes(date_str: str) -> list:
 
 # ── Claude briefing generator ─────────────────────────────────────
 
-def _build_prompt(date_str: str, routes: list, checkins: list) -> str:
+def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") -> str:
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     day_name = date_obj.strftime("%A, %B ") + str(date_obj.day)
     lines    = [f"Today is {day_name}.\n"]
@@ -189,16 +198,20 @@ def _build_prompt(date_str: str, routes: list, checkins: list) -> str:
     else:
         lines.append("(Breezeway data not available — credentials not yet configured.)")
 
+    # Dispatcher notes
+    if notes:
+        lines.append(f"Additional notes from the dispatcher:\n{notes}")
+
     return "\n\n".join(lines)
 
 
-def _generate_briefing(date_str: str, routes: list, checkins: list) -> tuple[str | None, str | None]:
+def _generate_briefing(date_str: str, routes: list, checkins: list, notes: str = "") -> tuple[str | None, str | None]:
     """Returns (text, error_reason). One of the two will always be None."""
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return None, "ANTHROPIC_API_KEY is not set in the server environment."
 
-    prompt = _build_prompt(date_str, routes, checkins)
+    prompt = _build_prompt(date_str, routes, checkins, notes)
     try:
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
@@ -221,7 +234,42 @@ def _generate_briefing(date_str: str, routes: list, checkins: list) -> tuple[str
         return None, f"{type(e).__name__}: {e}"
 
 
-# ── Endpoint ──────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────
+
+@briefing_bp.route("/briefing/notes", methods=["GET"])
+@login_required
+def get_briefing_notes():
+    date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    return jsonify({"note_text": _fetch_briefing_notes(date_str), "date": date_str})
+
+
+@briefing_bp.route("/briefing/notes", methods=["POST"])
+@login_required
+def save_briefing_notes():
+    data      = request.get_json(force=True)
+    date_str  = (data.get("date") or datetime.utcnow().strftime("%Y-%m-%d")).strip()
+    note_text = (data.get("note_text") or "").strip()
+    now       = datetime.utcnow().isoformat()
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        """INSERT INTO briefing_notes (note_date, note_text, updated_by, updated_at)
+           VALUES (%s, %s, %s, %s)
+           ON CONFLICT (note_date) DO UPDATE
+           SET note_text = EXCLUDED.note_text,
+               updated_by = EXCLUDED.updated_by,
+               updated_at = EXCLUDED.updated_at""",
+        (date_str, note_text, current_user.id, now)
+    )
+    conn.commit()
+    cur.close(); conn.close()
+
+    # Bust the briefing cache for this date so the next generation picks up the new notes
+    _briefing_cache.pop(date_str, None)
+
+    return jsonify({"success": True})
+
 
 @briefing_bp.route("/briefing")
 @login_required
@@ -237,7 +285,8 @@ def daily_briefing():
 
     routes        = _fetch_todays_routes(date_str)
     checkins      = _fetch_breezeway_checkins(date_str)
-    text, err_msg = _generate_briefing(date_str, routes, checkins)
+    notes         = _fetch_briefing_notes(date_str)
+    text, err_msg = _generate_briefing(date_str, routes, checkins, notes)
 
     if text:
         _briefing_cache[date_str] = (now, text)
