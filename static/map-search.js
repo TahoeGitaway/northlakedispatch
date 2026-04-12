@@ -539,9 +539,45 @@ function _showStartChangedBanner() {
   wb.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-// Allow pressing Enter in the custom start input
+async function applyCustomEnd() {
+  const input   = document.getElementById("pillEndInput");
+  const errEl   = document.getElementById("pillEndError");
+  const spinner = document.getElementById("pillEndSpinner");
+  const address = input.value.trim();
+  if (!address) return;
+
+  errEl.classList.add("hidden");
+  spinner.classList.remove("hidden");
+  input.disabled = true;
+
+  try {
+    const loc = await geocodeAddress(address);
+    endLocation = { name: loc.name, lat: loc.lat, lng: loc.lng };
+    input.value = "";
+    _updateStartEndPill();
+    if (isOptimized) _showStartChangedBanner();
+  } catch (e) {
+    errEl.textContent = "Address not found — try a more specific address.";
+    errEl.classList.remove("hidden");
+  } finally {
+    spinner.classList.add("hidden");
+    input.disabled = false;
+  }
+}
+
+function resetEnd() {
+  endLocation = { ...DEFAULT_END_LOCATION };
+  document.getElementById("pillEndInput").value = "";
+  document.getElementById("pillEndError").classList.add("hidden");
+  _updateStartEndPill();
+  if (isOptimized) _showStartChangedBanner();
+}
+
+// Allow pressing Enter in the custom start/end inputs
 document.getElementById("customStartInput")
   .addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyCustomStart(); } });
+document.getElementById("pillEndInput")
+  .addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyCustomEnd(); } });
 
 /* ── ADDRESS FALLBACK in main search (any address outside DB) ── */
 async function geocodeAndAddStop(address, asCheckin, asPriority) {

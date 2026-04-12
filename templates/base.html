@@ -19,7 +19,10 @@
 
     <nav class="bg-white shadow-md px-6 py-3 flex justify-between items-center">
         <div class="flex items-center gap-6">
-            <h1 class="font-bold text-lg text-gray-800">🏔 North Lake Dispatch</h1>
+            <h1 class="font-bold text-lg text-gray-800 flex items-center gap-2">
+                <img src="{{ url_for('static', filename='favicon.jpg') }}" class="w-7 h-7 object-contain">
+                North Lake Dispatch
+            </h1>
             {% if current_user.is_authenticated %}
             <div class="flex gap-4 text-sm">
                 <a href="{{ url_for('dispatch.home') }}"
