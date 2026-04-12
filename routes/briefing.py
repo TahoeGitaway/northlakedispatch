@@ -113,7 +113,7 @@ def _fetch_todays_routes(date_str: str) -> list:
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
-        """SELECT r.name, r.assigned_to, r.stops_json, u.name AS created_by_name
+        """SELECT r.id, r.name, r.assigned_to, r.stops_json, u.name AS created_by_name
            FROM saved_routes r
            JOIN users u ON r.created_by = u.id
            WHERE r.route_date = %s
@@ -142,7 +142,8 @@ def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") 
             priority = sum(1 for s in stops if s.get("priority_checkin"))
             checkin  = sum(1 for s in stops if s.get("arrival") and not s.get("priority_checkin"))
 
-            line = f'- "{r["name"]}"'
+            url  = f"/?load={r['id']}"
+            line = f'- [{r["name"]}]({url})'
             if r["assigned_to"]:
                 line += f' (assigned to {r["assigned_to"]})'
             line += f": {n} stop{'s' if n != 1 else ''}"
@@ -221,7 +222,8 @@ def _generate_briefing(date_str: str, routes: list, checkins: list, notes: str =
                 "You are a concise operations briefer for a vacation rental cleaning company "
                 "in Lake Tahoe. Given today's dispatch routes and Breezeway check-in data, "
                 "write a single short paragraph (3-5 sentences) summarizing the day. "
-                "Refer to routes by their actual names. Note priority check-ins and their deadlines. "
+                "When you mention a route by name, preserve its markdown link exactly as given in the input, "
+                "e.g. [Route Name](/?load=123). Note priority check-ins and their deadlines. "
                 "Describe Breezeway check-ins by type (owner stays vs guest arrivals) and timing. "
                 "Be direct and useful. Do not start with a greeting."
             ),

@@ -227,7 +227,12 @@ async function loadBriefing(force = false) {
     const data = await resp.json();
     document.getElementById("briefingLoading").classList.add("hidden");
     if (data.text) {
-      document.getElementById("briefingText").textContent = data.text;
+      // Convert markdown links [text](url) → clickable anchors
+      const html = data.text.replace(
+        /\[([^\]]+)\]\((\/[^)]+)\)/g,
+        '<a href="$2" class="text-indigo-600 hover:underline font-medium">$1</a>'
+      );
+      document.getElementById("briefingText").innerHTML = html;
       document.getElementById("briefingCard").classList.remove("hidden");
     } else {
       document.getElementById("briefingErrorDetail").textContent = data.error || "Unknown error.";
