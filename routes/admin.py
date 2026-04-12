@@ -127,6 +127,60 @@ def admin_reset_password(user_id):
     return redirect(url_for("admin.admin_users"))
 
 
+@admin_bp.route("/admin/users/<int:user_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_delete_user(user_id):
+    if user_id == current_user.id:
+        flash("You cannot delete your own account.", "error")
+        return redirect(url_for("admin.admin_users"))
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT name, email, role FROM users WHERE id = %s", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        flash("User not found.", "error")
+        cur.close(); conn.close()
+        return redirect(url_for("admin.admin_users"))
+
+    name = row["name"]
+
+    # Stamp the deleted user's display name on their routes BEFORE reassigning,
+    # so the "created by" attribution remains visible even after the account is gone.
+    # Only stamp rows that don't already have a display override (e.g. a prior deletion).
+    cur.execute(
+        "UPDATE saved_routes SET created_by_display = %s "
+        "WHERE created_by = %s AND (created_by_display IS NULL OR created_by_display = '')",
+        (f"{name} (deleted)", user_id)
+    )
+    # Now reassign the FK so the JOIN in all queries continues to resolve.
+    cur.execute(
+        "UPDATE saved_routes SET created_by = %s WHERE created_by = %s",
+        (current_user.id, user_id)
+    )
+    cur.execute(
+        "UPDATE saved_routes SET last_edited_by = %s WHERE last_edited_by = %s",
+        (current_user.id, user_id)
+    )
+    # Reassign carpet log entries the same way
+    cur.execute(
+        "UPDATE carpet_log SET logged_by = %s WHERE logged_by = %s",
+        (current_user.id, user_id)
+    )
+    # Cancel any pending invites sent by this user
+    cur.execute("DELETE FROM invites WHERE invited_by = %s AND used = 0", (user_id,))
+    # Cancel any unused invite this user was sent (cleanup)
+    cur.execute("DELETE FROM invites WHERE email = %s AND used = 0", (row["email"],))
+    # Delete the user
+    cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+    conn.commit()
+    cur.close(); conn.close()
+
+    flash(f"Account for {name} has been permanently deleted. Their routes have been reassigned to you.", "success")
+    return redirect(url_for("admin.admin_users"))
+
+
 # ── Invite system ─────────────────────────────────────────────────
 
 @admin_bp.route("/admin/invite", methods=["POST"])
@@ -185,10 +239,10 @@ def _send_invite_email(to_email: str, token: str):
     message = Mail(
         from_email=FROM_EMAIL,
         to_emails=to_email,
-        subject="You're invited to Tahoe Dispatch",
+        subject="You're invited to North Lake Dispatch",
         html_content=f"""
             <p>Hi,</p>
-            <p>You've been invited to join <strong>Tahoe Dispatch</strong> —
+            <p>You've been invited to join <strong>North Lake Dispatch</strong> —
                Tahoe Getaways' internal routing tool.</p>
             <p>Click the link below to create your account.
                This link expires in <strong>48 hours</strong>.</p>
@@ -238,7 +292,7 @@ def geocode_address():
     data    = request.json or {}
     address = (data.get("address") or "").strip()
     if not address:
-        return jsonify({"error": "Address is required"}), 400
+        return jsonify({"error": "Address is required. Enter a street address before geocoding."}), 400
 
     suffixes = [
         ", Lake Tahoe, CA", ", Tahoe City, CA", ", South Lake Tahoe, CA",
@@ -266,10 +320,11 @@ def geocode_address():
                         "display_name":   r.get("display_name", ""),
                         "resolved_query": query,
                     })
-        except Exception:
+        except Exception as e:
+            current_app.logger.warning(f"Nominatim geocode attempt failed for '{query}': {e}")
             continue
 
-    return jsonify({"error": "Could not geocode this address in the Tahoe region."}), 404
+    return jsonify({"error": f"Couldn't place '{address}' within the Tahoe region (lat 38.5–40.0, lng -120.8 to -119.4). Try including the city and state, or verify the address is in the service area. (Nominatim returned no results after {len(suffixes)} attempts.)"}), 404
 
 
 @admin_bp.route("/admin/properties/add", methods=["POST"])
@@ -283,12 +338,13 @@ def add_property():
     lng     = data.get("lng")
 
     if not name or not address or lat is None or lng is None:
-        return jsonify({"error": "Name, address, lat and lng are all required"}), 400
+        missing = [f for f, v in [("name", name), ("address", address), ("lat", lat), ("lng", lng)] if not v and v != 0]
+        return jsonify({"error": f"Can't save the property — the following fields are missing: {', '.join(missing)}. Geocode the address first to get coordinates."}), 400
 
     try:
         lat = float(lat); lng = float(lng)
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid coordinates"}), 400
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": f"Coordinates must be numbers (e.g. lat: 39.34, lng: -120.21). Got lat={lat!r}, lng={lng!r}. Detail: {e}"}), 400
 
     conn = get_db()
     cur  = get_cursor(conn)
@@ -314,7 +370,8 @@ def update_property(prop_id):
     lng     = data.get("lng")
 
     if not name or not address or lat is None or lng is None:
-        return jsonify({"error": "All fields required"}), 400
+        missing = [f for f, v in [("name", name), ("address", address), ("lat", lat), ("lng", lng)] if not v and v != 0]
+        return jsonify({"error": f"Can't update the property — the following fields are missing: {', '.join(missing)}."}), 400
 
     conn = get_db()
     cur  = get_cursor(conn)
@@ -349,7 +406,7 @@ def delete_property(prop_id):
 def upload_csv():
     f = request.files.get("csv_file")
     if not f or not f.filename.endswith(".csv"):
-        flash("Please upload a valid .csv file.", "error")
+        flash("Please upload a .csv file. Other file types are not accepted.", "error")
         return redirect(url_for("admin.admin_users"))
 
     try:
@@ -359,21 +416,32 @@ def upload_csv():
         required = {"Property Name", "Unit Address", "Latitude", "Longitude"}
         if not required.issubset(set(reader.fieldnames or [])):
             missing = required - set(reader.fieldnames or [])
-            flash(f"CSV missing columns: {', '.join(missing)}", "error")
+            flash(
+                f"The CSV is missing required columns: {', '.join(sorted(missing))}. "
+                f"Required headers are: Property Name, Unit Address, Latitude, Longitude.",
+                "error"
+            )
             return redirect(url_for("admin.admin_users"))
 
-        rows = []
-        for row in reader:
+        rows      = []
+        skipped   = 0
+        for i, row in enumerate(reader, start=2):   # row 1 is the header
             try:
                 rows.append((
                     row["Property Name"], row["Unit Address"],
                     float(row["Latitude"]), float(row["Longitude"])
                 ))
-            except (ValueError, KeyError):
+            except (ValueError, KeyError) as e:
+                skipped += 1
+                current_app.logger.warning(f"CSV row {i} skipped: {e} — data: {dict(row)}")
                 continue
 
         if not rows:
-            flash("No valid rows found in CSV.", "error")
+            flash(
+                "No valid rows were found in the CSV. "
+                "Check that Latitude and Longitude columns contain numbers and that no rows are empty.",
+                "error"
+            )
             return redirect(url_for("admin.admin_users"))
 
         conn = get_db()
@@ -387,10 +455,18 @@ def upload_csv():
         )
         conn.commit()
         cur.close(); conn.close()
-        flash(f"✅ Properties reloaded — {len(rows)} properties imported.", "success")
+
+        msg = f"Properties reloaded — {len(rows)} imported."
+        if skipped:
+            msg += f" {skipped} row(s) were skipped due to missing or non-numeric coordinates (see server logs for details)."
+        flash(msg, "success")
 
     except Exception as e:
-        flash(f"Upload failed: {str(e)}", "error")
+        flash(
+            f"Upload failed — the file couldn't be processed. "
+            f"Make sure it's a valid UTF-8 CSV and try again. Detail: {e}",
+            "error"
+        )
 
     return redirect(url_for("admin.admin_users"))
 

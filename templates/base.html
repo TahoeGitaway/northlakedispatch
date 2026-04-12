@@ -19,10 +19,11 @@
 
     <nav class="bg-white shadow-md px-6 py-3 flex justify-between items-center">
         <div class="flex items-center gap-6">
-            <h1 class="font-bold text-lg text-gray-800 flex items-center gap-2">
+            <a href="{{ url_for('dispatch.home') }}"
+               class="font-bold text-lg text-gray-800 flex items-center gap-2 hover:opacity-80 transition-opacity">
                 <img src="{{ url_for('static', filename='favicon.jpg') }}" class="w-7 h-7 object-contain">
                 North Lake Dispatch
-            </h1>
+            </a>
             {% if current_user.is_authenticated %}
             <div class="flex gap-4 text-sm">
                 <a href="{{ url_for('dispatch.home') }}"
@@ -40,17 +41,7 @@
                           {% if request.endpoint == 'dispatch.portfolio' %}text-indigo-600{% endif %}">
                     Portfolio
                 </a>
-                <a href="{{ url_for('carpet.carpet_log') }}"
-                   class="text-gray-600 hover:text-indigo-600 font-medium
-                          {% if request.endpoint == 'carpet.carpet_log' %}text-indigo-600{% endif %}">
-                    Carpet Log
-                </a>
                 {% if current_user.is_admin %}
-                <a href="{{ url_for('admin.admin_users') }}"
-                   class="text-gray-600 hover:text-indigo-600 font-medium
-                          {% if request.endpoint == 'admin.admin_users' %}text-indigo-600{% endif %}">
-                    Users
-                </a>
                 <a href="{{ url_for('admin.admin_properties') }}"
                    class="text-gray-600 hover:text-indigo-600 font-medium
                           {% if request.endpoint == 'admin.admin_properties' %}text-indigo-600{% endif %}">
@@ -66,7 +57,9 @@
             <span class="text-gray-500">
                 {{ current_user.name }}
                 {% if current_user.is_admin %}
-                <span class="ml-1 text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">admin</span>
+                <a href="{{ url_for('admin.admin_users') }}"
+                   class="ml-1 text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium
+                          hover:bg-indigo-200 transition-colors">admin</a>
                 {% endif %}
             </span>
             <a href="{{ url_for('auth.logout') }}"

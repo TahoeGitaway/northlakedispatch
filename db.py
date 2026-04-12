@@ -107,6 +107,7 @@ def init_db():
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes_public INTEGER DEFAULT 0")
+    cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS created_by_display TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS rescheduled INTEGER DEFAULT 0")

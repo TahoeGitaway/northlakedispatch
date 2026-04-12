@@ -180,7 +180,8 @@ def saved_routes():
     cur  = get_cursor(conn)
     q = """SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
                   r.total_duration, r.driving_duration, r.distance,
-                  u.name AS created_by_name, lu.name AS last_edited_by_name
+                  COALESCE(r.created_by_display, u.name) AS created_by_name,
+                  lu.name AS last_edited_by_name
            FROM saved_routes r
            JOIN users u ON r.created_by = u.id
            LEFT JOIN users lu ON r.last_edited_by = lu.id
@@ -412,12 +413,12 @@ def optimize():
     drive_only      = bool(data.get("drive_only", False))
 
     if not stops:
-        return jsonify({"error": "No stops provided"}), 400
+        return jsonify({"error": "No stops were included in the request. Add at least one property before optimizing."}), 400
 
     try:
         start_minutes = hhmm_to_minutes(start_time_hhmm)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": f"The start time '{start_time_hhmm}' isn't valid. Use HH:MM format (e.g. 09:30). Detail: {e}"}), 400
 
     deadline_minutes          = hhmm_to_minutes(CHECKIN_DEADLINE_HHMM)
     priority_deadline_minutes = hhmm_to_minutes(PRIORITY_CHECKIN_DEADLINE_HHMM)
@@ -428,8 +429,8 @@ def optimize():
             "lat":  float(start.get("lat")),
             "lng":  float(start.get("lng")),
         }
-    except Exception:
-        return jsonify({"error": "Start location must have valid lat/lng."}), 400
+    except Exception as e:
+        return jsonify({"error": f"The start location is missing valid coordinates. Make sure lat and lng are numbers. Detail: {e}"}), 400
 
     try:
         end = {
@@ -459,7 +460,7 @@ def optimize():
             continue
 
     if not cleaned_stops:
-        return jsonify({"error": "No valid stops (missing lat/lng)."}), 400
+        return jsonify({"error": "None of the submitted stops had valid coordinates (lat/lng). This usually means the property list is out of sync — try refreshing the page and re-adding your stops."}), 400
 
     # Build location list. When end differs from start, append it as the
     # final node so OR-Tools can route to it instead of looping back.
@@ -488,7 +489,7 @@ def optimize():
             end_node=end_node
         )
         if ordered_nodes is None:
-            return jsonify({"error": "No solution found"}), 500
+            return jsonify({"error": "The route optimizer couldn't find a valid solution. Try reducing the number of stops or widening the time window. (OR-Tools returned no solution after all three passes.)"}), 500
         used_deadline_constraints = used_soft_penalties = False
     else:
         stop_service = [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
@@ -551,7 +552,7 @@ def optimize():
                 end_node=end_node
             )
             if ordered_nodes is None:
-                return jsonify({"error": "No solution found"}), 500
+                return jsonify({"error": "The route optimizer failed on all three passes (hard constraints, soft penalties, and unconstrained). This is unexpected — check that OR-Tools is installed correctly and that the stop coordinates are in a reachable area."}), 500
 
     node_arrival_sec   = {}
     for pos, node in enumerate(ordered_nodes):
@@ -647,7 +648,7 @@ def matrix_row():
     existing = data.get("existing_stops", [])
 
     if not new_stop or not existing:
-        return jsonify({"error": "Missing new_stop or existing_stops"}), 400
+        return jsonify({"error": "Request is missing required fields. Expected 'new_stop' (a single stop object) and 'existing_stops' (a list of current stops)."}), 400
 
     all_locs = [new_stop] + existing
     mat      = _google_distance_matrix(all_locs)
@@ -664,9 +665,9 @@ def matrix_row():
 def geocode():
     address = (request.json or {}).get("address", "").strip()
     if not address:
-        return jsonify({"error": "No address provided"}), 400
+        return jsonify({"error": "No address was provided. Type an address before searching."}), 400
     if not GOOGLE_MAPS_KEY:
-        return jsonify({"error": "Google Maps API key not configured"}), 500
+        return jsonify({"error": "Address lookup is unavailable — the Google Maps API key is not configured on the server. Contact your administrator. (GOOGLE_MAPS_API_KEY env var is missing.)"}), 500
     try:
         resp = requests.get(
             "https://maps.googleapis.com/maps/api/geocode/json",
@@ -674,14 +675,17 @@ def geocode():
             timeout=8,
         )
         data = resp.json()
-        if data.get("status") != "OK" or not data.get("results"):
-            return jsonify({"error": "Address not found"}), 404
-        result   = data["results"][0]
-        loc      = result["geometry"]["location"]
-        name     = result.get("formatted_address", address)
+        api_status = data.get("status")
+        if api_status != "OK" or not data.get("results"):
+            return jsonify({"error": f"Couldn't find that address. Try adding more detail (e.g. city and state). (Google Geocoding API status: {api_status})"}), 404
+        result = data["results"][0]
+        loc    = result["geometry"]["location"]
+        name   = result.get("formatted_address", address)
         return jsonify({"name": name, "lat": loc["lat"], "lng": loc["lng"]})
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "The address lookup timed out. Check your internet connection and try again. (Google Geocoding API did not respond within 8 seconds.)"}), 504
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Something went wrong during address lookup. Try again or contact your administrator. Detail: {e}"}), 500
 
 
 # ── Route geometry (Google Directions polyline for Leaflet map) ───

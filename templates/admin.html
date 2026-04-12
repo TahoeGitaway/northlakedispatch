@@ -176,6 +176,19 @@
                 </form>
               </div>
             </details>
+
+            {% if user.id != current_user.id %}
+            <form method="POST"
+                  action="{{ url_for('admin.admin_delete_user', user_id=user.id) }}"
+                  onsubmit="return confirm('Permanently delete {{ user.name|e }}?\n\nTheir routes will be reassigned to you. This cannot be undone.')">
+              <button type="submit"
+                      class="text-xs px-2 py-1 rounded border border-red-200
+                             text-red-500 hover:bg-red-50 hover:text-red-700
+                             transition-colors">
+                Delete
+              </button>
+            </form>
+            {% endif %}
           </div>
         </td>
       </tr>

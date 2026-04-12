@@ -2,9 +2,6 @@
 {% block title %}Properties — North Lake Dispatch{% endblock %}
 {% block content %}
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-
 <div class="max-w-5xl mx-auto px-6 py-8">
 
   <div class="flex items-center justify-between mb-6">
@@ -17,15 +14,6 @@
       ← User Management
     </a>
   </div>
-
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-    <div class="mb-4 px-4 py-3 rounded-lg text-sm font-medium
-                {{ 'bg-green-100 text-green-800' if cat == 'success' else 'bg-red-100 text-red-800' }}">
-      {{ msg }}
-    </div>
-    {% endfor %}
-  {% endwith %}
 
   <!-- ══ ADD PROPERTY FORM ══ -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">

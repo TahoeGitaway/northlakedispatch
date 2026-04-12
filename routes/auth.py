@@ -95,9 +95,21 @@ def forgot_password():
                 (token, expires, row["id"])
             )
             conn.commit()
-            _send_reset_email(email, token)
+            email_ok, email_error = _send_reset_email(email, token)
+            cur.close(); conn.close()
+            if email_ok:
+                flash("Password reset link sent — check your email.", "info")
+            else:
+                reset_url = f"{APP_BASE_URL}/reset-password/{token}"
+                flash(
+                    f"Couldn't send the reset email right now — the email service returned an error "
+                    f"({email_error}). Share this link directly with the user (expires in 1 hour): {reset_url}",
+                    "error"
+                )
+            return redirect(url_for("auth.login"))
 
         cur.close(); conn.close()
+        # Intentionally vague: don't reveal whether an email exists in the system
         flash("If that email is in our system, a reset link has been sent.", "info")
         return redirect(url_for("auth.login"))
 
@@ -152,14 +164,18 @@ def reset_password(token):
 
 
 def _send_reset_email(to_email: str, token: str):
+    """Returns (success: bool, error_message: str|None)."""
+    if not SENDGRID_API_KEY:
+        return False, "SENDGRID_API_KEY is not set in environment variables"
+
     reset_url = f"{APP_BASE_URL}/reset-password/{token}"
     message = Mail(
         from_email=FROM_EMAIL,
         to_emails=to_email,
-        subject="Tahoe Dispatch — Password Reset",
+        subject="North Lake Dispatch — Password Reset",
         html_content=f"""
             <p>Hi,</p>
-            <p>Click the link below to reset your Tahoe Dispatch password.
+            <p>Click the link below to reset your North Lake Dispatch password.
                This link expires in 1 hour.</p>
             <p><a href="{reset_url}">{reset_url}</a></p>
             <p>If you didn't request this, you can ignore this email.</p>
@@ -167,10 +183,14 @@ def _send_reset_email(to_email: str, token: str):
         """
     )
     try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        sg.send(message)
+        sg       = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        if response.status_code >= 400:
+            return False, f"SendGrid returned HTTP {response.status_code}"
+        return True, None
     except Exception as e:
         current_app.logger.error(f"SendGrid reset error: {e}")
+        return False, str(e)
 
 
 # ── Invite registration ───────────────────────────────────────────
@@ -246,7 +266,7 @@ def register(token):
         user = User(row["id"], row["email"], row["name"], row["role"], row["is_active"])
         login_user(user)
         session.permanent = True
-        flash(f"Welcome to Tahoe Dispatch, {name}! Your account is ready.", "success")
+        flash(f"Welcome to North Lake Dispatch, {name}! Your account is ready.", "success")
         return redirect(url_for("dispatch.home"))
 
     cur.close(); conn.close()
