@@ -17,7 +17,6 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from db import (get_db, get_cursor, DEFAULT_START,
                 CHECKIN_DEADLINE_HHMM, PRIORITY_CHECKIN_DEADLINE_HHMM,
                 hhmm_to_minutes, minutes_to_hhmm)
-from routes.auth import admin_required
 
 dispatch_bp = Blueprint("dispatch", __name__)
 
@@ -309,15 +308,17 @@ def load_route(route_id):
 
 @dispatch_bp.route("/routes/<int:route_id>/delete", methods=["POST"])
 @login_required
-@admin_required
 def delete_route(route_id):
+    from flask import jsonify
     conn = get_db()
     cur  = get_cursor(conn)
-    cur.execute("DELETE FROM saved_routes WHERE id = %s", (route_id,))
+    cur.execute("DELETE FROM saved_routes WHERE id = %s RETURNING id", (route_id,))
+    deleted = cur.fetchone()
     conn.commit()
     cur.close(); conn.close()
-    flash("Route deleted.", "success")
-    return redirect(url_for("dispatch.saved_routes"))
+    if not deleted:
+        return jsonify({"error": f"Route {route_id} not found."}), 404
+    return jsonify({"success": True})
 
 
 # ── OR-Tools solver ───────────────────────────────────────────────

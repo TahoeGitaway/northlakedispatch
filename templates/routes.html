@@ -406,18 +406,27 @@ function selectDay(ds) {
     shareBtn.onclick = () => shareRoute(route.id, route.name);
     btns.appendChild(shareBtn);
 
-    {% if current_user.is_admin %}
-    const delForm = document.createElement("form");
-    delForm.method = "POST";
-    delForm.action = `/routes/${0}/delete`.replace("0", route.id);
-    delForm.onsubmit = () => confirm(`Delete "${route.name}"? This cannot be undone.`);
     const delBtn = document.createElement("button");
-    delBtn.type = "submit";
     delBtn.className = "text-red-400 hover:text-red-600 text-sm px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors";
     delBtn.textContent = "Delete";
-    delForm.appendChild(delBtn);
-    btns.appendChild(delForm);
-    {% endif %}
+    delBtn.onclick = async () => {
+      if (!confirm(`Delete "${route.name}"? This cannot be undone.`)) return;
+      delBtn.disabled = true;
+      delBtn.textContent = "Deleting…";
+      try {
+        const res = await fetch(`/routes/${route.id}/delete`, { method: "POST" });
+        const data = await res.json();
+        if (data.error) { alert("Delete failed: " + data.error); delBtn.disabled = false; delBtn.textContent = "Delete"; return; }
+        // Remove from local data and re-render the day
+        routesByDate[selectedDate] = (routesByDate[selectedDate] || []).filter(r => r.id !== route.id);
+        buildCalendar();
+        selectDay(selectedDate);
+      } catch (e) {
+        alert("Delete failed: " + e.message);
+        delBtn.disabled = false; delBtn.textContent = "Delete";
+      }
+    };
+    btns.appendChild(delBtn);
 
     div.appendChild(btns);
     container.appendChild(div);

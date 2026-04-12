@@ -3,6 +3,21 @@
    Depends on: all state globals, guardResponse, render functions
 ================================================================ */
 
+/* ── TOAST ── */
+function showToast(msg, durationMs = 3500) {
+  const t = document.createElement("div");
+  t.textContent = msg;
+  t.style.cssText = [
+    "position:fixed","bottom:24px","left:50%","transform:translateX(-50%)",
+    "background:#16a34a","color:#fff","font-size:14px","font-weight:600",
+    "padding:10px 20px","border-radius:8px","box-shadow:0 4px 12px rgba(0,0,0,0.2)",
+    "z-index:9999","transition:opacity 0.4s","pointer-events:none"
+  ].join(";");
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = "0"; }, durationMs - 400);
+  setTimeout(() => { t.remove(); }, durationMs);
+}
+
 /* ── OPTIMIZE ── */
 async function optimizeRoute(useGoogleMatrix = false) {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
@@ -91,6 +106,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
     renderStops();
     renderSchedule();
     await redrawRouteOnMap(data.route_polyline || null);
+    if (useGoogleMatrix) showToast("✓ Optimized with Google Maps real drive times");
   } catch(err) {
     if (err === "session_expired") return;
     document.getElementById("loadingOverlay").classList.remove("active");
@@ -202,14 +218,13 @@ async function submitUpdateRoute() {
       alert("Update failed: " + data.error);
       btn.disabled = false; btn.textContent = "↑ Update";
     } else {
-      btn.textContent = "✓ Updated!";
+      btn.textContent = "✓ Updated! Redirecting…";
       btn.classList.remove("bg-blue-600","hover:bg-blue-700");
       btn.classList.add("bg-green-600");
+      const savedDate = document.getElementById("routeDateField").value;
       setTimeout(() => {
-        btn.textContent = "↑ Update"; btn.disabled = false;
-        btn.classList.remove("bg-green-600");
-        btn.classList.add("bg-blue-600","hover:bg-blue-700");
-      }, 2000);
+        window.location.href = savedDate ? `/routes?date=${savedDate}` : "/routes";
+      }, 900);
     }
   } catch(e) {
     alert("Update failed: " + e.message);
