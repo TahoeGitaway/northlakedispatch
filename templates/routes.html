@@ -118,8 +118,10 @@
     </div>
   </div>
 
-  <div id="briefingError" class="hidden text-xs text-gray-400 mb-4 text-center">
-    Briefing unavailable — add <code>ANTHROPIC_API_KEY</code> to .env to enable it.
+  <div id="briefingError"
+       class="hidden bg-red-50 border border-red-200 rounded-xl px-5 py-3 mb-6 text-sm text-red-700">
+    <span class="font-semibold">Briefing unavailable.</span>
+    <span id="briefingErrorDetail" class="ml-1"></span>
   </div>
 
   {% if routes %}
@@ -183,10 +185,12 @@ async function loadBriefing(force = false) {
       document.getElementById("briefingText").textContent = data.text;
       document.getElementById("briefingCard").classList.remove("hidden");
     } else {
+      document.getElementById("briefingErrorDetail").textContent = data.error || "Unknown error.";
       document.getElementById("briefingError").classList.remove("hidden");
     }
-  } catch (_) {
+  } catch (e) {
     document.getElementById("briefingLoading").classList.add("hidden");
+    document.getElementById("briefingErrorDetail").textContent = "Could not reach the server: " + e.message;
     document.getElementById("briefingError").classList.remove("hidden");
   }
 }

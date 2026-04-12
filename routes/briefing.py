@@ -192,13 +192,15 @@ def _build_prompt(date_str: str, routes: list, checkins: list) -> str:
     return "\n\n".join(lines)
 
 
-def _generate_briefing(date_str: str, routes: list, checkins: list) -> str | None:
-    if not ANTHROPIC_API_KEY:
-        return None
+def _generate_briefing(date_str: str, routes: list, checkins: list) -> tuple[str | None, str | None]:
+    """Returns (text, error_reason). One of the two will always be None."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return None, "ANTHROPIC_API_KEY is not set in the server environment."
 
     prompt = _build_prompt(date_str, routes, checkins)
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
             model      = "claude-haiku-4-5-20251001",
             max_tokens = 300,
@@ -212,9 +214,11 @@ def _generate_briefing(date_str: str, routes: list, checkins: list) -> str | Non
             ),
             messages   = [{"role": "user", "content": prompt}],
         )
-        return msg.content[0].text
-    except Exception:
-        return None
+        return msg.content[0].text, None
+    except Exception as e:
+        import flask
+        flask.current_app.logger.error(f"Briefing generation failed: {type(e).__name__}: {e}")
+        return None, f"{type(e).__name__}: {e}"
 
 
 # ── Endpoint ──────────────────────────────────────────────────────
@@ -231,12 +235,12 @@ def daily_briefing():
         if now - ts < CACHE_TTL:
             return jsonify({"text": text, "cached": True})
 
-    routes   = _fetch_todays_routes(date_str)
-    checkins = _fetch_breezeway_checkins(date_str)
-    text     = _generate_briefing(date_str, routes, checkins)
+    routes        = _fetch_todays_routes(date_str)
+    checkins      = _fetch_breezeway_checkins(date_str)
+    text, err_msg = _generate_briefing(date_str, routes, checkins)
 
     if text:
         _briefing_cache[date_str] = (now, text)
         return jsonify({"text": text, "cached": False})
 
-    return jsonify({"text": None, "error": "Briefing unavailable — check ANTHROPIC_API_KEY."})
+    return jsonify({"text": None, "error": err_msg or "Unknown error generating briefing."})
