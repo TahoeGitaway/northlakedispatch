@@ -274,7 +274,7 @@ def save_briefing_notes():
 @briefing_bp.route("/briefing")
 @login_required
 def daily_briefing():
-    date_str      = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str      = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     force_refresh = request.args.get("refresh") == "1"
     now           = time.time()
 

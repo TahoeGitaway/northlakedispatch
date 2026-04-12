@@ -220,8 +220,10 @@ async function loadBriefing(force = false) {
   document.getElementById("briefingError").classList.add("hidden");
   document.getElementById("briefingPrompt").classList.add("hidden");
   document.getElementById("briefingLoading").classList.remove("hidden");
+  const briefingDate = selectedDate || TODAY_STR;
   try {
-    const resp = await fetch(force ? "/briefing?refresh=1" : "/briefing");
+    const url = force ? `/briefing?refresh=1&date=${briefingDate}` : `/briefing?date=${briefingDate}`;
+    const resp = await fetch(url);
     const data = await resp.json();
     document.getElementById("briefingLoading").classList.add("hidden");
     if (data.text) {
@@ -344,6 +346,13 @@ function selectDay(ds) {
   selectedDate = ds;
   buildCalendar();
 
+  // Reset briefing UI for the newly selected day
+  document.getElementById("briefingPrompt").classList.remove("hidden");
+  document.getElementById("briefingCard").classList.add("hidden");
+  document.getElementById("briefingLoading").classList.add("hidden");
+  document.getElementById("briefingError").classList.add("hidden");
+  loadNotes();
+
   const routes = routesByDate[ds] || [];
   const date   = new Date(ds + "T00:00:00");
   const label  = date.toLocaleDateString('default', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
@@ -435,8 +444,11 @@ function selectDay(ds) {
 
 /* ── BRIEFING NOTES ── */
 async function loadNotes() {
+  const d = selectedDate || TODAY_STR;
+  document.getElementById("briefingNotes").value = "";
+  document.getElementById("notesSaveStatus").textContent = "";
   try {
-    const res  = await fetch(`/briefing/notes?date=${TODAY_STR}`);
+    const res  = await fetch(`/briefing/notes?date=${d}`);
     const data = await res.json();
     if (data.note_text) {
       document.getElementById("briefingNotes").value = data.note_text;
@@ -446,6 +458,7 @@ async function loadNotes() {
 }
 
 async function saveNotes() {
+  const d      = selectedDate || TODAY_STR;
   const text   = document.getElementById("briefingNotes").value;
   const status = document.getElementById("notesSaveStatus");
   status.textContent = "Saving…";
@@ -453,7 +466,7 @@ async function saveNotes() {
     const res = await fetch("/briefing/notes", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ date: TODAY_STR, note_text: text }),
+      body:    JSON.stringify({ date: d, note_text: text }),
     });
     const data = await res.json();
     status.textContent = data.success ? "Saved" : "Error saving";
