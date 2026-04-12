@@ -3,7 +3,6 @@ flask-login==0.6.3
 werkzeug==3.1.8
 ortools==9.15.6755
 requests==2.33.1
-sendgrid==6.12.5
 python-dotenv==1.2.2
 gunicorn==25.3.0
 psycopg2-binary==2.9.11

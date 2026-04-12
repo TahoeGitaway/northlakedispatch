@@ -10,11 +10,8 @@ from flask import (Blueprint, render_template, request, redirect,
                    url_for, flash, session, current_app)
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash, generate_password_hash
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 
-from db import (get_db, get_cursor, User,
-                SENDGRID_API_KEY, FROM_EMAIL, APP_BASE_URL)
+from db import get_db, get_cursor, User, APP_BASE_URL
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -95,23 +92,18 @@ def forgot_password():
                 (token, expires, row["id"])
             )
             conn.commit()
-            email_ok, email_error = _send_reset_email(email, token)
             cur.close(); conn.close()
-            if email_ok:
-                flash("Password reset link sent — check your email.", "info")
-            else:
-                reset_url = f"{APP_BASE_URL}/reset-password/{token}"
-                flash(
-                    f"Couldn't send the reset email right now — the email service returned an error "
-                    f"({email_error}). Share this link directly with the user (expires in 1 hour): {reset_url}",
-                    "error"
-                )
-            return redirect(url_for("auth.login"))
+            reset_url = f"{APP_BASE_URL}/reset-password/{token}"
+            flash(
+                f"Reset link (expires in 1 hour): {reset_url}  —  "
+                f"Copy this link and open it in your browser, or ask your admin to send it to you.",
+                "info"
+            )
+            return redirect(url_for("auth.forgot_password"))
 
         cur.close(); conn.close()
-        # Intentionally vague: don't reveal whether an email exists in the system
-        flash("If that email is in our system, a reset link has been sent.", "info")
-        return redirect(url_for("auth.login"))
+        flash("No account found with that email address.", "error")
+        return redirect(url_for("auth.forgot_password"))
 
     return render_template("forgot_password.html")
 
@@ -161,36 +153,6 @@ def reset_password(token):
 
     cur.close(); conn.close()
     return render_template("reset_password.html", token=token)
-
-
-def _send_reset_email(to_email: str, token: str):
-    """Returns (success: bool, error_message: str|None)."""
-    if not SENDGRID_API_KEY:
-        return False, "SENDGRID_API_KEY is not set in environment variables"
-
-    reset_url = f"{APP_BASE_URL}/reset-password/{token}"
-    message = Mail(
-        from_email=FROM_EMAIL,
-        to_emails=to_email,
-        subject="North Lake Dispatch — Password Reset",
-        html_content=f"""
-            <p>Hi,</p>
-            <p>Click the link below to reset your North Lake Dispatch password.
-               This link expires in 1 hour.</p>
-            <p><a href="{reset_url}">{reset_url}</a></p>
-            <p>If you didn't request this, you can ignore this email.</p>
-            <p>— Tahoe Getaways Operations</p>
-        """
-    )
-    try:
-        sg       = SendGridAPIClient(SENDGRID_API_KEY)
-        response = sg.send(message)
-        if response.status_code >= 400:
-            return False, f"SendGrid returned HTTP {response.status_code}"
-        return True, None
-    except Exception as e:
-        current_app.logger.error(f"SendGrid reset error: {e}")
-        return False, str(e)
 
 
 # ── Invite registration ───────────────────────────────────────────

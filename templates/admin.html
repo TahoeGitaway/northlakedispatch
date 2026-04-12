@@ -6,27 +6,27 @@
 
   <h2 class="text-2xl font-bold text-gray-800">User Management</h2>
 
-  <!-- ══ SEND INVITE ══ -->
+  <!-- ══ INVITE ══ -->
   <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-5">
     <h3 class="font-semibold text-indigo-900 mb-1">📨 Invite Someone</h3>
     <p class="text-sm text-indigo-700 mb-4">
-      Send an invite link to a new team member. They'll receive an email to create their own account.
+      Generate an invite link. You'll get a pre-written email to copy and send yourself.
       Links expire after 48 hours.
     </p>
-    <form method="POST" action="{{ url_for('admin.admin_invite') }}"
-          class="flex gap-3 items-end flex-wrap">
+    <div class="flex gap-3 items-end flex-wrap">
       <div class="flex-1 min-w-48">
         <label class="block text-xs font-medium text-indigo-800 mb-1">Email address</label>
-        <input type="email" name="email" required placeholder="cleaner@tahoegetaways.com"
+        <input id="inviteEmail" type="email" placeholder="cleaner@tahoegetaways.com"
                class="w-full border border-indigo-300 rounded-lg px-3 py-2 text-sm
                       focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
       </div>
-      <button type="submit"
+      <button onclick="generateInvite()"
               class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
                      px-5 py-2 rounded-lg transition-colors whitespace-nowrap">
-        Send Invite
+        Generate Invite
       </button>
-    </form>
+    </div>
+    <p id="inviteError" class="hidden mt-2 text-sm text-red-600 font-medium"></p>
 
     <!-- Pending invites -->
     {% if invites %}
@@ -53,6 +53,60 @@
       </div>
     </div>
     {% endif %}
+  </div>
+
+  <!-- ══ INVITE MODAL ══ -->
+  <div id="inviteModal" class="hidden fixed inset-0 z-50 flex items-center justify-center px-4"
+       style="background:rgba(0,0,0,0.5);">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold text-gray-800 text-lg">Invite Created</h3>
+        <button onclick="closeInviteModal()"
+                class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+      </div>
+
+      <p class="text-sm text-gray-500 mb-4">
+        Copy the email below and send it to <strong id="modalTo" class="text-gray-800"></strong>
+        from your own email client.
+      </p>
+
+      <!-- Subject line -->
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Subject</label>
+          <button onclick="copyField('modalSubject', this)"
+                  class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">Copy</button>
+        </div>
+        <div id="modalSubject"
+             class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 select-all"></div>
+      </div>
+
+      <!-- Body -->
+      <div class="mb-5">
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Message Body</label>
+          <button onclick="copyField('modalBody', this)"
+                  class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">Copy</button>
+        </div>
+        <pre id="modalBody"
+             class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-3 text-sm text-gray-700
+                    whitespace-pre-wrap font-sans select-all overflow-auto max-h-64"></pre>
+      </div>
+
+      <div class="flex gap-3">
+        <button onclick="copyFullEmail()"
+                id="copyAllBtn"
+                class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                       py-2.5 rounded-lg text-sm transition-colors">
+          Copy Full Email
+        </button>
+        <button onclick="closeInviteModal()"
+                class="px-5 py-2.5 rounded-lg border border-gray-200 text-gray-600
+                       hover:bg-gray-50 text-sm font-medium transition-colors">
+          Done
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- ══ ADD USER DIRECTLY (admin shortcut) ══ -->
@@ -198,5 +252,69 @@
   </div>
 
 </div>
+
+<script>
+let _inviteData = {};
+
+async function generateInvite() {
+  const email = document.getElementById("inviteEmail").value.trim();
+  const errEl = document.getElementById("inviteError");
+  errEl.classList.add("hidden");
+
+  if (!email) { errEl.textContent = "Enter an email address."; errEl.classList.remove("hidden"); return; }
+
+  try {
+    const res  = await fetch("{{ url_for('admin.admin_invite') }}", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      errEl.textContent = data.error || "Something went wrong.";
+      errEl.classList.remove("hidden");
+      return;
+    }
+    _inviteData = data;
+    document.getElementById("modalTo").textContent      = data.invite_to;
+    document.getElementById("modalSubject").textContent = data.email_subject;
+    document.getElementById("modalBody").textContent    = data.email_body;
+    document.getElementById("inviteModal").classList.remove("hidden");
+    document.getElementById("inviteEmail").value = "";
+  } catch (e) {
+    errEl.textContent = "Request failed: " + e.message;
+    errEl.classList.remove("hidden");
+  }
+}
+
+function closeInviteModal() {
+  document.getElementById("inviteModal").classList.add("hidden");
+  window.location.reload();
+}
+
+function copyField(elementId, btn) {
+  const text = document.getElementById(elementId).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  });
+}
+
+function copyFullEmail() {
+  const subject = document.getElementById("modalSubject").textContent;
+  const body    = document.getElementById("modalBody").textContent;
+  const full    = `Subject: ${subject}\n\n${body}`;
+  navigator.clipboard.writeText(full).then(() => {
+    const btn = document.getElementById("copyAllBtn");
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = "Copy Full Email"; }, 2000);
+  });
+}
+
+document.getElementById("inviteModal").addEventListener("click", function(e) {
+  if (e.target === this) closeInviteModal();
+});
+</script>
 
 {% endblock %}

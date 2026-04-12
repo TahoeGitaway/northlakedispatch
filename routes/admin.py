@@ -13,11 +13,8 @@ from flask import (Blueprint, render_template, request, redirect,
                    url_for, flash, current_app, jsonify)
 from flask_login import login_required, current_user
 from werkzeug.security import generate_password_hash
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 
-from db import (get_db, get_cursor,
-                SENDGRID_API_KEY, FROM_EMAIL, APP_BASE_URL)
+from db import get_db, get_cursor, APP_BASE_URL
 from routes.auth import admin_required
 
 admin_bp = Blueprint("admin", __name__)
@@ -187,9 +184,12 @@ def admin_delete_user(user_id):
 @login_required
 @admin_required
 def admin_invite():
-    email = (request.form.get("email") or "").strip().lower()
+    data  = request.get_json(force=True) if request.is_json else None
+    email = ((data or {}).get("email") or request.form.get("email") or "").strip().lower()
 
     if not email:
+        if request.is_json:
+            return jsonify({"error": "Email address is required."}), 400
         flash("Email address is required.", "error")
         return redirect(url_for("admin.admin_users"))
 
@@ -197,8 +197,10 @@ def admin_invite():
     cur  = get_cursor(conn)
     cur.execute("SELECT id FROM users WHERE email = %s", (email,))
     if cur.fetchone():
-        flash(f"{email} already has an account.", "error")
         cur.close(); conn.close()
+        if request.is_json:
+            return jsonify({"error": f"{email} already has an account."}), 400
+        flash(f"{email} already has an account.", "error")
         return redirect(url_for("admin.admin_users"))
 
     cur.execute("DELETE FROM invites WHERE email = %s AND used = 0", (email,))
@@ -216,56 +218,25 @@ def admin_invite():
     conn.commit()
     cur.close(); conn.close()
 
-    email_ok, email_error = _send_invite_email(email, token)
-
-    if email_ok:
-        flash(f"Invite email sent to {email}. Link expires in 48 hours.", "success")
-    else:
-        flash(
-            f"Could not send email to {email} ({email_error}). "
-            f"Share this link manually (expires 48 hrs): {register_url}",
-            "error"
-        )
-
-    return redirect(url_for("admin.admin_users"))
-
-
-def _send_invite_email(to_email: str, token: str):
-    """Returns (success: bool, error_message: str|None)."""
-    if not SENDGRID_API_KEY:
-        return False, "SENDGRID_API_KEY is not set in environment variables"
-
-    register_url = f"{APP_BASE_URL}/register/{token}"
-    message = Mail(
-        from_email=FROM_EMAIL,
-        to_emails=to_email,
-        subject="You're invited to North Lake Dispatch",
-        html_content=f"""
-            <p>Hi,</p>
-            <p>You've been invited to join <strong>North Lake Dispatch</strong> —
-               Tahoe Getaways' internal routing tool.</p>
-            <p>Click the link below to create your account.
-               This link expires in <strong>48 hours</strong>.</p>
-            <p><a href="{register_url}" style="
-                display:inline-block; background:#4f46e5; color:#fff;
-                padding:10px 20px; border-radius:8px;
-                text-decoration:none; font-weight:600;">
-                Create My Account →
-            </a></p>
-            <p style="color:#6b7280;font-size:0.85em;">
-                Or copy this link: {register_url}
-            </p>
-            <p>— Tahoe Getaways Operations</p>
-        """
+    email_subject = "You're invited to North Lake Dispatch"
+    email_body = (
+        f"Hi,\n\n"
+        f"You've been invited to join North Lake Dispatch — "
+        f"Tahoe Getaways' internal routing and dispatch tool.\n\n"
+        f"Click the link below to create your account. "
+        f"This link expires in 48 hours:\n\n"
+        f"{register_url}\n\n"
+        f"Questions? Reach out to the operations team.\n\n"
+        f"— Tahoe Getaways Operations"
     )
-    try:
-        sg       = SendGridAPIClient(SENDGRID_API_KEY)
-        response = sg.send(message)
-        if response.status_code >= 400:
-            return False, f"SendGrid returned status {response.status_code}"
-        return True, None
-    except Exception as e:
-        return False, str(e)
+
+    return jsonify({
+        "success":       True,
+        "invite_to":     email,
+        "register_url":  register_url,
+        "email_subject": email_subject,
+        "email_body":    email_body,
+    })
 
 
 # ── Property management ───────────────────────────────────────────

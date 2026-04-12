@@ -11,10 +11,8 @@ from werkzeug.security import generate_password_hash
 from datetime import datetime
 
 # ── Config ────────────────────────────────────────────────────────
-DATABASE_URL     = os.environ.get("DATABASE_URL", "")
-SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
-FROM_EMAIL       = "operations@tahoegetaways.com"
-APP_BASE_URL     = os.environ.get("APP_BASE_URL", "http://localhost:5000")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5000")
 
 DEFAULT_START = {
     "name": "Tahoe Getaways Office",
