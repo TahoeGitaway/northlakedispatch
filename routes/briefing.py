@@ -169,7 +169,7 @@ def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") 
                 line += f", {priority} priority check-in{'s' if priority != 1 else ''} (must finish by noon)"
             if checkin:
                 line += f", {checkin} regular check-in{'s' if checkin != 1 else ''}"
-            if r.get("notes", "").strip():
+            if (r.get("notes") or "").strip():
                 line += f'. Notes: {r["notes"].strip()}'
             route_lines.append(line)
 
