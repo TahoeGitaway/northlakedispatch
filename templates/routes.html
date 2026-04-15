@@ -246,7 +246,10 @@ async function loadBriefing(force = false) {
         const tech = r.assigned_to
           ? `<span class="font-semibold text-gray-800">${r.assigned_to}</span> — `
           : "";
-        li.innerHTML = `${tech}<a href="/?load=${r.id}" class="text-indigo-600 hover:underline font-medium">${r.name}</a>: <span class="text-gray-600">${desc}</span>`;
+        const notesHtml = r.notes
+          ? `<span class="text-gray-400 ml-1">— ${r.notes}</span>`
+          : "";
+        li.innerHTML = `${tech}<a href="/?load=${r.id}" class="text-indigo-600 hover:underline font-medium">${r.name}</a>: <span class="text-gray-600">${desc}</span>${notesHtml}`;
         listEl.appendChild(li);
       });
 

@@ -113,7 +113,7 @@ def _fetch_todays_routes(date_str: str) -> list:
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
-        """SELECT r.id, r.name, r.assigned_to, r.stops_json, u.name AS created_by_name
+        """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
            FROM saved_routes r
            JOIN users u ON r.created_by = u.id
            WHERE r.route_date = %s
@@ -142,6 +142,7 @@ def _summarise_routes(routes: list) -> list:
             "stops":       len(stops),
             "priority":    priority,
             "checkins":    checkin,
+            "notes":       (r.get("notes") or "").strip(),
         })
     return out
 
@@ -168,6 +169,8 @@ def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") 
                 line += f", {priority} priority check-in{'s' if priority != 1 else ''} (must finish by noon)"
             if checkin:
                 line += f", {checkin} regular check-in{'s' if checkin != 1 else ''}"
+            if r.get("notes", "").strip():
+                line += f'. Notes: {r["notes"].strip()}'
             route_lines.append(line)
 
         lines.append(f"Dispatch routes ({len(routes)} total):\n" + "\n".join(route_lines))
