@@ -143,7 +143,8 @@
           <div class="text-xs font-semibold text-indigo-500 uppercase tracking-wide mb-1">
             Today's Briefing
           </div>
-          <p id="briefingText" class="text-sm text-gray-700 leading-relaxed"></p>
+          <p id="briefingText" class="text-sm text-gray-600 leading-relaxed mb-3"></p>
+          <ul id="briefingRouteList" class="space-y-1 text-sm"></ul>
         </div>
       </div>
       <button onclick="loadBriefing(true)"
@@ -226,13 +227,29 @@ async function loadBriefing(force = false) {
     const resp = await fetch(url);
     const data = await resp.json();
     document.getElementById("briefingLoading").classList.add("hidden");
-    if (data.text) {
-      // Convert markdown links [text](url) → clickable anchors
-      const html = data.text.replace(
-        /\[([^\]]+)\]\((\/[^)]+)\)/g,
-        '<a href="$2" class="text-indigo-600 hover:underline font-medium">$1</a>'
-      );
-      document.getElementById("briefingText").innerHTML = html;
+    if (data.blurb) {
+      document.getElementById("briefingText").textContent = data.blurb;
+
+      const listEl = document.getElementById("briefingRouteList");
+      listEl.innerHTML = "";
+      (data.routes || []).forEach(r => {
+        const li = document.createElement("li");
+        li.className = "flex items-baseline gap-2";
+
+        let desc = "";
+        const parts = [];
+        if (r.stops)    parts.push(`${r.stops} stop${r.stops !== 1 ? "s" : ""}`);
+        if (r.priority) parts.push(`<span class="text-purple-700 font-semibold">${r.priority} priority check-in${r.priority !== 1 ? "s" : ""} due by noon</span>`);
+        if (r.checkins) parts.push(`${r.checkins} regular check-in${r.checkins !== 1 ? "s" : ""}`);
+        desc = parts.join(", ");
+
+        const tech = r.assigned_to
+          ? `<span class="font-semibold text-gray-800">${r.assigned_to}</span> — `
+          : "";
+        li.innerHTML = `${tech}<a href="/?load=${r.id}" class="text-indigo-600 hover:underline font-medium">${r.name}</a>: <span class="text-gray-600">${desc}</span>`;
+        listEl.appendChild(li);
+      });
+
       document.getElementById("briefingCard").classList.remove("hidden");
     } else {
       document.getElementById("briefingErrorDetail").textContent = data.error || "Unknown error.";

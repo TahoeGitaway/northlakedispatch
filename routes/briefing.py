@@ -128,12 +128,30 @@ def _fetch_todays_routes(date_str: str) -> list:
 
 # ── Claude briefing generator ─────────────────────────────────────
 
+def _summarise_routes(routes: list) -> list:
+    """Return a list of dicts the frontend uses to render the route list."""
+    out = []
+    for r in routes:
+        stops    = [s for s in json.loads(r["stops_json"] or "[]") if not s.get("isLunch")]
+        priority = sum(1 for s in stops if s.get("priority_checkin"))
+        checkin  = sum(1 for s in stops if s.get("arrival") and not s.get("priority_checkin"))
+        out.append({
+            "id":          r["id"],
+            "name":        r["name"],
+            "assigned_to": r["assigned_to"] or "",
+            "stops":       len(stops),
+            "priority":    priority,
+            "checkins":    checkin,
+        })
+    return out
+
+
 def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") -> str:
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     day_name = date_obj.strftime("%A, %B ") + str(date_obj.day)
     lines    = [f"Today is {day_name}.\n"]
 
-    # Routes
+    # Routes (plain text for the prompt — no markdown links needed)
     if routes:
         route_lines = []
         for r in routes:
@@ -142,8 +160,7 @@ def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") 
             priority = sum(1 for s in stops if s.get("priority_checkin"))
             checkin  = sum(1 for s in stops if s.get("arrival") and not s.get("priority_checkin"))
 
-            url  = f"/?load={r['id']}"
-            line = f'- [{r["name"]}]({url})'
+            line = f'- "{r["name"]}"'
             if r["assigned_to"]:
                 line += f' (assigned to {r["assigned_to"]})'
             line += f": {n} stop{'s' if n != 1 else ''}"
@@ -217,15 +234,13 @@ def _generate_briefing(date_str: str, routes: list, checkins: list, notes: str =
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
             model      = "claude-haiku-4-5-20251001",
-            max_tokens = 300,
+            max_tokens = 150,
             system     = (
                 "You are a concise operations briefer for a vacation rental cleaning company "
-                "in Lake Tahoe. Given today's dispatch routes and Breezeway check-in data, "
-                "write a single short paragraph (3-5 sentences) summarizing the day. "
-                "When you mention a route by name, preserve its markdown link exactly as given in the input, "
-                "e.g. [Route Name](/?load=123). Note priority check-ins and their deadlines. "
-                "Describe Breezeway check-ins by type (owner stays vs guest arrivals) and timing. "
-                "Be direct and useful. Do not start with a greeting."
+                "in Lake Tahoe. Write 1-2 sentences giving a high-level overview of the day — "
+                "total workload, any priority check-in urgency, and Breezeway arrivals if present. "
+                "Do NOT list individual routes by name; those will be shown separately. "
+                "Be direct. Do not start with a greeting."
             ),
             messages   = [{"role": "user", "content": prompt}],
         )
@@ -281,17 +296,18 @@ def daily_briefing():
     now           = time.time()
 
     if not force_refresh and date_str in _briefing_cache:
-        ts, text = _briefing_cache[date_str]
+        ts, payload = _briefing_cache[date_str]
         if now - ts < CACHE_TTL:
-            return jsonify({"text": text, "cached": True})
+            return jsonify({**payload, "cached": True})
 
     routes        = _fetch_todays_routes(date_str)
     checkins      = _fetch_breezeway_checkins(date_str)
     notes         = _fetch_briefing_notes(date_str)
-    text, err_msg = _generate_briefing(date_str, routes, checkins, notes)
+    blurb, err_msg = _generate_briefing(date_str, routes, checkins, notes)
 
-    if text:
-        _briefing_cache[date_str] = (now, text)
-        return jsonify({"text": text, "cached": False})
+    if blurb:
+        payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
+        _briefing_cache[date_str] = (now, payload)
+        return jsonify({**payload, "cached": False})
 
-    return jsonify({"text": None, "error": err_msg or "Unknown error generating briefing."})
+    return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
