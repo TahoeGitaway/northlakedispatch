@@ -369,18 +369,24 @@ def _solve_route(
             if soft_deadline_penalty: time_dim.SetCumulVarSoftUpperBound(idx, latest, PENALTY)
 
     params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
 
-    # Scale time limit to problem size. PATH_CHEAPEST_ARC gives a good initial
-    # solution in milliseconds; GLS then improves it. For Tahoe-sized routes
-    # (5-15 stops in a tight geography) meaningful improvements happen early —
-    # running longer rarely changes the result.
-    #   hard pass  : needs time to prove feasibility under constraints
-    #   soft/unconstrained: good initial solution is usually good enough
+    # When time-window constraints are active, PATH_CHEAPEST_ARC often cannot
+    # build a feasible initial solution (it ignores time windows during greedy
+    # construction). LOCAL_CHEAPEST_INSERTION inserts each node into the cheapest
+    # *feasible* position, so it respects hard deadlines from the start and gives
+    # GLS a valid solution to improve. For unconstrained passes PATH_CHEAPEST_ARC
+    # is fine and slightly faster.
+    if hard_deadline or soft_deadline_penalty:
+        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.LOCAL_CHEAPEST_INSERTION
+    else:
+        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
     n_stops = max(1, size - 1)
     if hard_deadline:
-        secs = max(1, min(3, math.ceil(n_stops / 4)))   # 1 s ≤5, 2 s ≤8, 3 s ≤12
+        secs = max(2, min(5, math.ceil(n_stops / 3)))   # 2 s ≤6, 3 s ≤9, 4 s ≤12, 5 s 13+
+    elif soft_deadline_penalty:
+        secs = max(2, min(4, math.ceil(n_stops / 4)))   # 2 s ≤8, 3 s ≤12, 4 s 13+
     else:
         secs = max(1, min(2, math.ceil(n_stops / 6)))   # 1 s ≤6, 2 s 7+
     params.time_limit.FromSeconds(secs)

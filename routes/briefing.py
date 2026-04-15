@@ -240,9 +240,10 @@ def _generate_briefing(date_str: str, routes: list, checkins: list, notes: str =
             max_tokens = 150,
             system     = (
                 "You are a concise operations briefer for a vacation rental cleaning company "
-                "in Lake Tahoe. Write 1-2 sentences giving a high-level overview of the day — "
-                "total workload, any priority check-in urgency, and Breezeway arrivals if present. "
-                "Do NOT list individual routes by name; those will be shown separately. "
+                "in Lake Tahoe. Write 1-2 sentences: mention how many routes are going out today "
+                "and name the technicians assigned. If Breezeway check-in data is available, "
+                "briefly note the number of guest arrivals or owner stays. "
+                "Do NOT describe individual routes, repeat route notes, or count stops. "
                 "Be direct. Do not start with a greeting."
             ),
             messages   = [{"role": "user", "content": prompt}],
