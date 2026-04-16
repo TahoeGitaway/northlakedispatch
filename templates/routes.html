@@ -235,18 +235,18 @@ async function loadBriefing(force = false) {
       const listEl = document.getElementById("briefingRouteList");
       listEl.innerHTML = "";
       (data.routes || []).forEach(r => {
-        const li = document.createElement("li");
-        li.className = "text-sm leading-snug";
+        const div = document.createElement("div");
+        div.className = "text-sm leading-snug";
 
         const tech = r.assigned_to
           ? `<strong class="text-gray-900">${r.assigned_to}</strong> — `
           : "";
-        const routeLink = `<a href="/?load=${r.id}" class="text-indigo-600 hover:underline font-medium">${r.name}</a>`;
         const notesHtml = r.notes
-          ? `<span class="text-gray-500">: ${r.notes}</span>`
+          ? `<span class="text-gray-600">, ${r.notes}</span>`
           : "";
-        li.innerHTML = `${tech}${routeLink}${notesHtml}`;
-        listEl.appendChild(li);
+        const linkHtml = `<a href="/?load=${r.id}" class="text-indigo-500 hover:underline ml-1">(link)</a>`;
+        div.innerHTML = `${tech}${r.name}${notesHtml} ${linkHtml}`;
+        listEl.appendChild(div);
       });
 
       document.getElementById("briefingCard").classList.remove("hidden");
