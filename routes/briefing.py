@@ -59,24 +59,34 @@ def _get_breezeway_token() -> str | None:
 
 
 def _fetch_breezeway_checkins(date_str: str) -> list:
-    """Return today's Breezeway reservations, or [] if unavailable."""
+    """Return today's Breezeway reservations, paginating through all pages."""
     token = _get_breezeway_token()
     if not token:
         return []
+    all_results = []
+    page = 1
+    limit = 100
     try:
-        resp = requests.get(
-            "https://api.breezeway.io/public/inventory/v1/reservation",
-            headers={"Authorization": f"JWT {token}"},
-            params={"checkin_date_ge": date_str, "checkin_date_le": date_str, "limit": 100},
-            timeout=10,
-        )
-        data = resp.json()
-        # API may return a list directly or wrap it
-        if isinstance(data, list):
-            return data
-        return data.get("results", data.get("data", [])) or []
+        while True:
+            resp = requests.get(
+                "https://api.breezeway.io/public/inventory/v1/reservation",
+                headers={"Authorization": f"JWT {token}"},
+                params={"checkin_date_ge": date_str, "checkin_date_le": date_str,
+                        "limit": limit, "page": page},
+                timeout=10,
+            )
+            data = resp.json()
+            if isinstance(data, list):
+                page_results = data
+            else:
+                page_results = data.get("results", data.get("data", [])) or []
+            all_results.extend(page_results)
+            if len(page_results) < limit:
+                break  # last page
+            page += 1
+        return all_results
     except Exception:
-        return []
+        return all_results  # return whatever we managed to fetch
 
 
 def _classify_checkin(reservation: dict) -> str:
