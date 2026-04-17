@@ -251,10 +251,41 @@
     </table>
   </div>
 
+  <!-- ══ TEAMS ══ -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <h3 class="font-semibold text-gray-700">Teams</h3>
+      <button onclick="document.getElementById('createTeamRow').classList.toggle('hidden')"
+              class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                     px-3 py-1.5 rounded-lg transition-colors">
+        + New Team
+      </button>
+    </div>
+
+    <!-- Create team form -->
+    <div id="createTeamRow" class="hidden px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex gap-2">
+      <input id="newTeamName" type="text" placeholder="Team name…"
+             class="flex-1 border border-indigo-200 rounded-lg px-3 py-1.5 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+      <button onclick="createTeam()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-4 py-1.5 rounded-lg transition-colors">
+        Create
+      </button>
+    </div>
+    <p id="teamCreateError" class="hidden px-5 py-2 text-sm text-red-600 bg-red-50"></p>
+
+    <!-- Teams list (populated by JS) -->
+    <div id="teamsList" class="divide-y divide-gray-100 px-5 py-3">
+      <p class="text-sm text-gray-400 py-4 text-center">Loading teams…</p>
+    </div>
+  </div>
+
 </div>
 
 <script>
 let _inviteData = {};
+let _allUsers   = [];
 
 async function generateInvite() {
   const email = document.getElementById("inviteEmail").value.trim();
@@ -315,6 +346,132 @@ function copyFullEmail() {
 document.getElementById("inviteModal").addEventListener("click", function(e) {
   if (e.target === this) closeInviteModal();
 });
+
+/* ── TEAMS ── */
+async function loadTeams() {
+  try {
+    const res  = await fetch("{{ url_for('admin.admin_get_teams') }}");
+    const data = await res.json();
+    _allUsers  = data.users || [];
+    renderTeams(data.teams || []);
+  } catch(e) {
+    document.getElementById("teamsList").innerHTML =
+      `<p class="text-sm text-red-500 py-4 text-center">Failed to load teams: ${e.message}</p>`;
+  }
+}
+
+function renderTeams(teams) {
+  const el = document.getElementById("teamsList");
+  if (!teams.length) {
+    el.innerHTML = '<p class="text-sm text-gray-400 py-4 text-center">No teams yet.</p>';
+    return;
+  }
+  el.innerHTML = teams.map(t => {
+    const members = (t.members || []);
+    const memberHtml = members.length
+      ? members.map(m =>
+          `<span class="inline-flex items-center gap-1 bg-gray-100 text-gray-700 text-xs
+                        px-2 py-0.5 rounded-full">
+            ${m.name}
+            ${t.name !== "Property Specialist"
+              ? `<button onclick="removeMember(${t.id}, ${m.id}, this)"
+                        class="text-gray-400 hover:text-red-500 ml-0.5 leading-none font-bold"
+                        title="Remove">×</button>`
+              : ""}
+          </span>`
+        ).join("")
+      : `<span class="text-xs text-gray-400 italic">No members</span>`;
+
+    const nonMembers = _allUsers.filter(u => !members.find(m => m.id === u.id));
+    const addSelect  = nonMembers.length
+      ? `<div class="flex gap-2 mt-2">
+           <select id="addMemberSelect-${t.id}"
+                   class="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-xs
+                          focus:outline-none focus:ring-1 focus:ring-indigo-400">
+             <option value="">Add member…</option>
+             ${nonMembers.map(u => `<option value="${u.id}">${u.name}</option>`).join("")}
+           </select>
+           <button onclick="addMember(${t.id})"
+                   class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs
+                          font-medium px-3 py-1 rounded-lg transition-colors">
+             Add
+           </button>
+         </div>`
+      : "";
+
+    const deleteBtn = t.name !== "Property Specialist"
+      ? `<button onclick="deleteTeam(${t.id}, '${t.name.replace(/'/g, "\\'")}')"
+                class="text-xs text-red-400 hover:text-red-600 ml-2 font-medium">
+           Delete
+         </button>`
+      : "";
+
+    return `<div class="py-3">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-medium text-gray-800 text-sm">${t.name}</span>
+        ${deleteBtn}
+      </div>
+      <div class="flex flex-wrap gap-1">${memberHtml}</div>
+      ${addSelect}
+    </div>`;
+  }).join("");
+}
+
+async function createTeam() {
+  const name   = document.getElementById("newTeamName").value.trim();
+  const errEl  = document.getElementById("teamCreateError");
+  errEl.classList.add("hidden");
+  if (!name) { errEl.textContent = "Enter a team name."; errEl.classList.remove("hidden"); return; }
+  try {
+    const res  = await fetch("{{ url_for('admin.admin_create_team') }}", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (data.error) { errEl.textContent = data.error; errEl.classList.remove("hidden"); return; }
+    document.getElementById("newTeamName").value = "";
+    document.getElementById("createTeamRow").classList.add("hidden");
+    loadTeams();
+  } catch(e) {
+    errEl.textContent = "Request failed: " + e.message;
+    errEl.classList.remove("hidden");
+  }
+}
+
+async function addMember(teamId) {
+  const sel    = document.getElementById(`addMemberSelect-${teamId}`);
+  const userId = parseInt(sel.value);
+  if (!userId) return;
+  try {
+    await fetch(`/admin/teams/${teamId}/members`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ user_id: userId }),
+    });
+    loadTeams();
+  } catch(e) { alert("Failed: " + e.message); }
+}
+
+async function removeMember(teamId, userId, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/admin/teams/${teamId}/members/${userId}`, { method: "DELETE" });
+    loadTeams();
+  } catch(e) { alert("Failed: " + e.message); btn.disabled = false; }
+}
+
+async function deleteTeam(teamId, teamName) {
+  if (!confirm(`Delete team "${teamName}"?\n\nIts routes will be moved to Property Specialist. This cannot be undone.`)) return;
+  try {
+    const res  = await fetch(`/admin/teams/${teamId}/delete`, { method: "POST" });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    loadTeams();
+  } catch(e) { alert("Failed: " + e.message); }
+}
+
+document.addEventListener("DOMContentLoaded", loadTeams);
 </script>
 
 {% endblock %}

@@ -18,9 +18,58 @@ function showToast(msg, durationMs = 3500) {
   setTimeout(() => { t.remove(); }, durationMs);
 }
 
+/* ── STALE-ROUTE HELPERS ── */
+function markRouteStale() {
+  if (!isOptimized) return;
+  const btn  = document.getElementById("optimizeBtn");
+  const gBtn = document.getElementById("googleOptimizeBtn");
+  if (btn._stale) return; // already marked
+  btn._stale  = true;
+  gBtn._stale = true;
+  btn.textContent  = "⚠ Re-optimize Route";
+  btn.classList.remove("bg-indigo-600","hover:bg-indigo-700");
+  btn.classList.add("bg-amber-500","hover:bg-amber-600");
+  const gSpan = gBtn.querySelector("span:first-child");
+  if (gSpan) gSpan.textContent = "⚠ Re-optimize with Google Maps";
+  gBtn.classList.remove("bg-emerald-700","hover:bg-emerald-800");
+  gBtn.classList.add("bg-amber-600","hover:bg-amber-700");
+}
+
+function clearRouteStale() {
+  const btn  = document.getElementById("optimizeBtn");
+  const gBtn = document.getElementById("googleOptimizeBtn");
+  btn._stale  = false;
+  gBtn._stale = false;
+  btn.textContent = "Optimize Route";
+  btn.classList.remove("bg-amber-500","hover:bg-amber-600");
+  btn.classList.add("bg-indigo-600","hover:bg-indigo-700");
+  const gSpan = gBtn.querySelector("span:first-child");
+  if (gSpan) gSpan.textContent = "🗺 Optimize with Google Maps";
+  gBtn.classList.remove("bg-amber-600","hover:bg-amber-700");
+  gBtn.classList.add("bg-emerald-700","hover:bg-emerald-800");
+}
+
 /* ── OPTIMIZE ── */
 async function optimizeRoute(useGoogleMatrix = false) {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
+  clearRouteStale();
+
+  // If re-optimizing an existing route, rebuild selectedStops from the current
+  // schedule (captures any service-time / check-in changes made post-optimize)
+  // and wipe stale state so the optimizer starts completely fresh.
+  if (isOptimized) {
+    selectedStops = optimizedSchedule
+      .filter(s => !s.isLunch)
+      .map(s => ({
+        _id: s._id, name: s.name, lat: s.lat, lng: s.lng,
+        arrival: s.arrival, priority_checkin: s.priority_checkin || false,
+        serviceMinutes: s.serviceMinutes
+      }));
+    isOptimized      = false;
+    optimizedSchedule = [];
+    durationMatrix    = [];
+  }
+
   document.getElementById("loadingOverlay").classList.add("active");
   document.getElementById("loadingOverlay").querySelector(".lo-label").textContent =
     useGoogleMatrix ? "Optimizing with Google Maps…" : "Optimizing…";
@@ -139,6 +188,8 @@ async function submitSaveRoute() {
   const routeDate   = document.getElementById("saveRouteDate").value;
   const notes       = document.getElementById("routeNotesField").value.trim();
   const notesPublic = document.getElementById("notesPublicField").checked;
+  const teamEl      = document.getElementById("saveTeamId");
+  const teamId      = teamEl ? parseInt(teamEl.value) || null : null;
   const errorEl     = document.getElementById("saveError");
   const successEl   = document.getElementById("saveSuccess");
   const saveBtn     = document.getElementById("saveSubmitBtn");
@@ -155,7 +206,7 @@ async function submitSaveRoute() {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId })
     });
     if (res.redirected || res.url.includes("/login")) {
       document.getElementById("sessionBanner").style.display = "block";
@@ -190,6 +241,8 @@ async function submitUpdateRoute() {
   const routeDate   = document.getElementById("routeDateField").value;
   const notes       = document.getElementById("routeNotesField").value.trim();
   const notesPublic = document.getElementById("notesPublicField").checked;
+  const teamEl      = document.getElementById("saveTeamId");
+  const teamId      = teamEl ? parseInt(teamEl.value) || null : null;
   const btn         = document.getElementById("updateRouteBtn");
 
   if (!currentRouteId) { alert("No loaded route to update. Use Save Route instead."); return; }
@@ -203,7 +256,7 @@ async function submitUpdateRoute() {
     const res = await fetch(`/routes/${currentRouteId}/update`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId })
     });
     if (res.redirected || res.url.includes("/login")) {
       document.getElementById("sessionBanner").style.display = "block"; return;
@@ -326,15 +379,13 @@ async function submitUpdateRoute() {
     document.getElementById("routeDateField").value   = data.route_date;
     document.getElementById("routeNotesField").value  = data.notes || "";
     document.getElementById("notesPublicField").checked = data.notes_public || false;
+    const teamEl = document.getElementById("saveTeamId");
+    if (teamEl && data.team_id) teamEl.value = data.team_id;
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
 
-    optimizedSchedule.forEach(s => {
-      if (!s.isLunch && s.eta_minutes != null)
-        s.eta = minutesToHHMM(s.eta_minutes);
-    });
-
+    recalculateTimes();
     renderStops();
     renderSchedule();
     await redrawRouteOnMap();

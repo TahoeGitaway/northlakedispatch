@@ -442,6 +442,119 @@ def upload_csv():
     return redirect(url_for("admin.admin_users"))
 
 
+# ── Teams ─────────────────────────────────────────────────────────
+
+@admin_bp.route("/admin/teams", methods=["GET"])
+@login_required
+@admin_required
+def admin_get_teams():
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("""
+        SELECT t.id, t.name,
+               COALESCE(json_agg(
+                   json_build_object('id', u.id, 'name', u.name, 'email', u.email)
+                   ORDER BY u.name
+               ) FILTER (WHERE u.id IS NOT NULL), '[]') AS members
+        FROM teams t
+        LEFT JOIN team_memberships tm ON tm.team_id = t.id
+        LEFT JOIN users u ON u.id = tm.user_id
+        GROUP BY t.id, t.name
+        ORDER BY t.name ASC
+    """)
+    teams = cur.fetchall()
+    cur.execute("SELECT id, name, email FROM users WHERE is_active = 1 ORDER BY name ASC")
+    users = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify({
+        "teams": [dict(t) for t in teams],
+        "users": [dict(u) for u in users],
+    })
+
+
+@admin_bp.route("/admin/teams/create", methods=["POST"])
+@login_required
+@admin_required
+def admin_create_team():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Team name is required."}), 400
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT id FROM teams WHERE name = %s", (name,))
+    if cur.fetchone():
+        cur.close(); conn.close()
+        return jsonify({"error": f"A team named '{name}' already exists."}), 400
+    cur.execute(
+        "INSERT INTO teams (name, created_by, created_at) VALUES (%s, %s, %s) RETURNING id",
+        (name, current_user.id, datetime.utcnow().isoformat())
+    )
+    team_id = cur.fetchone()["id"]
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True, "id": team_id, "name": name})
+
+
+@admin_bp.route("/admin/teams/<int:team_id>/members", methods=["POST"])
+@login_required
+@admin_required
+def admin_add_team_member(team_id):
+    data    = request.get_json(force=True)
+    user_id = data.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id is required."}), 400
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO team_memberships (user_id, team_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        (user_id, team_id)
+    )
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
+@admin_bp.route("/admin/teams/<int:team_id>/members/<int:user_id>", methods=["DELETE"])
+@login_required
+@admin_required
+def admin_remove_team_member(team_id, user_id):
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "DELETE FROM team_memberships WHERE user_id = %s AND team_id = %s",
+        (user_id, team_id)
+    )
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
+@admin_bp.route("/admin/teams/<int:team_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_delete_team(team_id):
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT name FROM teams WHERE id = %s", (team_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        return jsonify({"error": "Team not found."}), 404
+    if row["name"] == "Property Specialist":
+        cur.close(); conn.close()
+        return jsonify({"error": "Cannot delete the Property Specialist team."}), 400
+    cur.execute("SELECT id FROM teams WHERE name = 'Property Specialist'")
+    ps = cur.fetchone()
+    if ps:
+        cur.execute("UPDATE saved_routes SET team_id = %s WHERE team_id = %s", (ps["id"], team_id))
+    cur.execute("DELETE FROM team_memberships WHERE team_id = %s", (team_id,))
+    cur.execute("DELETE FROM teams WHERE id = %s", (team_id,))
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
 # ── DB download stub ──────────────────────────────────────────────
 
 @admin_bp.route("/admin/download-db")

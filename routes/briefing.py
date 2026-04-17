@@ -119,17 +119,27 @@ def _fetch_briefing_notes(date_str: str) -> str:
     return (row["note_text"] or "").strip() if row else ""
 
 
-def _fetch_todays_routes(date_str: str) -> list:
+def _fetch_todays_routes(date_str: str, team_id=None) -> list:
     conn = get_db()
     cur  = get_cursor(conn)
-    cur.execute(
-        """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
-           FROM saved_routes r
-           JOIN users u ON r.created_by = u.id
-           WHERE r.route_date = %s
-           ORDER BY r.updated_at DESC""",
-        (date_str,),
-    )
+    if team_id:
+        cur.execute(
+            """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
+               FROM saved_routes r
+               JOIN users u ON r.created_by = u.id
+               WHERE r.route_date = %s AND r.team_id = %s
+               ORDER BY r.updated_at DESC""",
+            (date_str, team_id),
+        )
+    else:
+        cur.execute(
+            """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
+               FROM saved_routes r
+               JOIN users u ON r.created_by = u.id
+               WHERE r.route_date = %s
+               ORDER BY r.updated_at DESC""",
+            (date_str,),
+        )
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -307,22 +317,24 @@ def save_briefing_notes():
 @login_required
 def daily_briefing():
     date_str      = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    team_id       = request.args.get("team_id") or None
     force_refresh = request.args.get("refresh") == "1"
     now           = time.time()
 
-    if not force_refresh and date_str in _briefing_cache:
-        ts, payload = _briefing_cache[date_str]
+    cache_key = f"{date_str}:{team_id or ''}"
+    if not force_refresh and cache_key in _briefing_cache:
+        ts, payload = _briefing_cache[cache_key]
         if now - ts < CACHE_TTL:
             return jsonify({**payload, "cached": True})
 
-    routes        = _fetch_todays_routes(date_str)
+    routes        = _fetch_todays_routes(date_str, team_id=team_id)
     checkins      = _fetch_breezeway_checkins(date_str)
     notes         = _fetch_briefing_notes(date_str)
     blurb, err_msg = _generate_briefing(date_str, routes, checkins, notes)
 
     if blurb:
         payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
-        _briefing_cache[date_str] = (now, payload)
+        _briefing_cache[cache_key] = (now, payload)
         return jsonify({**payload, "cached": False})
 
     return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})

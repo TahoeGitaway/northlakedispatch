@@ -119,7 +119,7 @@ function setArrival(id, val) {
     const s = arr.find(s => s._id === id);
     if (s) { s.arrival = val; if (!val) s.priority_checkin = false; }
   });
-  if (isOptimized) { recalculateTimes(); renderSchedule(); } else renderStops();
+  if (isOptimized) { markRouteStale(); recalculateTimes(); renderSchedule(); } else renderStops();
 }
 
 function setPriorityCheckin(id, val) {
@@ -127,7 +127,7 @@ function setPriorityCheckin(id, val) {
     const s = arr.find(s => s._id === id);
     if (s) { s.priority_checkin = val; if (val) s.arrival = true; }
   });
-  if (isOptimized) { recalculateTimes(); renderSchedule(); }
+  if (isOptimized) { markRouteStale(); recalculateTimes(); renderSchedule(); }
 }
 
 function toggleScheduleCheckin(id) {
@@ -135,6 +135,7 @@ function toggleScheduleCheckin(id) {
     const s = arr.find(s => s._id === id);
     if (s) { s.arrival = !s.arrival; if (!s.arrival) s.priority_checkin = false; }
   });
+  markRouteStale();
   recalculateTimes();
   renderSchedule();
 }
@@ -147,6 +148,7 @@ function toggleSchedulePriority(id) {
       if (s.priority_checkin) s.arrival = true;
     }
   });
+  markRouteStale();
   recalculateTimes();
   renderSchedule();
 }

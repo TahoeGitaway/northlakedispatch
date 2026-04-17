@@ -109,14 +109,46 @@ def init_db():
         updated_at TEXT
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS teams (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        created_by INTEGER,
+        created_at TEXT
+    )""")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS team_memberships (
+        user_id INTEGER NOT NULL,
+        team_id INTEGER NOT NULL,
+        PRIMARY KEY (user_id, team_id)
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes_public INTEGER DEFAULT 0")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS created_by_display TEXT")
+    cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS team_id INTEGER")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS rescheduled INTEGER DEFAULT 0")
+
+    # Ensure Property Specialist team exists and own all legacy routes
+    cur.execute(
+        "INSERT INTO teams (name, created_at) VALUES ('Property Specialist', %s) ON CONFLICT (name) DO NOTHING",
+        (datetime.utcnow().isoformat(),)
+    )
+    cur.execute("SELECT id FROM teams WHERE name = 'Property Specialist'")
+    ps = cur.fetchone()
+    if ps:
+        ps_id = ps["id"]
+        cur.execute("UPDATE saved_routes SET team_id = %s WHERE team_id IS NULL", (ps_id,))
+        # Add every existing user to Property Specialist if not already a member
+        cur.execute("SELECT id FROM users")
+        for u in cur.fetchall():
+            cur.execute(
+                "INSERT INTO team_memberships (user_id, team_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (u["id"], ps_id)
+            )
 
     # Ensure admin user exists
     cur.execute("SELECT id FROM users WHERE role='admin'")

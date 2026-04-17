@@ -135,6 +135,8 @@ def home():
         'FROM properties WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL'
     )
     rows = cur.fetchall()
+    cur.execute("SELECT id, name FROM teams ORDER BY name ASC")
+    teams = [{"id": t["id"], "name": t["name"]} for t in cur.fetchall()]
     cur.close(); conn.close()
     properties = [
         {"name": r["Property Name"], "address": r["Unit Address"],
@@ -146,6 +148,7 @@ def home():
         properties=properties,
         property_count=len(properties),
         default_start=DEFAULT_START,
+        teams=teams,
     )
 
 
@@ -177,35 +180,36 @@ def portfolio():
 def saved_routes():
     conn = get_db()
     cur  = get_cursor(conn)
-    q = """SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
-                  r.total_duration, r.driving_duration, r.distance,
-                  COALESCE(r.created_by_display, u.name) AS created_by_name,
-                  lu.name AS last_edited_by_name
-           FROM saved_routes r
-           JOIN users u ON r.created_by = u.id
-           LEFT JOIN users lu ON r.last_edited_by = lu.id
-           {where}
-           ORDER BY r.route_date DESC, r.updated_at DESC"""
-
-    cur.execute(q.format(where=""))
-
+    cur.execute("""
+        SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
+               r.total_duration, r.driving_duration, r.distance, r.team_id,
+               COALESCE(r.created_by_display, u.name) AS created_by_name,
+               lu.name AS last_edited_by_name
+        FROM saved_routes r
+        JOIN users u ON r.created_by = u.id
+        LEFT JOIN users lu ON r.last_edited_by = lu.id
+        ORDER BY r.route_date DESC, r.updated_at DESC
+    """)
     routes = cur.fetchall()
+    cur.execute("SELECT id, name FROM teams ORDER BY name ASC")
+    teams = [{"id": t["id"], "name": t["name"]} for t in cur.fetchall()]
     cur.close(); conn.close()
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    return render_template("routes.html", routes=routes, now_date=today)
+    return render_template("routes.html", routes=routes, now_date=today, teams=teams)
 
 
 @dispatch_bp.route("/routes/save", methods=["POST"])
 @login_required
 def save_route():
-    data        = request.json or {}
-    name        = (data.get("name") or "").strip()
-    assigned_to = (data.get("assigned_to") or "").strip()
-    route_date  = (data.get("route_date") or "").strip()
-    schedule    = data.get("schedule", [])
-    stats       = data.get("stats", {})
-    notes       = (data.get("notes") or "").strip() or None
+    data         = request.json or {}
+    name         = (data.get("name") or "").strip()
+    assigned_to  = (data.get("assigned_to") or "").strip()
+    route_date   = (data.get("route_date") or "").strip()
+    schedule     = data.get("schedule", [])
+    stats        = data.get("stats", {})
+    notes        = (data.get("notes") or "").strip() or None
     notes_public = int(bool(data.get("notes_public", False)))
+    team_id      = data.get("team_id") or None
 
     if not name:
         return jsonify({"error": "Route name is required."}), 400
@@ -214,20 +218,27 @@ def save_route():
     if not schedule:
         return jsonify({"error": "No stops to save."}), 400
 
+    # Default to Property Specialist if no team given
     now  = datetime.utcnow().isoformat()
     conn = get_db()
     cur  = get_cursor(conn)
+    if not team_id:
+        cur.execute("SELECT id FROM teams WHERE name = 'Property Specialist'")
+        ps = cur.fetchone()
+        if ps:
+            team_id = ps["id"]
+
     cur.execute(
         """INSERT INTO saved_routes
            (name, assigned_to, route_date, stops_json, total_duration,
             driving_duration, service_duration, distance,
-            notes, notes_public,
+            notes, notes_public, team_id,
             created_by, last_edited_by, created_at, updated_at)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (name, assigned_to or None, route_date, json.dumps(schedule),
          stats.get("total_duration", 0), stats.get("driving_duration", 0),
          stats.get("service_duration", 0), stats.get("distance", 0),
-         notes, notes_public,
+         notes, notes_public, team_id,
          current_user.id, current_user.id, now, now)
     )
     route_id = cur.fetchone()["id"]
@@ -239,14 +250,15 @@ def save_route():
 @dispatch_bp.route("/routes/<int:route_id>/update", methods=["POST"])
 @login_required
 def update_route(route_id):
-    data        = request.json or {}
-    name        = (data.get("name") or "").strip()
-    assigned_to = (data.get("assigned_to") or "").strip()
-    route_date  = (data.get("route_date") or "").strip()
-    schedule    = data.get("schedule", [])
-    stats       = data.get("stats", {})
-    notes       = (data.get("notes") or "").strip() or None
+    data         = request.json or {}
+    name         = (data.get("name") or "").strip()
+    assigned_to  = (data.get("assigned_to") or "").strip()
+    route_date   = (data.get("route_date") or "").strip()
+    schedule     = data.get("schedule", [])
+    stats        = data.get("stats", {})
+    notes        = (data.get("notes") or "").strip() or None
     notes_public = int(bool(data.get("notes_public", False)))
+    team_id      = data.get("team_id") or None
 
     if not schedule:
         return jsonify({"error": "No stops to save."}), 400
@@ -255,22 +267,39 @@ def update_route(route_id):
     conn = get_db()
     cur  = get_cursor(conn)
 
-    # Always update everything we have
-    cur.execute(
-        """UPDATE saved_routes SET
-           name=%s, assigned_to=%s, route_date=%s,
-           stops_json=%s, total_duration=%s, driving_duration=%s,
-           service_duration=%s, distance=%s,
-           notes=%s, notes_public=%s,
-           last_edited_by=%s, updated_at=%s
-           WHERE id=%s""",
-        (name or None, assigned_to or None, route_date or None,
-         json.dumps(schedule),
-         stats.get("total_duration", 0), stats.get("driving_duration", 0),
-         stats.get("service_duration", 0), stats.get("distance", 0),
-         notes, notes_public,
-         current_user.id, now, route_id)
-    )
+    # Only update team_id when one is explicitly sent; otherwise leave it unchanged
+    if team_id is not None:
+        cur.execute(
+            """UPDATE saved_routes SET
+               name=%s, assigned_to=%s, route_date=%s,
+               stops_json=%s, total_duration=%s, driving_duration=%s,
+               service_duration=%s, distance=%s,
+               notes=%s, notes_public=%s, team_id=%s,
+               last_edited_by=%s, updated_at=%s
+               WHERE id=%s""",
+            (name or None, assigned_to or None, route_date or None,
+             json.dumps(schedule),
+             stats.get("total_duration", 0), stats.get("driving_duration", 0),
+             stats.get("service_duration", 0), stats.get("distance", 0),
+             notes, notes_public, team_id,
+             current_user.id, now, route_id)
+        )
+    else:
+        cur.execute(
+            """UPDATE saved_routes SET
+               name=%s, assigned_to=%s, route_date=%s,
+               stops_json=%s, total_duration=%s, driving_duration=%s,
+               service_duration=%s, distance=%s,
+               notes=%s, notes_public=%s,
+               last_edited_by=%s, updated_at=%s
+               WHERE id=%s""",
+            (name or None, assigned_to or None, route_date or None,
+             json.dumps(schedule),
+             stats.get("total_duration", 0), stats.get("driving_duration", 0),
+             stats.get("service_duration", 0), stats.get("distance", 0),
+             notes, notes_public,
+             current_user.id, now, route_id)
+        )
 
     conn.commit()
     cur.close(); conn.close()
@@ -303,6 +332,7 @@ def load_route(route_id):
         "distance":         row["distance"],
         "notes":            row.get("notes") or "",
         "notes_public":     bool(row.get("notes_public")),
+        "team_id":          row.get("team_id"),
     })
 
 
