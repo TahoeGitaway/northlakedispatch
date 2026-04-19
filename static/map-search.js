@@ -334,13 +334,19 @@ function renderAddMoreList() {
   container.innerHTML = "";
   addMoreStops.forEach(s => {
     const div = document.createElement("div");
-    div.className = "flex items-center justify-between bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm";
+    div.className = "flex items-center justify-between bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm gap-2";
     div.innerHTML = `
       <span class="truncate text-gray-800 font-medium flex-1">${s.name}</span>
-      <span class="text-xs mx-2 ${s.priority_checkin ? 'text-violet-600 font-bold' : s.arrival ? 'text-green-600 font-medium' : 'text-gray-400'}">
+      <span class="text-xs ${s.priority_checkin ? 'text-violet-600 font-bold' : s.arrival ? 'text-green-600 font-medium' : 'text-gray-400'} shrink-0">
         ${s.priority_checkin ? '★ Priority' : s.arrival ? '✓ Check-in' : 'Stop'}
       </span>
-      <button class="text-red-400 hover:text-red-600 text-xs ml-1">✕</button>`;
+      <select class="border rounded px-1 py-0.5 text-xs shrink-0">
+        ${generateTimeOptions(s.serviceMinutes)}
+      </select>
+      <button class="text-red-400 hover:text-red-600 text-xs shrink-0">✕</button>`;
+    div.querySelector("select").addEventListener("change", function() {
+      s.serviceMinutes = parseInt(this.value);
+    });
     div.querySelector("button").addEventListener("click", () => {
       addMoreStops = addMoreStops.filter(x => x._id !== s._id);
       renderAddMoreList();

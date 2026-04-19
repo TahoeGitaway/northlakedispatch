@@ -254,7 +254,7 @@ function moveUp(btn) {
   if (domIdx <= 0) return;
   [optimizedSchedule[domIdx-1], optimizedSchedule[domIdx]] =
     [optimizedSchedule[domIdx], optimizedSchedule[domIdx-1]];
-  recalculateTimes(); renderSchedule(); redrawRouteOnMap();
+  markRouteStale(); recalculateTimes(); renderSchedule(); redrawRouteOnMap();
 }
 
 function moveDown(btn) {
@@ -264,7 +264,7 @@ function moveDown(btn) {
   if (domIdx >= optimizedSchedule.length - 1) return;
   [optimizedSchedule[domIdx], optimizedSchedule[domIdx+1]] =
     [optimizedSchedule[domIdx+1], optimizedSchedule[domIdx]];
-  recalculateTimes(); renderSchedule(); redrawRouteOnMap();
+  markRouteStale(); recalculateTimes(); renderSchedule(); redrawRouteOnMap();
 }
 
 /* ── REVERSE ── */
@@ -274,7 +274,7 @@ function reverseRoute() {
   const lunch = optimizedSchedule.find(s => s.isLunch) || null;
   real.reverse();
   optimizedSchedule = lunch ? [...real, lunch] : real;
-  recalculateTimes(); renderSchedule(); redrawRouteOnMap();
+  markRouteStale(); recalculateTimes(); renderSchedule(); redrawRouteOnMap();
 }
 
 /* ── RESTART ── */
@@ -371,7 +371,7 @@ function wireDragEvents(li, scheduleIdx) {
     const insertAt = dragSrcIdx < dropIdx ? dropIdx - 1 : dropIdx;
     optimizedSchedule.splice(insertAt < 0 ? 0 : insertAt, 0, moved);
     dragSrcIdx = null;
-    recalculateTimes(); renderSchedule(); redrawRouteOnMap();
+    markRouteStale(); recalculateTimes(); renderSchedule(); redrawRouteOnMap();
   });
 }
 
