@@ -418,8 +418,13 @@ def _solve_route(
     elif soft_deadline_penalty:
         secs = max(2, min(4, math.ceil(n_stops / 4)))   # 2 s ≤8, 3 s ≤12, 4 s 13+
     else:
-        secs = max(1, min(2, math.ceil(n_stops / 6)))   # 1 s ≤6, 2 s 7+
+        secs = max(5, min(10, n_stops))                 # 5-10 s; GLS needs time on flat distance landscapes
     params.time_limit.FromSeconds(secs)
+
+    # For unconstrained pure-distance TSP, GLOBAL_CHEAPEST_ARC builds a much
+    # better initial tour than PATH_CHEAPEST_ARC, giving GLS a stronger start.
+    if not hard_deadline and not soft_deadline_penalty:
+        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.GLOBAL_CHEAPEST_ARC
 
     solution = routing.SolveWithParameters(params)
     if not solution:
