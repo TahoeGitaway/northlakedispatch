@@ -204,6 +204,13 @@
 
   <!-- ── STAFF LIST ── -->
   <div id="staffSection" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+    <div class="flex items-center justify-between mb-2">
+      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Staff Plan</label>
+      <button id="staffDeleteBtn" onclick="deleteStaffList()"
+              class="hidden text-xs text-red-400 hover:text-red-600 font-medium transition-colors">
+        Delete entry
+      </button>
+    </div>
     <p id="staffDisplay" class="text-sm text-gray-600 mb-2 hidden"></p>
     <div class="flex gap-2">
       <input id="staffInput" type="text" placeholder="e.g. Julie, Marcus, Erin…"
@@ -423,9 +430,7 @@ function buildCalendar() {
       cell.appendChild(dotRow);
     }
 
-    if (routes.length || isToday) {
-      cell.addEventListener("click", () => selectDay(ds));
-    }
+    cell.addEventListener("click", () => selectDay(ds));
 
     grid.appendChild(cell);
   }
@@ -549,6 +554,7 @@ async function loadNotes() {
   document.getElementById("staffInput").value = "";
   document.getElementById("staffSaveStatus").textContent = "";
   document.getElementById("staffDisplay").classList.add("hidden");
+  document.getElementById("staffDeleteBtn").classList.add("hidden");
   try {
     const res  = await fetch(`/briefing/notes?date=${d}`);
     const data = await res.json();
@@ -558,6 +564,7 @@ async function loadNotes() {
     }
     if (data.staff_list) {
       document.getElementById("staffInput").value = data.staff_list;
+      document.getElementById("staffDeleteBtn").classList.remove("hidden");
       _renderStaffDisplay(data.staff_list, data.staff_updated_at);
     }
   } catch (_) {}
@@ -589,12 +596,44 @@ async function saveStaffList() {
     const data = await res.json();
     if (data.success) {
       status.textContent = "Saved";
-      _renderStaffDisplay(list, new Date().toISOString());
+      if (list) {
+        document.getElementById("staffDeleteBtn").classList.remove("hidden");
+        _renderStaffDisplay(list, new Date().toISOString());
+      } else {
+        document.getElementById("staffDeleteBtn").classList.add("hidden");
+        document.getElementById("staffDisplay").classList.add("hidden");
+      }
     } else {
       status.textContent = "Error saving";
     }
   } catch (_) {
     status.textContent = "Error saving";
+  }
+}
+
+async function deleteStaffList() {
+  if (!confirm("Delete the staff plan for this day?")) return;
+  const d      = selectedDate || TODAY_STR;
+  const status = document.getElementById("staffSaveStatus");
+  status.textContent = "Deleting…";
+  try {
+    const res  = await fetch("/briefing/notes", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ date: d, staff_list: "" }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById("staffInput").value = "";
+      document.getElementById("staffDisplay").classList.add("hidden");
+      document.getElementById("staffDeleteBtn").classList.add("hidden");
+      status.textContent = "Deleted";
+      setTimeout(() => { status.textContent = ""; }, 2000);
+    } else {
+      status.textContent = "Error deleting";
+    }
+  } catch (_) {
+    status.textContent = "Error deleting";
   }
 }
 

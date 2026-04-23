@@ -70,9 +70,9 @@ def _decode_polyline(encoded):
 
 def _google_distance_matrix(locations):
     """NxN drive-time matrix (seconds) via Google Distance Matrix API.
-    Falls back to haversine if the key is missing or the request fails."""
+    Returns (matrix, error_str). error_str is None on success."""
     if not GOOGLE_MAPS_KEY:
-        return _haversine_matrix(locations)
+        return _haversine_matrix(locations), "GOOGLE_MAPS_API_KEY is not set on this server."
     n    = len(locations)
     pipe = "|".join(f"{loc['lat']},{loc['lng']}" for loc in locations)
     try:
@@ -83,8 +83,10 @@ def _google_distance_matrix(locations):
             timeout=10,
         )
         data = resp.json()
-        if data.get("status") != "OK":
-            return _haversine_matrix(locations)
+        status = data.get("status")
+        if status != "OK":
+            msg = data.get("error_message") or status or "Unknown error"
+            return _haversine_matrix(locations), f"Distance Matrix API: {msg}"
         mat = [[0.0] * n for _ in range(n)]
         for i, row in enumerate(data.get("rows", [])):
             for j, elem in enumerate(row.get("elements", [])):
@@ -92,16 +94,16 @@ def _google_distance_matrix(locations):
                     mat[i][j] = float(elem["duration"]["value"])
                 elif i != j:
                     mat[i][j] = _haversine_matrix([locations[i], locations[j]])[0][1]
-        return mat
-    except Exception:
-        return _haversine_matrix(locations)
+        return mat, None
+    except Exception as e:
+        return _haversine_matrix(locations), f"Distance Matrix request failed: {e}"
 
 
 def _google_route_polyline(locations):
     """Decoded route coords [[lat, lng], ...] via Google Directions API.
-    Returns None on failure — callers should draw a straight-line fallback."""
+    Returns (coords, error_str). error_str is None on success."""
     if not GOOGLE_MAPS_KEY or len(locations) < 2:
-        return None
+        return None, "GOOGLE_MAPS_API_KEY is not set on this server."
     try:
         origin = f"{locations[0]['lat']},{locations[0]['lng']}"
         dest   = f"{locations[-1]['lat']},{locations[-1]['lng']}"
@@ -116,11 +118,13 @@ def _google_route_polyline(locations):
             params=params, timeout=10,
         )
         data = resp.json()
-        if data.get("status") != "OK" or not data.get("routes"):
-            return None
-        return _decode_polyline(data["routes"][0]["overview_polyline"]["points"])
-    except Exception:
-        return None
+        status = data.get("status")
+        if status != "OK" or not data.get("routes"):
+            msg = data.get("error_message") or status or "No routes returned"
+            return None, f"Directions API: {msg}"
+        return _decode_polyline(data["routes"][0]["overview_polyline"]["points"]), None
+    except Exception as e:
+        return None, f"Directions request failed: {e}"
 
 
 # ── Home (map) ────────────────────────────────────────────────────
@@ -517,10 +521,12 @@ def optimize():
     # Default: haversine approximation (free, fast, good enough for ordering).
     # Optional: Google Distance Matrix API (accurate real drive times; ~$0.005/element).
     use_google_matrix = bool(data.get("use_google_matrix", False))
-    duration_matrix = (
-        _google_distance_matrix(all_locations) if use_google_matrix
-        else _haversine_matrix(all_locations)
-    )
+    if use_google_matrix:
+        duration_matrix, google_error = _google_distance_matrix(all_locations)
+        if google_error:
+            return jsonify({"error": f"Google Maps API failed — {google_error}"}), 502
+    else:
+        duration_matrix = _haversine_matrix(all_locations)
 
     if drive_only:
         service_times_sec = [0] * len(all_locations)
@@ -658,7 +664,9 @@ def optimize():
     ]
     if not same_depot:
         polyline_locs.append({"lat": end["lat"], "lng": end["lng"]})
-    route_polyline = _google_route_polyline(polyline_locs)
+    route_polyline, polyline_error = _google_route_polyline(polyline_locs)
+    if polyline_error:
+        return jsonify({"error": f"Google Maps API failed — {polyline_error}"}), 502
 
     return jsonify({
         "distance":                  0,
@@ -786,7 +794,7 @@ def view_route(route_id):
     polyline_locs = [{"lat": DEFAULT_START["lat"], "lng": DEFAULT_START["lng"]}] + [
         {"lat": float(s["lat"]), "lng": float(s["lng"])} for s in stops_with_coords
     ]
-    route_polyline = _google_route_polyline(polyline_locs) if len(polyline_locs) >= 2 else None
+    route_polyline, _ = _google_route_polyline(polyline_locs) if len(polyline_locs) >= 2 else (None, None)
 
     return render_template("view_route.html",
         route_id         = row["id"],
