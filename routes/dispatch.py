@@ -70,30 +70,46 @@ def _decode_polyline(encoded):
 
 def _google_distance_matrix(locations):
     """NxN drive-time matrix (seconds) via Google Distance Matrix API.
-    Returns (matrix, error_str). error_str is None on success."""
+    Returns (matrix, error_str). error_str is None on success.
+    Batches requests to stay within the 100-element-per-request limit."""
     if not GOOGLE_MAPS_KEY:
         return _haversine_matrix(locations), "GOOGLE_MAPS_API_KEY is not set on this server."
-    n    = len(locations)
-    pipe = "|".join(f"{loc['lat']},{loc['lng']}" for loc in locations)
+    n   = len(locations)
+    mat = [[0.0] * n for _ in range(n)]
+    # API limits: 25 origins, 25 destinations, 100 elements (origins×dests) per request.
+    MAX_ORIG = 25
+    MAX_ELEM = 100
     try:
-        resp = requests.get(
-            "https://maps.googleapis.com/maps/api/distancematrix/json",
-            params={"origins": pipe, "destinations": pipe,
-                    "mode": "driving", "key": GOOGLE_MAPS_KEY},
-            timeout=10,
-        )
-        data = resp.json()
-        status = data.get("status")
-        if status != "OK":
-            msg = data.get("error_message") or status or "Unknown error"
-            return _haversine_matrix(locations), f"Distance Matrix API: {msg}"
-        mat = [[0.0] * n for _ in range(n)]
-        for i, row in enumerate(data.get("rows", [])):
-            for j, elem in enumerate(row.get("elements", [])):
-                if elem.get("status") == "OK":
-                    mat[i][j] = float(elem["duration"]["value"])
-                elif i != j:
-                    mat[i][j] = _haversine_matrix([locations[i], locations[j]])[0][1]
+        for orig_start in range(0, n, MAX_ORIG):
+            orig_end   = min(orig_start + MAX_ORIG, n)
+            orig_count = orig_end - orig_start
+            orig_pipe  = "|".join(f"{loc['lat']},{loc['lng']}" for loc in locations[orig_start:orig_end])
+            dest_batch = max(1, MAX_ELEM // orig_count)
+
+            for dest_start in range(0, n, dest_batch):
+                dest_end  = min(dest_start + dest_batch, n)
+                dest_pipe = "|".join(f"{loc['lat']},{loc['lng']}" for loc in locations[dest_start:dest_end])
+
+                resp = requests.get(
+                    "https://maps.googleapis.com/maps/api/distancematrix/json",
+                    params={"origins": orig_pipe, "destinations": dest_pipe,
+                            "mode": "driving", "key": GOOGLE_MAPS_KEY},
+                    timeout=15,
+                )
+                data   = resp.json()
+                status = data.get("status")
+                if status != "OK":
+                    msg = data.get("error_message") or status or "Unknown error"
+                    return _haversine_matrix(locations), f"Distance Matrix API: {msg}"
+
+                for i_local, row in enumerate(data.get("rows", [])):
+                    i = orig_start + i_local
+                    for j_local, elem in enumerate(row.get("elements", [])):
+                        j = dest_start + j_local
+                        if elem.get("status") == "OK":
+                            mat[i][j] = float(elem["duration"]["value"])
+                        elif i != j:
+                            mat[i][j] = _haversine_matrix([locations[i], locations[j]])[0][1]
         return mat, None
     except Exception as e:
         return _haversine_matrix(locations), f"Distance Matrix request failed: {e}"

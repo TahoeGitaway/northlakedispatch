@@ -287,10 +287,21 @@ def get_briefing_notes():
     cur.execute("SELECT note_text, staff_list, staff_updated_at FROM briefing_notes WHERE note_date = %s", (date_str,))
     row = cur.fetchone()
     cur.close(); conn.close()
+
+    # Parse staff_list as JSON history array; fall back for legacy plain-text values
+    staff_entries = []
+    if row:
+        raw = (row["staff_list"] or "").strip()
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                staff_entries = parsed if isinstance(parsed, list) else [{"text": raw, "saved_at": row["staff_updated_at"] or ""}]
+            except Exception:
+                staff_entries = [{"text": raw, "saved_at": (row["staff_updated_at"] or "")}]
+
     return jsonify({
-        "note_text":        (row["note_text"]        or "").strip() if row else "",
-        "staff_list":       (row["staff_list"]       or "").strip() if row else "",
-        "staff_updated_at": (row["staff_updated_at"] or "")         if row else "",
+        "note_text":    (row["note_text"] or "").strip() if row else "",
+        "staff_entries": staff_entries,
         "date": date_str,
     })
 
@@ -307,7 +318,22 @@ def save_briefing_notes():
     cur  = get_cursor(conn)
 
     if "staff_list" in data:
-        staff_list = (data.get("staff_list") or "").strip()
+        new_text = (data.get("staff_list") or "").strip()
+        if new_text:
+            # Fetch existing entries to prepend to history
+            cur.execute("SELECT staff_list FROM briefing_notes WHERE note_date = %s", (date_str,))
+            existing_row = cur.fetchone()
+            existing_raw = (existing_row["staff_list"] or "").strip() if existing_row else ""
+            try:
+                existing = json.loads(existing_raw) if existing_raw else []
+                if not isinstance(existing, list):
+                    existing = [{"text": existing_raw, "saved_at": now}] if existing_raw else []
+            except Exception:
+                existing = [{"text": existing_raw, "saved_at": now}] if existing_raw else []
+            entries = [{"text": new_text, "saved_at": now}] + existing
+        else:
+            entries = []
+        staff_json = json.dumps(entries)
         cur.execute(
             """INSERT INTO briefing_notes (note_date, note_text, staff_list, staff_updated_at, updated_by, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s)
@@ -316,7 +342,7 @@ def save_briefing_notes():
                    staff_updated_at = EXCLUDED.staff_updated_at,
                    updated_by       = EXCLUDED.updated_by,
                    updated_at       = EXCLUDED.updated_at""",
-            (date_str, note_text, staff_list, now, current_user.id, now)
+            (date_str, "", staff_json, now, current_user.id, now)
         )
     else:
         cur.execute(

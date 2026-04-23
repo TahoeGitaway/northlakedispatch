@@ -287,8 +287,17 @@ async function submitUpdateRoute() {
 
 /* ── LOAD ROUTE ── */
 (async function checkLoadParam() {
-  const loadId = new URLSearchParams(window.location.search).get("load");
-  if (!loadId) return;
+  const params = new URLSearchParams(window.location.search);
+  const loadId = params.get("load");
+  if (!loadId) {
+    const dateParam = params.get("date");
+    if (dateParam) {
+      window.history.replaceState({}, "", window.location.pathname);
+      document.getElementById("routeDateField").value = dateParam;
+      document.getElementById("saveRouteDate").value  = dateParam;
+    }
+    return;
+  }
   window.history.replaceState({}, "", window.location.pathname);
 
   const overlay  = document.getElementById("routeLoadOverlay");
