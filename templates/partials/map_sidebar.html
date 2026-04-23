@@ -153,6 +153,9 @@
         <span>🗺 Optimize with Google Maps</span>
         <span id="googleCostHint" class="text-emerald-200 text-xs font-normal whitespace-nowrap">~$0.60 / 10 stops</span>
       </button>
+      <p id="googleStopNote" class="hidden text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        Google's API handles 10 stops per request — your route will use multiple requests and cost more.
+      </p>
       <div class="flex gap-2">
         <button onclick="reverseRoute()"
                 class="flex-1 bg-gray-500 hover:bg-gray-600 text-white px-3 py-2

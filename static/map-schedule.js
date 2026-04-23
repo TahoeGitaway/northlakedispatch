@@ -178,9 +178,23 @@ function addGap() {
 }
 
 /* ── PRE-OPT STOP LIST ── */
+function _updateGoogleCostHint() {
+  const n    = selectedStops.length + 1; // +1 for depot node
+  const cost = (n * n * 0.005).toFixed(2);
+  const hint = document.getElementById("googleCostHint");
+  const note = document.getElementById("googleStopNote");
+  if (hint) hint.textContent = `~$${cost} / ${selectedStops.length} stops`;
+  if (note) {
+    if (selectedStops.length > 10) note.classList.remove("hidden");
+    else note.classList.add("hidden");
+  }
+}
+
 function renderStops() {
   const container = document.getElementById("selectedStops");
   const countEl   = document.getElementById("stopCount");
+
+  _updateGoogleCostHint();
 
   if (isOptimized) {
     container.innerHTML = "";
