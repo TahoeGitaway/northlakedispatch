@@ -108,6 +108,8 @@ def init_db():
         updated_by INTEGER,
         updated_at TEXT
     )""")
+    cur.execute("ALTER TABLE briefing_notes ADD COLUMN IF NOT EXISTS staff_list TEXT DEFAULT ''")
+    cur.execute("ALTER TABLE briefing_notes ADD COLUMN IF NOT EXISTS staff_updated_at TEXT")
 
     cur.execute("""CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,

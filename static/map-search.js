@@ -256,7 +256,7 @@ addMoreBox.addEventListener("input", function() {
   addMoreCurrent = properties
     .filter(p => p.name && p.name.toLowerCase().includes(text) && !already.has(p.name))
     .slice(0, 10);
-  renderAddMoreSugg();
+  renderAddMoreSugg(this.value.trim());
 });
 
 addMoreBox.addEventListener("keydown", function(e) {
@@ -273,9 +273,9 @@ document.addEventListener("click", e => {
   if (!addMoreSuggestions.contains(e.target) && e.target !== addMoreBox) closeAddMoreSugg(false);
 });
 
-function renderAddMoreSugg() {
+function renderAddMoreSugg(rawText = "") {
   addMoreSuggestions.innerHTML = "";
-  if (!addMoreCurrent.length) { addMoreSuggestions.classList.add("hidden"); return; }
+  if (!addMoreCurrent.length && !rawText) { addMoreSuggestions.classList.add("hidden"); return; }
   addMoreSuggestions.classList.remove("hidden");
 
   addMoreCurrent.forEach((p, idx) => {
@@ -302,6 +302,14 @@ function renderAddMoreSugg() {
     div.appendChild(btnWrap);
     addMoreSuggestions.appendChild(div);
   });
+
+  if (rawText) {
+    const anyAddr = document.createElement("div");
+    anyAddr.className = "sugg-item sugg-any-address";
+    anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">📍 Add "${rawText}" as address…</span>`;
+    anyAddr.addEventListener("click", () => geocodeAndStageStop(rawText, false, false));
+    addMoreSuggestions.appendChild(anyAddr);
+  }
 
   const hint = document.createElement("div");
   hint.className = "suggestion-hint";
@@ -601,6 +609,16 @@ async function geocodeAndWorkIn(address, asCheckin, asPriority) {
     const loc = await geocodeAddress(address);
     workInStop({ name: loc.name, lat: loc.lat, lng: loc.lng }, asCheckin, asPriority);
     closeWorkIn(true);
+  } catch (_) {
+    alert("Address not found. Try a more specific address.");
+  }
+}
+
+async function geocodeAndStageStop(address, asCheckin, asPriority) {
+  try {
+    const loc = await geocodeAddress(address);
+    stageStop({ name: loc.name, lat: loc.lat, lng: loc.lng }, asCheckin, asPriority);
+    closeAddMoreSugg(true);
   } catch (_) {
     alert("Address not found. Try a more specific address.");
   }

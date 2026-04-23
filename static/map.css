@@ -156,6 +156,10 @@
   border:1px solid #fed7aa; border-radius:6px; background:#fff7ed;
   padding:6px 8px; cursor:default;
 }
+.gap-row {
+  border:1px dashed #cbd5e1; border-radius:6px; background:#f8fafc;
+  padding:6px 8px; cursor:default;
+}
 
 /* ── DRAG AND DROP ── */
 #routeList li { cursor: grab; }

@@ -202,6 +202,20 @@
     <div class="cal-grid" id="calGrid"></div>
   </div>
 
+  <!-- ── STAFF LIST ── -->
+  <div id="staffSection" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+    <p id="staffDisplay" class="text-sm text-gray-600 mb-2 hidden"></p>
+    <div class="flex gap-2">
+      <input id="staffInput" type="text" placeholder="e.g. Julie, Marcus, Erin…"
+             class="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400 placeholder-gray-300">
+      <button onclick="saveStaffList()"
+              class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                     px-3 py-1.5 rounded-lg transition-colors shrink-0">Save</button>
+    </div>
+    <span id="staffSaveStatus" class="text-xs text-gray-400 mt-1 block"></span>
+  </div>
+
   <!-- ── DAY DETAIL ── -->
   <div id="dayDetail">
     <div id="dayDetailEmpty" class="text-center py-10 text-gray-400 text-sm">
@@ -439,6 +453,7 @@ function selectDay(ds) {
   const date   = new Date(ds + "T00:00:00");
   const label  = date.toLocaleDateString('default', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
 
+  document.getElementById("staffSection").classList.remove("hidden");
   document.getElementById("dayDetailEmpty").classList.add("hidden");
   document.getElementById("dayDetailContent").classList.remove("hidden");
   document.getElementById("dayDetailTitle").textContent = label;
@@ -526,11 +541,14 @@ function selectDay(ds) {
   });
 }
 
-/* ── BRIEFING NOTES ── */
+/* ── BRIEFING NOTES + STAFF LIST ── */
 async function loadNotes() {
   const d = selectedDate || TODAY_STR;
   document.getElementById("briefingNotes").value = "";
   document.getElementById("notesSaveStatus").textContent = "";
+  document.getElementById("staffInput").value = "";
+  document.getElementById("staffSaveStatus").textContent = "";
+  document.getElementById("staffDisplay").classList.add("hidden");
   try {
     const res  = await fetch(`/briefing/notes?date=${d}`);
     const data = await res.json();
@@ -538,7 +556,46 @@ async function loadNotes() {
       document.getElementById("briefingNotes").value = data.note_text;
       document.getElementById("notesSaveStatus").textContent = "Saved";
     }
+    if (data.staff_list) {
+      document.getElementById("staffInput").value = data.staff_list;
+      _renderStaffDisplay(data.staff_list, data.staff_updated_at);
+    }
   } catch (_) {}
+}
+
+function _renderStaffDisplay(staffList, updatedAt) {
+  const el = document.getElementById("staffDisplay");
+  if (!staffList) { el.classList.add("hidden"); return; }
+  let dateLabel = "";
+  if (updatedAt) {
+    const d = new Date(updatedAt);
+    dateLabel = d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  }
+  el.textContent = `People on the schedule as of ${dateLabel}: ${staffList}`;
+  el.classList.remove("hidden");
+}
+
+async function saveStaffList() {
+  const d      = selectedDate || TODAY_STR;
+  const list   = document.getElementById("staffInput").value.trim();
+  const status = document.getElementById("staffSaveStatus");
+  status.textContent = "Saving…";
+  try {
+    const res  = await fetch("/briefing/notes", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ date: d, staff_list: list }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = "Saved";
+      _renderStaffDisplay(list, new Date().toISOString());
+    } else {
+      status.textContent = "Error saving";
+    }
+  } catch (_) {
+    status.textContent = "Error saving";
+  }
 }
 
 async function saveNotes() {

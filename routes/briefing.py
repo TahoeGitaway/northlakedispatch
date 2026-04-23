@@ -282,7 +282,17 @@ def _generate_briefing(date_str: str, routes: list, checkins: list, notes: str =
 @login_required
 def get_briefing_notes():
     date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
-    return jsonify({"note_text": _fetch_briefing_notes(date_str), "date": date_str})
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT note_text, staff_list, staff_updated_at FROM briefing_notes WHERE note_date = %s", (date_str,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return jsonify({
+        "note_text":        (row["note_text"]        or "").strip() if row else "",
+        "staff_list":       (row["staff_list"]       or "").strip() if row else "",
+        "staff_updated_at": (row["staff_updated_at"] or "")         if row else "",
+        "date": date_str,
+    })
 
 
 @briefing_bp.route("/briefing/notes", methods=["POST"])
@@ -295,15 +305,30 @@ def save_briefing_notes():
 
     conn = get_db()
     cur  = get_cursor(conn)
-    cur.execute(
-        """INSERT INTO briefing_notes (note_date, note_text, updated_by, updated_at)
-           VALUES (%s, %s, %s, %s)
-           ON CONFLICT (note_date) DO UPDATE
-           SET note_text = EXCLUDED.note_text,
-               updated_by = EXCLUDED.updated_by,
-               updated_at = EXCLUDED.updated_at""",
-        (date_str, note_text, current_user.id, now)
-    )
+
+    if "staff_list" in data:
+        staff_list = (data.get("staff_list") or "").strip()
+        cur.execute(
+            """INSERT INTO briefing_notes (note_date, note_text, staff_list, staff_updated_at, updated_by, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (note_date) DO UPDATE
+               SET staff_list       = EXCLUDED.staff_list,
+                   staff_updated_at = EXCLUDED.staff_updated_at,
+                   updated_by       = EXCLUDED.updated_by,
+                   updated_at       = EXCLUDED.updated_at""",
+            (date_str, note_text, staff_list, now, current_user.id, now)
+        )
+    else:
+        cur.execute(
+            """INSERT INTO briefing_notes (note_date, note_text, updated_by, updated_at)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (note_date) DO UPDATE
+               SET note_text  = EXCLUDED.note_text,
+                   updated_by = EXCLUDED.updated_by,
+                   updated_at = EXCLUDED.updated_at""",
+            (date_str, note_text, current_user.id, now)
+        )
+
     conn.commit()
     cur.close(); conn.close()
 

@@ -59,7 +59,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
   // and wipe stale state so the optimizer starts completely fresh.
   if (isOptimized) {
     selectedStops = optimizedSchedule
-      .filter(s => !s.isLunch)
+      .filter(s => !s.isLunch && !s.isGap)
       .map(s => ({
         _id: s._id, name: s.name, lat: s.lat, lng: s.lng,
         arrival: s.arrival, priority_checkin: s.priority_checkin || false,

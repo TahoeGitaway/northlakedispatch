@@ -18,9 +18,10 @@ function updateStatsDisplay() {
     prevIdx = stop.matrix_index;
   });
 
-  const lunchMin  = getLunchEnabled() ? 30 : 0;
+  const lunchMin   = getLunchEnabled() ? 30 : 0;
+  const gapMin     = optimizedSchedule.filter(s => s.isGap).reduce((sum, s) => sum + s.serviceMinutes, 0);
   const serviceSec = real.reduce((sum, s) => sum + s.serviceMinutes * 60, 0);
-  const totalSec   = drivingSec + serviceSec + lunchMin * 60;
+  const totalSec   = drivingSec + serviceSec + (lunchMin + gapMin) * 60;
 
   document.getElementById("totalTime").textContent   = (totalSec   / 3600).toFixed(2) + " hrs";
   document.getElementById("drivingTime").textContent = (drivingSec / 3600).toFixed(2) + " hrs";
@@ -33,10 +34,10 @@ function recalculateTimes() {
   let prevMatrixIdx = 0;
 
   optimizedSchedule.forEach(stop => {
-    if (stop.isLunch) {
+    if (stop.isLunch || stop.isGap) {
       stop.eta_minutes = Math.round(running);
       stop.eta         = minutesToHHMM(stop.eta_minutes);
-      running         += 30;
+      running         += stop.serviceMinutes;
       return;
     }
 
@@ -159,6 +160,21 @@ function setServiceMinutes(id, val) {
     if (s) s.serviceMinutes = val;
   });
   if (isOptimized) { recalculateTimes(); renderSchedule(); }
+}
+
+function setGapMinutes(id, val) {
+  const s = optimizedSchedule.find(s => s._id === id);
+  if (s) s.serviceMinutes = val;
+  recalculateTimes(); renderSchedule();
+}
+
+function addGap() {
+  optimizedSchedule.push({
+    _id: makeStopId(), isGap: true, name: "Gap",
+    serviceMinutes: 30, eta_minutes: 0, eta: "—",
+    lat: null, lng: null, matrix_index: null,
+  });
+  recalculateTimes(); renderSchedule();
 }
 
 /* ── PRE-OPT STOP LIST ── */
@@ -400,6 +416,31 @@ function renderSchedule() {
         </div>
         <div class="text-xs text-orange-600 mt-0.5">
           ${stop.eta} – ${minutesToHHMM(stop.eta_minutes + 30)}
+        </div>`;
+      wireDragEvents(li, si);
+      list.appendChild(li); return;
+    }
+
+    // ── GAP ROW ──
+    if (stop.isGap) {
+      li.className = "gap-row";
+      li.draggable = true;
+      li.dataset.scheduleIdx = si;
+      li.innerHTML = `
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2 font-medium text-gray-600 text-sm">
+            <span class="drag-handle">⠿</span>
+            ⏸ Gap
+            <select class="border rounded px-1 py-0.5 text-xs font-normal text-gray-700"
+                    onchange="setGapMinutes('${stop._id}', parseInt(this.value))">
+              ${generateTimeOptions(stop.serviceMinutes)}
+            </select>
+          </div>
+          <button onclick="removeStop('${stop._id}')"
+                  class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
+        </div>
+        <div class="text-xs text-gray-400 mt-0.5">
+          ${stop.eta} – ${minutesToHHMM(stop.eta_minutes + stop.serviceMinutes)}
         </div>`;
       wireDragEvents(li, si);
       list.appendChild(li); return;
