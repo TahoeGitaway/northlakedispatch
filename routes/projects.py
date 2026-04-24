@@ -82,18 +82,23 @@ def _route_groups(props, service_min=10, day_min=540, speed_kmh=35):
 
     labels        = [-1] * n
     route_minutes = {}
-    # Seed routes geographically west→east so routes spread across territory
-    unvisited = sorted(range(n), key=lambda i: props[i]["lng"])
+    unvisited     = list(range(n))
+    # Find the centroid of all properties and start from the one nearest to it
+    avg_lat = sum(props[i]["lat"] for i in unvisited) / n
+    avg_lng = sum(props[i]["lng"] for i in unvisited) / n
+    unvisited.sort(key=lambda i: (props[i]["lat"] - avg_lat)**2 + (props[i]["lng"] - avg_lng)**2)
 
     group = 0
     while unvisited:
+        # Each new route starts from the property nearest to the overall centroid
+        # among those still unassigned (keeps routes balanced and central)
         start = unvisited.pop(0)
         labels[start] = group
         elapsed = service_min
         current = start
 
         while unvisited:
-            # Find nearest unvisited property
+            # Find nearest unvisited property to the current stop
             best_pos, best_drive = None, float("inf")
             for pos, idx in enumerate(unvisited):
                 d = drive_min(props[current], props[idx])
