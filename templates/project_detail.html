@@ -163,6 +163,7 @@
 <script>
 const PROJECT_ID  = {{ project.id }};
 const COLORS      = {{ colors | safe }};
+const ROUTE_META  = {{ route_meta | safe }};
 let allProps      = {{ props_json | safe }};
 let currentFilter = "all";
 let selectedIds   = new Set();
@@ -185,7 +186,7 @@ Object.keys(clusterGroups).sort((a,b) => +a-+b).forEach(c => {
   const color = COLORS[+c % COLORS.length];
   const span  = document.createElement("span");
   span.className = "flex items-center gap-1 text-xs text-gray-600";
-  span.innerHTML = `<span style="background:${color};width:10px;height:10px;border-radius:50%;display:inline-block"></span>Region ${+c+1} (${clusterGroups[c].length})`;
+  span.innerHTML = `<span style="background:${color};width:10px;height:10px;border-radius:50%;display:inline-block"></span>Route ${+c+1} (${clusterGroups[c].length})`;
   legend.appendChild(span);
 });
 
@@ -342,8 +343,10 @@ function renderList() {
     Object.keys(clusters).sort((a,b) => +a - +b).forEach(c => {
       const color = c >= 0 ? COLORS[+c % COLORS.length] : "#9ca3af";
       const items = clusters[c];
-      const label = c >= 0 ? `Region ${+c+1}` : "Unassigned";
+      const label = c >= 0 ? `Route ${+c+1}` : "Unassigned";
       const ids   = items.map(p => p.id).join(",");
+      const meta  = ROUTE_META[+c] || {};
+      const hrs   = meta.minutes ? ` · ~${(meta.minutes/60).toFixed(1)} hrs` : "";
       html += `
         <div class="mb-4 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
           <div class="flex items-center justify-between px-4 py-2.5 gap-3"
@@ -351,7 +354,7 @@ function renderList() {
             <div class="flex items-center gap-2">
               <span style="background:${color}" class="w-3 h-3 rounded-full inline-block flex-shrink-0"></span>
               <span class="text-sm font-semibold text-gray-700">${label}</span>
-              <span class="text-xs text-gray-400">${items.length} propert${items.length===1?"y":"ies"}</span>
+              <span class="text-xs text-gray-400">${items.length} stop${items.length===1?"":"s"}${hrs}</span>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">

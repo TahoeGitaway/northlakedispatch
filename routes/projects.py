@@ -8,7 +8,6 @@ import difflib
 import io
 import json
 import math
-import random
 from datetime import datetime
 
 from flask import (Blueprint, Response, jsonify, redirect,
@@ -63,37 +62,59 @@ def _match_name(name, db_props):
     return None, {"_input": name_clean}
 
 
-def _kmeans(points, k, max_iters=50):
-    """K-means on [(lat, lng), ...]. Returns list of integer cluster labels."""
-    n = len(points)
+def _route_groups(props, service_min=10, day_min=540, speed_kmh=35):
+    """
+    Greedy nearest-neighbor grouping that fills each route up to day_min minutes.
+    Uses haversine drive-time estimates at speed_kmh (conservative for mountain roads).
+    Returns (labels, route_minutes) where labels[i] is the route index for props[i].
+    """
+    n = len(props)
     if n == 0:
-        return []
-    k = max(1, min(k, n))
-    if k == 1:
-        return [0] * n
+        return [], {}
 
-    rng = random.Random(42)
-    centroids = list(rng.sample(points, k))
-    labels = [0] * n
+    def drive_min(a, b):
+        lat1, lon1 = math.radians(a["lat"]), math.radians(a["lng"])
+        lat2, lon2 = math.radians(b["lat"]), math.radians(b["lng"])
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        h = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+        km = 2 * 6371 * math.asin(math.sqrt(min(1.0, h)))
+        return (km / speed_kmh) * 60
 
-    for _ in range(max_iters):
-        new_labels = [
-            min(range(k), key=lambda ki, p=p: math.hypot(
-                p[0] - centroids[ki][0], p[1] - centroids[ki][1]))
-            for p in points
-        ]
-        if new_labels == labels:
-            break
-        labels = new_labels
-        for ki in range(k):
-            pts = [points[i] for i in range(n) if labels[i] == ki]
-            if pts:
-                centroids[ki] = (
-                    sum(p[0] for p in pts) / len(pts),
-                    sum(p[1] for p in pts) / len(pts),
-                )
+    labels        = [-1] * n
+    route_minutes = {}
+    # Seed routes geographically west→east so routes spread across territory
+    unvisited = sorted(range(n), key=lambda i: props[i]["lng"])
 
-    return labels
+    group = 0
+    while unvisited:
+        start = unvisited.pop(0)
+        labels[start] = group
+        elapsed = service_min
+        current = start
+
+        while unvisited:
+            # Find nearest unvisited property
+            best_pos, best_drive = None, float("inf")
+            for pos, idx in enumerate(unvisited):
+                d = drive_min(props[current], props[idx])
+                if d < best_drive:
+                    best_drive, best_pos = d, pos
+
+            if best_pos is None:
+                break
+            # Stop adding to this route if the next stop would push past the day
+            if elapsed + best_drive + service_min > day_min:
+                break
+
+            elapsed += best_drive + service_min
+            idx = unvisited.pop(best_pos)
+            labels[idx] = group
+            current = idx
+
+        route_minutes[group] = round(elapsed)
+        group += 1
+
+    return labels, route_minutes
 
 
 def _get_project(project_id):
@@ -181,16 +202,17 @@ def project_detail(project_id):
     total     = len(props)
     completed = sum(1 for p in props if p["completion_id"])
 
-    route_size = max(5, min(50, int(request.args.get("size", 15))))
-
-    # K-means clusters for pending properties
+    # Greedy nearest-neighbor day-filling grouping
     pending = [p for p in props if not p["completion_id"] and p["lat"] and p["lng"]]
     if pending:
-        k      = max(1, math.ceil(len(pending) / route_size))
-        labels = _kmeans([(p["lat"], p["lng"]) for p in pending], k)
-        label_map = {pending[i]["id"]: labels[i] for i in range(len(pending))}
+        labels, route_minutes = _route_groups(pending)
+        label_map  = {pending[i]["id"]: labels[i]  for i in range(len(pending))}
+        route_meta = {g: {"minutes": m} for g, m in route_minutes.items()}
+        for g, meta in route_meta.items():
+            meta["stops"] = sum(1 for lbl in labels if lbl == g)
     else:
-        label_map = {}
+        label_map  = {}
+        route_meta = {}
 
     for p in props:
         p["cluster"] = label_map.get(p["id"])
@@ -202,7 +224,7 @@ def project_detail(project_id):
         total      = total,
         completed  = completed,
         colors     = json.dumps(CLUSTER_COLORS),
-        route_size = route_size,
+        route_meta = json.dumps(route_meta),
     )
 
 
@@ -396,8 +418,7 @@ def project_tasks(project_id):
 
     pending = [p for p in props if not p["completion_id"] and p["lat"] and p["lng"]]
     if pending:
-        k      = max(1, math.ceil(len(pending) / 15))
-        labels = _kmeans([(p["lat"], p["lng"]) for p in pending], k)
+        labels, _ = _route_groups(pending)
         label_map = {pending[i]["id"]: labels[i] for i in range(len(pending))}
     else:
         label_map = {}

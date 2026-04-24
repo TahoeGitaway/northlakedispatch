@@ -58,7 +58,7 @@ function render() {
   Object.keys(clusters).sort((a, b) => +a - +b).forEach(c => {
     const color = +c >= 0 ? COLORS[+c % COLORS.length] : "#9ca3af";
     const items = clusters[c];
-    const label = +c >= 0 ? `Region ${+c + 1}` : "Unassigned";
+    const label = +c >= 0 ? `Route ${+c + 1}` : "Unassigned";
 
     html += `
       <div class="mb-5">
