@@ -57,6 +57,11 @@
   }
   .cal-cell.today .cal-dot,
   .cal-cell.selected .cal-dot { background: #a5b4fc; }
+  .cal-activity { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+  .cal-arr  { font-size: 9px; font-weight: 700; color: #059669; }
+  .cal-dep  { font-size: 9px; font-weight: 700; color: #d97706; }
+  .cal-cell.today .cal-arr, .cal-cell.selected .cal-arr { color: #6ee7b7; }
+  .cal-cell.today .cal-dep, .cal-cell.selected .cal-dep { color: #fde68a; }
 
   /* ── MONTH NAV ── */
   .month-nav button {
@@ -310,7 +315,8 @@ const PS_TEAM = ALL_TEAMS.find(t => t.name === "Property Specialist");
 let selectedTeamId = PS_TEAM ? PS_TEAM.id : null;
 
 /* ── Build a filtered map: dateStr → [route, ...] based on selectedTeamId ── */
-let routesByDate = {};
+let routesByDate  = {};
+let activityByDate = {};   // {dateStr: {arrivals, departures, leases}}
 
 function buildRoutesByDate() {
   routesByDate = {};
@@ -415,6 +421,15 @@ function buildCalendar() {
       cell.appendChild(dotRow);
     }
 
+    const act = activityByDate[ds];
+    if (act && (act.arrivals || act.departures)) {
+      const actRow = document.createElement("div");
+      actRow.className = "cal-activity";
+      if (act.arrivals)   actRow.innerHTML += `<span class="cal-arr">&#9650;${act.arrivals}</span>`;
+      if (act.departures) actRow.innerHTML += `<span class="cal-dep">&#9660;${act.departures}</span>`;
+      cell.appendChild(actRow);
+    }
+
     cell.addEventListener("click", () => selectDay(ds));
 
     grid.appendChild(cell);
@@ -426,6 +441,16 @@ function changeMonth(delta) {
   if (calMonth > 12) { calMonth = 1;  calYear++; }
   if (calMonth < 1)  { calMonth = 12; calYear--; }
   buildCalendar();
+  loadCalendarActivity(calYear, calMonth);
+}
+
+async function loadCalendarActivity(year, month) {
+  try {
+    const res  = await fetch(`/briefing/calendar-activity?year=${year}&month=${month}`);
+    const data = await res.json();
+    activityByDate = {...activityByDate, ...data};
+    buildCalendar();
+  } catch (e) { /* fail silently — calendar works without activity */ }
 }
 
 function selectDay(ds) {
@@ -675,6 +700,7 @@ document.addEventListener("DOMContentLoaded", () => {
     defaultTab.classList.add("bg-indigo-600", "text-white", "border-indigo-600");
   }
   buildCalendar();
+  loadCalendarActivity(calYear, calMonth);
 
   // If redirected from save with ?date=, jump straight to that day
   const urlDate = new URLSearchParams(window.location.search).get("date");

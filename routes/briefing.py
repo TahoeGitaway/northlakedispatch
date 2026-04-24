@@ -1,17 +1,19 @@
 """
 routes/briefing.py — AI-powered daily operations briefing.
 
-Pulls today's saved routes from the DB and check-ins from the Breezeway API,
-then asks Claude to write a plain-English summary paragraph.
+Pulls today's saved routes from the DB, plus arrivals and departures
+from the Breezeway API (30+ day stays classified as "Lease"), then
+asks Claude to write a plain-English summary.
 
-Results are cached in memory for 15 minutes per date so repeated page loads
-don't burn API quota.
+Results are cached in memory for 15 minutes per date so repeated page
+loads don't burn API quota.
 """
 
+import calendar as cal_mod
 import json
 import os
 import time
-from datetime import datetime
+from datetime import date as date_cls, datetime
 
 import anthropic
 import requests
@@ -26,14 +28,16 @@ ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY", "")
 BREEZEWAY_CLIENT_ID     = os.environ.get("BREEZEWAY_CLIENT_ID", "")
 BREEZEWAY_CLIENT_SECRET = os.environ.get("BREEZEWAY_CLIENT_SECRET", "")
 
-CACHE_TTL = 15 * 60  # 15 minutes
+CACHE_TTL          = 15 * 60   # 15 minutes for briefing
+CALENDAR_CACHE_TTL = 30 * 60   # 30 minutes for calendar activity
 
 # ── In-memory caches ──────────────────────────────────────────────
-_briefing_cache: dict = {}          # {date_str: (timestamp, text)}
-_bw_token:       dict = {"value": None, "expires_at": 0}
+_briefing_cache: dict  = {}   # {cache_key: (timestamp, payload)}
+_calendar_cache: dict  = {}   # {(year, month): (timestamp, activity_dict)}
+_bw_token:       dict  = {"value": None, "expires_at": 0}
 
 
-# ── Breezeway helpers ─────────────────────────────────────────────
+# ── Breezeway auth ────────────────────────────────────────────────
 
 def _get_breezeway_token() -> str | None:
     """Return a valid Breezeway JWT, fetching a new one only when stale."""
@@ -48,53 +52,76 @@ def _get_breezeway_token() -> str | None:
             json={"client_id": BREEZEWAY_CLIENT_ID, "client_secret": BREEZEWAY_CLIENT_SECRET},
             timeout=10,
         )
-        data = resp.json()
+        data  = resp.json()
         token = data.get("access_token")
         if token:
             _bw_token["value"]      = token
-            _bw_token["expires_at"] = now + 23 * 3600  # tokens live 24 h; refresh after 23 h
+            _bw_token["expires_at"] = now + 23 * 3600
         return token
     except Exception:
         return None
 
 
-def _fetch_breezeway_checkins(date_str: str) -> list:
-    """Return today's Breezeway reservations, paginating through all pages."""
-    token = _get_breezeway_token()
-    if not token:
-        return []
+# ── Breezeway data fetchers ───────────────────────────────────────
+
+def _fetch_bw_reservations(token: str, params: dict) -> list:
+    """Paginate through all Breezeway reservations matching params."""
     all_results = []
-    page = 1
-    limit = 100
+    page, limit = 1, 100
     try:
         while True:
             resp = requests.get(
                 "https://api.breezeway.io/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
-                params={"checkin_date_ge": date_str, "checkin_date_le": date_str,
-                        "limit": limit, "page": page},
-                timeout=10,
+                params={**params, "limit": limit, "page": page},
+                timeout=15,
             )
             data = resp.json()
-            if isinstance(data, list):
-                page_results = data
-            else:
-                page_results = data.get("results", data.get("data", [])) or []
+            page_results = (data.get("results", data.get("data", [])) or []) \
+                           if isinstance(data, dict) else (data or [])
             all_results.extend(page_results)
             if len(page_results) < limit:
-                break  # last page
+                break
             page += 1
-        return all_results
     except Exception:
-        return all_results  # return whatever we managed to fetch
+        pass
+    return all_results
 
 
-def _classify_checkin(reservation: dict) -> str:
-    """Return 'owner stay' or 'guest arrival' based on Breezeway tags."""
-    tags = [str(t).lower() for t in (reservation.get("tags") or [])]
+def _fetch_breezeway_checkins(date_str: str) -> list:
+    token = _get_breezeway_token()
+    if not token:
+        return []
+    return _fetch_bw_reservations(token, {
+        "checkin_date_ge": date_str, "checkin_date_le": date_str,
+    })
+
+
+def _fetch_breezeway_checkouts(date_str: str) -> list:
+    token = _get_breezeway_token()
+    if not token:
+        return []
+    return _fetch_bw_reservations(token, {
+        "checkout_date_ge": date_str, "checkout_date_le": date_str,
+    })
+
+
+def _classify_reservation(r: dict) -> str:
+    """Returns 'lease', 'owner', or 'guest'."""
+    checkin  = r.get("checkin_date")  or ""
+    checkout = r.get("checkout_date") or ""
+    if checkin and checkout:
+        try:
+            if (date_cls.fromisoformat(checkout) - date_cls.fromisoformat(checkin)).days >= 30:
+                return "lease"
+        except Exception:
+            pass
+    if r.get("type_stay") == "owner":
+        return "owner"
+    tags = [str(t).lower() for t in (r.get("tags") or [])]
     if any("owner" in t for t in tags):
-        return "owner stay"
-    return "guest arrival"
+        return "owner"
+    return "guest"
 
 
 def _fmt_time(hhmm: str) -> str:
@@ -102,10 +129,17 @@ def _fmt_time(hhmm: str) -> str:
     try:
         parts = hhmm.split(":")
         h, m  = int(parts[0]), int(parts[1])
-        ampm  = "AM" if h < 12 else "PM"
-        return f"{h % 12 or 12}:{m:02d} {ampm}"
+        return f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
     except Exception:
         return hhmm
+
+
+def _guest_name(r: dict) -> str:
+    guests = r.get("guests") or []
+    if guests:
+        g = guests[0]
+        return f"{g.get('first_name','')} {g.get('last_name','')}".strip()
+    return ""
 
 
 # ── DB helpers ────────────────────────────────────────────────────
@@ -125,8 +159,7 @@ def _fetch_todays_routes(date_str: str, team_id=None) -> list:
     if team_id:
         cur.execute(
             """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
-               FROM saved_routes r
-               JOIN users u ON r.created_by = u.id
+               FROM saved_routes r JOIN users u ON r.created_by = u.id
                WHERE r.route_date = %s AND r.team_id = %s
                ORDER BY r.updated_at DESC""",
             (date_str, team_id),
@@ -134,22 +167,19 @@ def _fetch_todays_routes(date_str: str, team_id=None) -> list:
     else:
         cur.execute(
             """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
-               FROM saved_routes r
-               JOIN users u ON r.created_by = u.id
+               FROM saved_routes r JOIN users u ON r.created_by = u.id
                WHERE r.route_date = %s
                ORDER BY r.updated_at DESC""",
             (date_str,),
         )
     rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
     return rows
 
 
-# ── Claude briefing generator ─────────────────────────────────────
+# ── Claude briefing ───────────────────────────────────────────────
 
 def _summarise_routes(routes: list) -> list:
-    """Return a list of dicts the frontend uses to render the route list."""
     out = []
     for r in routes:
         stops    = [s for s in json.loads(r["stops_json"] or "[]") if not s.get("isLunch")]
@@ -167,12 +197,13 @@ def _summarise_routes(routes: list) -> list:
     return out
 
 
-def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") -> str:
+def _build_prompt(date_str: str, routes: list, checkins: list,
+                  checkouts: list, notes: str = "") -> str:
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     day_name = date_obj.strftime("%A, %B ") + str(date_obj.day)
     lines    = [f"Today is {day_name}.\n"]
 
-    # Routes (plain text for the prompt — no markdown links needed)
+    # Routes
     if routes:
         route_lines = []
         for r in routes:
@@ -180,8 +211,7 @@ def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") 
             n        = len(stops)
             priority = sum(1 for s in stops if s.get("priority_checkin"))
             checkin  = sum(1 for s in stops if s.get("arrival") and not s.get("priority_checkin"))
-
-            line = f'- "{r["name"]}"'
+            line     = f'- "{r["name"]}"'
             if r["assigned_to"]:
                 line += f' (assigned to {r["assigned_to"]})'
             line += f": {n} stop{'s' if n != 1 else ''}"
@@ -192,79 +222,84 @@ def _build_prompt(date_str: str, routes: list, checkins: list, notes: str = "") 
             if (r.get("notes") or "").strip():
                 line += f'. Notes: {r["notes"].strip()}'
             route_lines.append(line)
-
         lines.append(f"Dispatch routes ({len(routes)} total):\n" + "\n".join(route_lines))
     else:
         lines.append("No dispatch routes are saved for today.")
 
-    # Breezeway check-ins
+    # Breezeway arrivals
     if checkins:
-        bw_lines   = []
-        owner_ct   = 0
-        guest_ct   = 0
-        for c in checkins:
-            kind = _classify_checkin(c)
-            if kind == "owner stay":
-                owner_ct += 1
-            else:
-                guest_ct += 1
-
-            guests = c.get("guests") or []
-            guest_name = ""
-            if guests:
-                g = guests[0]
-                guest_name = f"{g.get('first_name', '')} {g.get('last_name', '')}".strip()
-
-            entry = f"- {kind}"
-            if guest_name:
-                entry += f": {guest_name}"
-            checkin_time = c.get("checkin_time", "")
-            if checkin_time:
-                entry += f" checking in at {_fmt_time(checkin_time)}"
-            checkout = c.get("checkout_date", "")
-            if checkout:
-                entry += f" (out {checkout})"
-            bw_lines.append(entry)
+        counts = {"guest": 0, "owner": 0, "lease": 0}
+        arr_lines = []
+        for r in checkins:
+            kind = _classify_reservation(r)
+            counts[kind] += 1
+            name = _guest_name(r)
+            t    = r.get("checkin_time", "")
+            out_date = r.get("checkout_date", "")
+            prefix = {"lease": "[LEASE] ", "owner": "[OWNER] "}.get(kind, "")
+            entry  = f"- {prefix}{name or 'Guest'}"
+            if t:
+                entry += f" checking in at {_fmt_time(t)}"
+            if out_date:
+                entry += f" (checkout {out_date})"
+            arr_lines.append(entry)
 
         summary = []
-        if guest_ct:
-            summary.append(f"{guest_ct} guest arrival{'s' if guest_ct != 1 else ''}")
-        if owner_ct:
-            summary.append(f"{owner_ct} owner stay{'s' if owner_ct != 1 else ''}")
-        lines.append(
-            f"Breezeway check-ins today ({', '.join(summary)}):\n" + "\n".join(bw_lines)
-        )
-    elif _get_breezeway_token():
-        lines.append("Breezeway shows no check-ins scheduled for today.")
+        if counts["guest"]:  summary.append(f"{counts['guest']} guest arrival{'s' if counts['guest']!=1 else ''}")
+        if counts["owner"]:  summary.append(f"{counts['owner']} owner stay{'s' if counts['owner']!=1 else ''}")
+        if counts["lease"]:  summary.append(f"{counts['lease']} lease arrival{'s' if counts['lease']!=1 else ''}")
+        lines.append(f"Arrivals today ({', '.join(summary)}):\n" + "\n".join(arr_lines))
     else:
-        lines.append("(Breezeway data not available — credentials not yet configured.)")
+        lines.append("No arrivals scheduled for today.")
 
-    # Dispatcher notes
+    # Breezeway departures
+    if checkouts:
+        lease_ct = sum(1 for r in checkouts if _classify_reservation(r) == "lease")
+        dep_lines = []
+        for r in checkouts:
+            kind = _classify_reservation(r)
+            name = _guest_name(r)
+            t    = r.get("checkout_time", "")
+            prefix = {"lease": "[LEASE] ", "owner": "[OWNER] "}.get(kind, "")
+            entry  = f"- {prefix}{name or 'Guest'}"
+            if t:
+                entry += f" checking out by {_fmt_time(t)}"
+            dep_lines.append(entry)
+        lease_note = f" including {lease_ct} lease{'s' if lease_ct!=1 else ''}" if lease_ct else ""
+        lines.append(
+            f"Departures today ({len(checkouts)} total{lease_note}):\n" + "\n".join(dep_lines)
+        )
+    else:
+        lines.append("No departures scheduled for today.")
+
+    if not checkins and not checkouts and not _get_breezeway_token():
+        lines[-2] = "(Breezeway data not available — credentials not configured.)"
+        lines[-1] = ""
+
     if notes:
         lines.append(f"Additional notes from the dispatcher:\n{notes}")
 
-    return "\n\n".join(lines)
+    return "\n\n".join(l for l in lines if l)
 
 
-def _generate_briefing(date_str: str, routes: list, checkins: list, notes: str = "") -> tuple[str | None, str | None]:
-    """Returns (text, error_reason). One of the two will always be None."""
+def _generate_briefing(date_str: str, routes: list, checkins: list,
+                        checkouts: list, notes: str = "") -> tuple[str | None, str | None]:
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
-        return None, "ANTHROPIC_API_KEY is not set in the server environment."
+        return None, "ANTHROPIC_API_KEY is not set."
 
-    prompt = _build_prompt(date_str, routes, checkins, notes)
+    prompt = _build_prompt(date_str, routes, checkins, checkouts, notes)
     try:
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
             model      = "claude-haiku-4-5-20251001",
-            max_tokens = 150,
+            max_tokens = 180,
             system     = (
                 "You are a concise operations briefer for a vacation rental cleaning company "
-                "in Lake Tahoe. Write 1-2 sentences: mention how many routes are planned (use "
-                "the word 'planned', never 'dispatched') but do NOT name individual technicians "
-                "or routes — that list appears separately below your summary. "
-                "If Breezeway check-in data is available, briefly note the number of guest "
-                "arrivals or owner stays. "
+                "in Lake Tahoe. Write 2-3 sentences covering: how many routes are planned (use "
+                "'planned', never 'dispatched'); how many guest arrivals and departures; and "
+                "call out lease arrivals or departures specifically if any exist (30+ day stays). "
+                "Do NOT name individual technicians or routes — that list appears below your summary. "
                 "Use the actual day name (e.g. 'Thursday') — never use the word 'today'. "
                 "Be direct. Do not start with a greeting."
             ),
@@ -285,25 +320,28 @@ def get_briefing_notes():
     date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     conn = get_db()
     cur  = get_cursor(conn)
-    cur.execute("SELECT note_text, staff_list, staff_updated_at FROM briefing_notes WHERE note_date = %s", (date_str,))
+    cur.execute(
+        "SELECT note_text, staff_list, staff_updated_at FROM briefing_notes WHERE note_date = %s",
+        (date_str,)
+    )
     row = cur.fetchone()
     cur.close(); conn.close()
 
-    # Parse staff_list as JSON history array; fall back for legacy plain-text values
     staff_entries = []
     if row:
         raw = (row["staff_list"] or "").strip()
         if raw:
             try:
                 parsed = json.loads(raw)
-                staff_entries = parsed if isinstance(parsed, list) else [{"text": raw, "saved_at": row["staff_updated_at"] or ""}]
+                staff_entries = parsed if isinstance(parsed, list) \
+                    else [{"text": raw, "saved_at": row["staff_updated_at"] or ""}]
             except Exception:
                 staff_entries = [{"text": raw, "saved_at": (row["staff_updated_at"] or "")}]
 
     return jsonify({
-        "note_text":    (row["note_text"] or "").strip() if row else "",
+        "note_text":     (row["note_text"] or "").strip() if row else "",
         "staff_entries": staff_entries,
-        "date": date_str,
+        "date":          date_str,
     })
 
 
@@ -321,7 +359,6 @@ def save_briefing_notes():
     if "staff_list" in data:
         new_text = (data.get("staff_list") or "").strip()
         if new_text:
-            # Fetch existing entries to prepend to history
             cur.execute("SELECT staff_list FROM briefing_notes WHERE note_date = %s", (date_str,))
             existing_row = cur.fetchone()
             existing_raw = (existing_row["staff_list"] or "").strip() if existing_row else ""
@@ -331,7 +368,7 @@ def save_briefing_notes():
                     existing = [{"text": existing_raw, "saved_at": now}] if existing_raw else []
             except Exception:
                 existing = [{"text": existing_raw, "saved_at": now}] if existing_raw else []
-            entries = [{"text": new_text, "saved_at": now}] + existing
+            entries    = [{"text": new_text, "saved_at": now}] + existing
         else:
             entries = []
         staff_json = json.dumps(entries)
@@ -358,10 +395,7 @@ def save_briefing_notes():
 
     conn.commit()
     cur.close(); conn.close()
-
-    # Bust the briefing cache for this date so the next generation picks up the new notes
     _briefing_cache.pop(date_str, None)
-
     return jsonify({"success": True})
 
 
@@ -379,10 +413,11 @@ def daily_briefing():
         if now - ts < CACHE_TTL:
             return jsonify({**payload, "cached": True})
 
-    routes        = _fetch_todays_routes(date_str, team_id=team_id)
-    checkins      = _fetch_breezeway_checkins(date_str)
-    notes         = _fetch_briefing_notes(date_str)
-    blurb, err_msg = _generate_briefing(date_str, routes, checkins, notes)
+    routes   = _fetch_todays_routes(date_str, team_id=team_id)
+    checkins = _fetch_breezeway_checkins(date_str)
+    checkouts= _fetch_breezeway_checkouts(date_str)
+    notes    = _fetch_briefing_notes(date_str)
+    blurb, err_msg = _generate_briefing(date_str, routes, checkins, checkouts, notes)
 
     if blurb:
         payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
@@ -390,3 +425,55 @@ def daily_briefing():
         return jsonify({**payload, "cached": False})
 
     return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
+
+
+@briefing_bp.route("/briefing/calendar-activity")
+@login_required
+def calendar_activity():
+    """Return arrival/departure/lease counts per date for a given month."""
+    try:
+        year  = int(request.args.get("year",  datetime.utcnow().year))
+        month = int(request.args.get("month", datetime.utcnow().month))
+    except ValueError:
+        return jsonify({}), 400
+
+    now       = time.time()
+    cache_key = (year, month)
+    if cache_key in _calendar_cache:
+        ts, data = _calendar_cache[cache_key]
+        if now - ts < CALENDAR_CACHE_TTL:
+            return jsonify(data)
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({})
+
+    last_day = cal_mod.monthrange(year, month)[1]
+    first_ds = f"{year}-{month:02d}-01"
+    last_ds  = f"{year}-{month:02d}-{last_day:02d}"
+
+    activity: dict = {}
+
+    def ensure(ds):
+        if ds not in activity:
+            activity[ds] = {"arrivals": 0, "departures": 0, "leases": 0}
+
+    # Arrivals this month
+    for r in _fetch_bw_reservations(token, {"checkin_date_ge": first_ds, "checkin_date_le": last_ds}):
+        ds   = r.get("checkin_date", "")
+        kind = _classify_reservation(r)
+        if ds:
+            ensure(ds)
+            activity[ds]["arrivals"] += 1
+            if kind == "lease":
+                activity[ds]["leases"] += 1
+
+    # Departures this month
+    for r in _fetch_bw_reservations(token, {"checkout_date_ge": first_ds, "checkout_date_le": last_ds}):
+        ds = r.get("checkout_date", "")
+        if ds:
+            ensure(ds)
+            activity[ds]["departures"] += 1
+
+    _calendar_cache[cache_key] = (now, activity)
+    return jsonify(activity)
