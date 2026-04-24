@@ -4,6 +4,9 @@
 <style>
   .prop-row { transition: background 0.1s; }
   .prop-row:hover { background: #f9fafb; }
+  .prop-row.selected-row { background: #eef2ff; }
+  #bulkBar { transition: transform 0.2s, opacity 0.2s; }
+  #bulkBar.hidden { transform: translateY(100%); opacity: 0; pointer-events: none; }
 </style>
 
 <div class="max-w-5xl mx-auto px-6 py-8">
@@ -89,16 +92,11 @@
 
     <!-- Route size selector -->
     <div class="flex items-center gap-2 ml-auto">
-      <label class="text-xs text-gray-500 whitespace-nowrap">Per route:</label>
-      <select id="routeSize" onchange="changeSize(this.value)"
-              class="border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700
-                     focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
-        <option value="5"  {% if route_size==5  %}selected{% endif %}>5</option>
-        <option value="10" {% if route_size==10 %}selected{% endif %}>10</option>
-        <option value="15" {% if route_size==15 %}selected{% endif %}>15</option>
-        <option value="20" {% if route_size==20 %}selected{% endif %}>20</option>
-        <option value="25" {% if route_size==25 %}selected{% endif %}>25</option>
-      </select>
+      <label class="text-xs text-gray-500 whitespace-nowrap">Stops per route:</label>
+      <input type="number" id="routeSize" min="5" max="30" value="{{ route_size }}"
+             onchange="changeSize(this.value)"
+             class="w-16 border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white text-center">
     </div>
 
     <input id="propSearch" type="text" placeholder="Search properties…"
@@ -113,11 +111,38 @@
 
 </div>
 
+<!-- Bulk action bar (sticky bottom) -->
+<div id="bulkBar" class="hidden fixed bottom-0 left-0 right-0 z-50
+                          bg-white border-t border-gray-200 shadow-lg px-6 py-3
+                          flex items-center gap-3 justify-between">
+  <span id="bulkCount" class="text-sm font-semibold text-gray-700"></span>
+  <div class="flex gap-2">
+    <button onclick="bulkMarkDone()"
+            class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium
+                   px-4 py-2 rounded-lg transition-colors">
+      Mark Done
+    </button>
+    <button onclick="bulkMarkUndone()"
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
+                   px-4 py-2 rounded-lg transition-colors">
+      Mark Undone
+    </button>
+    <button onclick="bulkRemove()"
+            class="bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium
+                   px-4 py-2 rounded-lg transition-colors">
+      Remove
+    </button>
+    <button onclick="clearSelection()"
+            class="text-gray-400 hover:text-gray-600 text-sm px-2">✕ Clear</button>
+  </div>
+</div>
+
 <script>
 const PROJECT_ID  = {{ project.id }};
 const COLORS      = {{ colors | safe }};
 let allProps      = {{ props_json | safe }};
 let currentFilter = "all";
+let selectedIds   = new Set();
 
 /* ── Map ── */
 {% if props %}
@@ -164,6 +189,94 @@ function changeSize(val) {
   const url = new URL(window.location);
   url.searchParams.set("size", val);
   window.location = url.toString();
+}
+
+/* ── Selection ── */
+function toggleSelect(id, checked) {
+  if (checked) selectedIds.add(id); else selectedIds.delete(id);
+  updateBulkBar();
+  // update row highlight without full re-render
+  const row = document.querySelector(`[data-id="${id}"]`);
+  if (row) row.classList.toggle("selected-row", checked);
+}
+
+function selectRegion(ids, checked) {
+  ids.forEach(id => checked ? selectedIds.add(id) : selectedIds.delete(id));
+  updateBulkBar();
+  renderList();
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  updateBulkBar();
+  renderList();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById("bulkBar");
+  const n   = selectedIds.size;
+  if (n === 0) {
+    bar.classList.add("hidden");
+  } else {
+    bar.classList.remove("hidden");
+    document.getElementById("bulkCount").textContent =
+      `${n} propert${n === 1 ? "y" : "ies"} selected`;
+  }
+}
+
+async function bulkMarkDone() {
+  const ids  = [...selectedIds];
+  const now  = new Date().toISOString();
+  await Promise.all(ids.map(id =>
+    fetch(`/projects/${PROJECT_ID}/properties/${id}/complete`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({comment: ""}),
+    }).then(r => r.json()).then(data => {
+      if (data.success) {
+        const p = allProps.find(x => x.id === id);
+        if (p) { p.completion_id = 1; p.completed_by_name = data.completed_by; p.completed_at = data.completed_at; p.comment = ""; }
+      }
+    })
+  ));
+  selectedIds.clear();
+  updateBulkBar();
+  updateProgress();
+  renderList();
+}
+
+async function bulkMarkUndone() {
+  const ids = [...selectedIds];
+  await Promise.all(ids.map(id =>
+    fetch(`/projects/${PROJECT_ID}/properties/${id}/uncomplete`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({}),
+    }).then(r => r.json()).then(data => {
+      if (data.success) {
+        const p = allProps.find(x => x.id === id);
+        if (p) { p.completion_id = null; p.completed_by_name = null; p.completed_at = null; p.comment = ""; }
+      }
+    })
+  ));
+  selectedIds.clear();
+  updateBulkBar();
+  updateProgress();
+  renderList();
+}
+
+async function bulkRemove() {
+  const ids = [...selectedIds];
+  if (!confirm(`Remove ${ids.length} propert${ids.length===1?"y":"ies"} from the project?`)) return;
+  await Promise.all(ids.map(id =>
+    fetch(`/projects/${PROJECT_ID}/properties/${id}/delete`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({}),
+    })
+  ));
+  allProps = allProps.filter(x => !ids.includes(x.id));
+  selectedIds.clear();
+  updateBulkBar();
+  updateProgress();
+  renderList();
 }
 
 /* ── Filter ── */
@@ -214,14 +327,27 @@ function renderList() {
       const color = c >= 0 ? COLORS[+c % COLORS.length] : "#9ca3af";
       const items = clusters[c];
       const label = c >= 0 ? `Region ${+c+1}` : "Unassigned";
+      const ids   = items.map(p => p.id).join(",");
       html += `
         <div class="mb-4 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
-          <div class="flex items-center justify-between px-4 py-2.5"
+          <div class="flex items-center justify-between px-4 py-2.5 gap-3"
                style="background:${color}18; border-left:4px solid ${color}">
             <div class="flex items-center gap-2">
               <span style="background:${color}" class="w-3 h-3 rounded-full inline-block flex-shrink-0"></span>
               <span class="text-sm font-semibold text-gray-700">${label}</span>
               <span class="text-xs text-gray-400">${items.length} propert${items.length===1?"y":"ies"}</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                <input type="checkbox" onchange="selectRegion([${ids}], this.checked)"
+                       class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer">
+                All
+              </label>
+              <a href="/?props=${ids}" target="_blank" rel="noopener"
+                 class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white
+                        px-3 py-1.5 rounded-lg font-medium transition-colors">
+                Generate Route →
+              </a>
             </div>
           </div>
           <div class="bg-white divide-y divide-gray-50">
@@ -248,7 +374,10 @@ function renderList() {
 }
 
 function pendingRow(p) {
-  return `<div class="prop-row px-4 py-3 flex items-start justify-between gap-3" data-id="${p.id}">
+  const chk = selectedIds.has(p.id) ? "checked" : "";
+  return `<div class="prop-row px-4 py-3 flex items-start gap-3 ${selectedIds.has(p.id)?"selected-row":""}" data-id="${p.id}">
+    <input type="checkbox" ${chk} onchange="toggleSelect(${p.id}, this.checked)"
+           class="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 cursor-pointer flex-shrink-0">
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-1 flex-wrap">
         <span class="text-sm font-medium text-gray-800">${p.property_name}</span>
@@ -282,13 +411,16 @@ function doneRow(p) {
   const date = p.completed_at
     ? new Date(p.completed_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})
     : "";
-  return `<div class="prop-row px-4 py-3 flex items-start justify-between gap-3" data-id="${p.id}">
+  const chk = selectedIds.has(p.id) ? "checked" : "";
+  return `<div class="prop-row px-4 py-3 flex items-start gap-3 ${selectedIds.has(p.id)?"selected-row":""}" data-id="${p.id}">
+    <input type="checkbox" ${chk} onchange="toggleSelect(${p.id}, this.checked)"
+           class="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 cursor-pointer flex-shrink-0">
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2">
         <span class="text-green-500 text-base">✓</span>
         <span class="text-sm text-gray-400 line-through truncate">${p.property_name}</span>
       </div>
-      <div class="text-xs text-gray-400 mt-0.5 ml-6">
+      <div class="text-xs text-gray-400 mt-0.5 ml-0">
         ${p.completed_by_name||""} · ${date}
         ${p.comment ? `<span class="ml-2 text-gray-500">"${p.comment}"</span>` : ""}
       </div>

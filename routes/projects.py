@@ -332,6 +332,31 @@ def uncomplete_property(project_id, prop_id):
     return jsonify({"success": True})
 
 
+# ── Properties by ID (for route optimizer pre-load) ──────────────
+
+@projects_bp.route("/properties")
+@login_required
+def get_properties_by_ids():
+    ids_str = request.args.get("ids", "")
+    try:
+        ids = [int(i) for i in ids_str.split(",") if i.strip()]
+    except ValueError:
+        return jsonify({"properties": []}), 400
+    if not ids:
+        return jsonify({"properties": []})
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "SELECT id, property_name AS name, address, lat, lng "
+        "FROM project_properties WHERE id = ANY(%s)",
+        (ids,)
+    )
+    props = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify({"properties": props})
+
+
 # ── Tech Task View (mobile) ───────────────────────────────────────
 
 @projects_bp.route("/<int:project_id>/tasks")

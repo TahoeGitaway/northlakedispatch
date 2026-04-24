@@ -285,6 +285,23 @@ async function submitUpdateRoute() {
   }
 }
 
+/* ── LOAD FROM PROJECT CLUSTER ── */
+(async function checkPropsParam() {
+  const params    = new URLSearchParams(window.location.search);
+  const propsParam = params.get("props");
+  if (!propsParam) return;
+  window.history.replaceState({}, "", window.location.pathname);
+  try {
+    const res  = await fetch(`/projects/properties?ids=${encodeURIComponent(propsParam)}`);
+    const data = await res.json();
+    if (data.properties && data.properties.length) {
+      data.properties.forEach(p => addStop(p));
+    }
+  } catch (e) {
+    console.error("Failed to load project properties:", e);
+  }
+})();
+
 /* ── LOAD ROUTE ── */
 (async function checkLoadParam() {
   const params = new URLSearchParams(window.location.search);
