@@ -332,6 +332,63 @@ def uncomplete_property(project_id, prop_id):
     return jsonify({"success": True})
 
 
+# ── Tech Task View (mobile) ───────────────────────────────────────
+
+@projects_bp.route("/<int:project_id>/tasks")
+@login_required
+def project_tasks(project_id):
+    conn = get_db()
+    cur  = get_cursor(conn)
+
+    cur.execute("SELECT * FROM projects WHERE id = %s", (project_id,))
+    project = cur.fetchone()
+    if not project:
+        cur.close(); conn.close()
+        return "Project not found", 404
+
+    cur.execute("""
+        SELECT pp.id, pp.property_name, pp.address, pp.lat, pp.lng,
+               tc.id           AS completion_id,
+               tc.completed_at,
+               tc.comment,
+               u.name          AS completed_by_name
+        FROM project_properties pp
+        LEFT JOIN LATERAL (
+            SELECT id, completed_at, comment, completed_by
+            FROM task_completions
+            WHERE project_property_id = pp.id
+            ORDER BY completed_at DESC LIMIT 1
+        ) tc ON true
+        LEFT JOIN users u ON u.id = tc.completed_by
+        WHERE pp.project_id = %s
+        ORDER BY pp.property_name
+    """, (project_id,))
+    props = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    total     = len(props)
+    completed = sum(1 for p in props if p["completion_id"])
+
+    pending = [p for p in props if not p["completion_id"] and p["lat"] and p["lng"]]
+    if pending:
+        k      = max(1, math.ceil(len(pending) / 15))
+        labels = _kmeans([(p["lat"], p["lng"]) for p in pending], k)
+        label_map = {pending[i]["id"]: labels[i] for i in range(len(pending))}
+    else:
+        label_map = {}
+
+    for p in props:
+        p["cluster"] = label_map.get(p["id"])
+
+    return render_template("project_tasks.html",
+        project   = project,
+        props_json= json.dumps(props),
+        total     = total,
+        completed = completed,
+        colors    = json.dumps(CLUSTER_COLORS),
+    )
+
+
 # ── Delete ───────────────────────────────────────────────────────
 
 @projects_bp.route("/<int:project_id>/delete", methods=["POST"])

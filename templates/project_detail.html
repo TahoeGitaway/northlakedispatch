@@ -25,6 +25,11 @@
                 px-4 py-2 rounded-lg transition-colors">
         + Add Properties
       </a>
+      <button onclick="copyTaskLink()"
+              class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
+                     px-4 py-2 rounded-lg transition-colors">
+        📱 Tech View
+      </button>
       <a href="{{ url_for('projects.report_csv', project_id=project.id) }}"
          class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
                 px-4 py-2 rounded-lg transition-colors">
@@ -365,6 +370,16 @@ function updateProgress() {
   document.getElementById("progressBar").style.width = pct + "%";
   document.getElementById("progressRemaining").textContent = (total - completed) + " remaining";
   document.getElementById("progressPct").textContent = pct + "%";
+}
+
+function copyTaskLink() {
+  const url = window.location.origin + `/projects/${PROJECT_ID}/tasks`;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = event.target.closest("button");
+    const orig = btn.textContent;
+    btn.textContent = "✓ Copied!";
+    setTimeout(() => btn.textContent = orig, 2000);
+  });
 }
 
 renderList();
