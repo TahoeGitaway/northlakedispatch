@@ -47,18 +47,50 @@
   </div>
 
   <!-- Progress bar -->
+  {% set pct = ((completed / total * 100) | int) if total else 0 %}
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-5">
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-sm font-medium text-gray-700">Overall Progress</span>
-      <span class="text-sm font-semibold text-gray-800">{{ completed }}/{{ total }} complete</span>
+    <div class="flex items-center justify-between mb-3">
+      <span class="text-sm font-semibold text-gray-600 uppercase tracking-wide">Overall Progress</span>
+      <span class="text-sm font-bold text-gray-800">
+        <span id="progressDone">{{ completed }}</span>/<span id="progressTotal">{{ total }}</span> complete
+      </span>
     </div>
-    <div class="bg-gray-100 rounded-full h-3">
-      {% set pct = ((completed / total * 100) | int) if total else 0 %}
-      <div id="progressBar" class="bg-indigo-500 h-3 rounded-full transition-all" style="width: {{ pct }}%"></div>
+
+    <!-- Big fill bar -->
+    <div class="relative bg-gray-100 rounded-xl overflow-hidden" style="height:44px;">
+      <div id="progressBar"
+           class="absolute inset-y-0 left-0 rounded-xl transition-all duration-500"
+           style="width:{{ pct }}%;
+                  background: linear-gradient(90deg, #6366f1, #818cf8);
+                  box-shadow: {{ '2px 0 12px rgba(99,102,241,0.4)' if pct > 0 else 'none' }};">
+      </div>
+      <!-- Stripe shimmer overlay -->
+      <div class="absolute inset-0 rounded-xl"
+           style="background: repeating-linear-gradient(
+             -45deg,
+             transparent,
+             transparent 10px,
+             rgba(255,255,255,0.06) 10px,
+             rgba(255,255,255,0.06) 20px
+           )"></div>
+      <!-- Percentage label -->
+      <div class="absolute inset-0 flex items-center px-4 justify-between">
+        <span id="progressPct"
+              class="text-sm font-bold {% if pct > 8 %}text-white{% else %}text-gray-400{% endif %}"
+              style="position:relative;z-index:1;">{{ pct }}%</span>
+        <span id="progressRemaining"
+              class="text-xs {% if pct > 60 %}text-indigo-200{% else %}text-gray-400{% endif %}"
+              style="position:relative;z-index:1;">{{ total - completed }} remaining</span>
+      </div>
     </div>
-    <div class="flex justify-between text-xs text-gray-400 mt-1">
-      <span id="progressRemaining">{{ total - completed }} remaining</span>
-      <span id="progressPct">{{ pct }}%</span>
+
+    <!-- Tick marks every 25% -->
+    <div class="flex justify-between mt-1 px-0.5">
+      <span class="text-xs text-gray-300">0</span>
+      <span class="text-xs text-gray-300">25%</span>
+      <span class="text-xs text-gray-300">50%</span>
+      <span class="text-xs text-gray-300">75%</span>
+      <span class="text-xs text-gray-300">100%</span>
     </div>
   </div>
 
@@ -500,12 +532,29 @@ function updateProgress() {
   const completed = allProps.filter(p => p.completion_id).length;
   const pending   = total - completed;
   const pct       = total ? Math.round(completed / total * 100) : 0;
-  document.getElementById("progressBar").style.width = pct + "%";
-  document.getElementById("progressRemaining").textContent = pending + " remaining";
-  document.getElementById("progressPct").textContent = pct + "%";
-  document.getElementById("tab-all").textContent     = `All (${total})`;
-  document.getElementById("tab-pending").textContent = `Pending (${pending})`;
-  document.getElementById("tab-complete").textContent= `Complete (${completed})`;
+
+  const bar = document.getElementById("progressBar");
+  bar.style.width      = pct + "%";
+  bar.style.boxShadow  = pct > 0 ? "2px 0 12px rgba(99,102,241,0.4)" : "none";
+
+  // Gradient shifts green as it nears completion
+  const hue = Math.round(240 - pct * 1.2);  // indigo→green
+  bar.style.background = pct >= 100
+    ? "linear-gradient(90deg,#10b981,#34d399)"
+    : `linear-gradient(90deg,#6366f1,#818cf8)`;
+
+  const pctEl  = document.getElementById("progressPct");
+  const remEl  = document.getElementById("progressRemaining");
+  pctEl.textContent  = pct + "%";
+  remEl.textContent  = pending + " remaining";
+  pctEl.className    = "text-sm font-bold " + (pct > 8  ? "text-white" : "text-gray-400");
+  remEl.className    = "text-xs "           + (pct > 60 ? "text-indigo-200" : "text-gray-400");
+
+  document.getElementById("progressDone").textContent  = completed;
+  document.getElementById("progressTotal").textContent = total;
+  document.getElementById("tab-all").textContent       = `All (${total})`;
+  document.getElementById("tab-pending").textContent   = `Pending (${pending})`;
+  document.getElementById("tab-complete").textContent  = `Complete (${completed})`;
 }
 
 function copyTaskLink() {
