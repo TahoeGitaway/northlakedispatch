@@ -58,6 +58,7 @@ function render() {
   Object.keys(clusters).sort((a, b) => +a - +b).forEach(c => {
     const color = +c >= 0 ? COLORS[+c % COLORS.length] : "#9ca3af";
     const items = clusters[c];
+    items.sort((a, b) => a.property_name.localeCompare(b.property_name));
     const label = +c >= 0 ? `Route ${+c + 1}` : "Unassigned";
 
     html += `

@@ -344,6 +344,7 @@ function renderList() {
       const color = c >= 0 ? COLORS[+c % COLORS.length] : "#9ca3af";
       const items = clusters[c];
       const label = c >= 0 ? `Route ${+c+1}` : "Unassigned";
+      items.sort((a, b) => a.property_name.localeCompare(b.property_name));
       const ids   = items.map(p => p.id).join(",");
       const meta  = ROUTE_META[+c] || {};
       const hrs   = meta.minutes ? ` · ~${(meta.minutes/60).toFixed(1)} hrs` : "";
