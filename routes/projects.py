@@ -181,10 +181,12 @@ def project_detail(project_id):
     total     = len(props)
     completed = sum(1 for p in props if p["completion_id"])
 
+    route_size = max(5, min(50, int(request.args.get("size", 15))))
+
     # K-means clusters for pending properties
     pending = [p for p in props if not p["completion_id"] and p["lat"] and p["lng"]]
     if pending:
-        k      = max(1, math.ceil(len(pending) / 15))
+        k      = max(1, math.ceil(len(pending) / route_size))
         labels = _kmeans([(p["lat"], p["lng"]) for p in pending], k)
         label_map = {pending[i]["id"]: labels[i] for i in range(len(pending))}
     else:
@@ -194,12 +196,13 @@ def project_detail(project_id):
         p["cluster"] = label_map.get(p["id"])
 
     return render_template("project_detail.html",
-        project   = project,
-        props     = props,
-        props_json= json.dumps(props),
-        total     = total,
-        completed = completed,
-        colors    = json.dumps(CLUSTER_COLORS),
+        project    = project,
+        props      = props,
+        props_json = json.dumps(props),
+        total      = total,
+        completed  = completed,
+        colors     = json.dumps(CLUSTER_COLORS),
+        route_size = route_size,
     )
 
 
