@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Add Properties — {{ project.name }}{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-6 py-8">
+
+  <div class="mb-5">
+    <a href="{{ url_for('projects.project_detail', project_id=project.id) }}"
+       class="text-sm text-indigo-500 hover:underline">← {{ project.name }}</a>
+    <h2 class="text-2xl font-bold text-gray-800 mt-1">Add Properties</h2>
+    <p class="text-sm text-gray-400 mt-0.5">Paste property names, confirm matches, then add them to the project.</p>
+  </div>
+
+  <!-- Step 1: Paste -->
+  <div id="step1" class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-4">
+    <div class="flex items-center justify-between mb-3">
+      <label class="text-sm font-semibold text-gray-700">Paste Property Names</label>
+      <span class="text-xs text-gray-400">One per line</span>
+    </div>
+    <textarea id="pasteArea" rows="12"
+              placeholder="Rocky Point 93&#10;Tahoe Donner 45&#10;North Shore 12&#10;…"
+              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono
+                     focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y
+                     placeholder-gray-300"></textarea>
+    <div class="flex justify-end mt-3">
+      <button onclick="matchNames()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-5 py-2 rounded-lg transition-colors">
+        Match Properties →
+      </button>
+    </div>
+  </div>
+
+  <!-- Step 2: Confirmation table (hidden until match runs) -->
+  <div id="step2" class="hidden">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-4">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold text-gray-800">Confirm Matches</h3>
+        <span id="matchSummary" class="text-xs text-gray-400"></span>
+      </div>
+
+      <!-- Exact matches -->
+      <div id="exactSection" class="hidden mb-4">
+        <div class="text-xs font-semibold text-green-600 uppercase tracking-wide mb-2">
+          ✓ Exact Matches — auto-confirmed
+        </div>
+        <div id="exactList" class="space-y-1"></div>
+      </div>
+
+      <!-- Fuzzy matches -->
+      <div id="fuzzySection" class="hidden mb-4">
+        <div class="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-2">
+          ⚠ Fuzzy Matches — please confirm
+        </div>
+        <div id="fuzzyList" class="space-y-2"></div>
+      </div>
+
+      <!-- No match -->
+      <div id="noneSection" class="hidden mb-4">
+        <div class="text-xs font-semibold text-red-500 uppercase tracking-wide mb-2">
+          ✕ Not Found
+        </div>
+        <div id="noneList" class="space-y-1"></div>
+      </div>
+
+      <div class="flex items-center justify-between pt-3 border-t border-gray-100 mt-2">
+        <button onclick="document.getElementById('step2').classList.add('hidden')"
+                class="text-sm text-gray-400 hover:text-gray-600">← Back</button>
+        <button onclick="addToProject()"
+                id="addBtn"
+                class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                       px-5 py-2 rounded-lg transition-colors">
+          Add to Project
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="matchLoading" class="hidden text-center py-10 text-gray-400 text-sm">
+    <div class="w-6 h-6 border-2 border-indigo-200 border-t-indigo-500 rounded-full
+                animate-spin mx-auto mb-3"></div>
+    Matching against database…
+  </div>
+
+</div>
+
+<script>
+const PROJECT_ID  = {{ project.id }};
+let confirmedProps = [];
+
+async function matchNames() {
+  const raw   = document.getElementById("pasteArea").value;
+  const names = raw.split("\n").map(n => n.trim()).filter(n => n);
+  if (!names.length) return;
+
+  document.getElementById("step2").classList.add("hidden");
+  document.getElementById("matchLoading").classList.remove("hidden");
+
+  const res  = await fetch(`/projects/${PROJECT_ID}/planner/match`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({names}),
+  });
+  const data = await res.json();
+  document.getElementById("matchLoading").classList.add("hidden");
+
+  renderResults(data.results);
+}
+
+function renderResults(results) {
+  const exact  = results.filter(r => r.type === "exact");
+  const fuzzy  = results.filter(r => r.type === "fuzzy");
+  const none   = results.filter(r => r.type === "none");
+
+  // Summary
+  document.getElementById("matchSummary").textContent =
+    `${exact.length} exact · ${fuzzy.length} fuzzy · ${none.length} not found`;
+
+  // Exact
+  const exactSection = document.getElementById("exactSection");
+  const exactList    = document.getElementById("exactList");
+  if (exact.length) {
+    exactList.innerHTML = exact.map(r =>
+      `<div class="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg text-sm">
+        <span class="text-green-500">✓</span>
+        <span class="font-medium text-gray-800">${r.name}</span>
+        <span class="text-gray-400 text-xs truncate">${r.address}</span>
+      </div>`
+    ).join("");
+    exactSection.classList.remove("hidden");
+  } else {
+    exactSection.classList.add("hidden");
+  }
+
+  // Fuzzy
+  const fuzzySection = document.getElementById("fuzzySection");
+  const fuzzyList    = document.getElementById("fuzzyList");
+  if (fuzzy.length) {
+    fuzzyList.innerHTML = fuzzy.map((r, i) =>
+      `<div class="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm" id="fuzzy-${i}">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <span class="text-gray-500">You typed:</span>
+            <span class="font-mono text-gray-700 mx-1">${r.input}</span>
+            <span class="text-gray-400">→</span>
+            <span class="text-gray-500 ml-1">Did you mean</span>
+            <span class="font-semibold text-gray-800 ml-1">${r.name}</span>
+            <span class="text-xs text-gray-400 ml-1">${r.address}</span>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <button onclick="confirmFuzzy(${i}, ${JSON.stringify(r).replace(/"/g,'&quot;')})"
+                    id="fuzzy-confirm-${i}"
+                    class="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded transition-colors">
+              Yes, that's it
+            </button>
+            <button onclick="rejectFuzzy(${i})"
+                    class="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded transition-colors">
+              Reject
+            </button>
+          </div>
+        </div>
+        <div id="fuzzy-status-${i}" class="mt-1 text-xs text-gray-400"></div>
+      </div>`
+    ).join("");
+    fuzzySection.classList.remove("hidden");
+  } else {
+    fuzzySection.classList.add("hidden");
+  }
+
+  // Not found
+  const noneSection = document.getElementById("noneSection");
+  const noneList    = document.getElementById("noneList");
+  if (none.length) {
+    noneList.innerHTML = none.map(r =>
+      `<div class="flex items-center gap-2 px-3 py-2 bg-red-50 rounded-lg text-sm">
+        <span class="text-red-400">✕</span>
+        <span class="font-mono text-gray-600">${r.input}</span>
+        <span class="text-xs text-gray-400">— not found in database</span>
+      </div>`
+    ).join("");
+    noneSection.classList.remove("hidden");
+  } else {
+    noneSection.classList.add("hidden");
+  }
+
+  // Pre-confirm all exact matches
+  confirmedProps = exact.map(r => ({name: r.name, address: r.address, lat: r.lat, lng: r.lng}));
+
+  updateAddBtn();
+  document.getElementById("step2").classList.remove("hidden");
+}
+
+function confirmFuzzy(i, r) {
+  confirmedProps.push({name: r.name, address: r.address, lat: r.lat, lng: r.lng});
+  document.getElementById(`fuzzy-status-${i}`).textContent = "✓ Confirmed";
+  document.getElementById(`fuzzy-confirm-${i}`).disabled = true;
+  document.getElementById(`fuzzy-confirm-${i}`).classList.replace("bg-green-600","bg-gray-300");
+  updateAddBtn();
+}
+
+function rejectFuzzy(i) {
+  document.getElementById(`fuzzy-status-${i}`).textContent = "✕ Rejected";
+  document.getElementById(`fuzzy-${i}`).classList.add("opacity-40");
+}
+
+function updateAddBtn() {
+  document.getElementById("addBtn").textContent =
+    `Add ${confirmedProps.length} Propert${confirmedProps.length === 1 ? "y" : "ies"} to Project`;
+}
+
+async function addToProject() {
+  if (!confirmedProps.length) { alert("No confirmed properties to add."); return; }
+  const btn = document.getElementById("addBtn");
+  btn.disabled = true;
+  btn.textContent = "Adding…";
+
+  const res  = await fetch(`/projects/${PROJECT_ID}/planner/add`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({properties: confirmedProps}),
+  });
+  const data = await res.json();
+  if (data.added !== undefined) {
+    window.location = `/projects/${PROJECT_ID}`;
+  } else {
+    alert("Error adding properties: " + (data.error || "unknown"));
+    btn.disabled = false;
+    updateAddBtn();
+  }
+}
+</script>
+{% endblock %}

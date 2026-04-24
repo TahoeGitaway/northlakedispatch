@@ -41,6 +41,11 @@
                           {% if request.endpoint == 'dispatch.portfolio' %}text-indigo-600{% endif %}">
                     Portfolio
                 </a>
+                <a href="{{ url_for('projects.list_projects') }}"
+                   class="text-gray-600 hover:text-indigo-600 font-medium
+                          {% if request.endpoint and request.endpoint.startswith('projects.') %}text-indigo-600{% endif %}">
+                    Projects
+                </a>
                 {% if current_user.is_admin %}
                 <a href="{{ url_for('admin.admin_properties') }}"
                    class="text-gray-600 hover:text-indigo-600 font-medium

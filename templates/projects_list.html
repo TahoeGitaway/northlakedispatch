@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Projects — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-6 py-8">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-2xl font-bold text-gray-800">Projects</h2>
+    <button onclick="document.getElementById('newProjectForm').classList.toggle('hidden')"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                   px-4 py-2 rounded-lg transition-colors">
+      + New Project
+    </button>
+  </div>
+
+  <!-- Create form -->
+  <div id="newProjectForm" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
+    <h3 class="font-semibold text-gray-800 mb-4">Create New Project</h3>
+    <form method="POST" class="space-y-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Project Name</label>
+        <input type="text" name="name" required autofocus
+               placeholder="e.g. Fire Extinguisher 2026"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Description (optional)</label>
+        <input type="text" name="description"
+               placeholder="Brief description of this project"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div class="flex gap-2 justify-end">
+        <button type="button"
+                onclick="document.getElementById('newProjectForm').classList.add('hidden')"
+                class="text-sm text-gray-400 hover:text-gray-600 px-3 py-1.5">Cancel</button>
+        <button type="submit"
+                class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                       px-4 py-1.5 rounded-lg transition-colors">Create</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Project list -->
+  {% if projects %}
+  <div class="space-y-3">
+    {% for p in projects %}
+    {% set pct = ((p.completed_props / p.total_props * 100) | int) if p.total_props else 0 %}
+    <a href="{{ url_for('projects.project_detail', project_id=p.id) }}"
+       class="block bg-white rounded-xl shadow-sm border border-gray-100 px-5 py-4
+              hover:border-indigo-200 hover:shadow-md transition-all">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold text-gray-800 truncate">{{ p.name }}</div>
+          {% if p.description %}
+          <div class="text-sm text-gray-400 mt-0.5 truncate">{{ p.description }}</div>
+          {% endif %}
+          <div class="flex items-center gap-3 mt-2">
+            <div class="flex-1 bg-gray-100 rounded-full h-1.5">
+              <div class="bg-indigo-500 h-1.5 rounded-full transition-all"
+                   style="width: {{ pct }}%"></div>
+            </div>
+            <span class="text-xs text-gray-500 shrink-0">
+              {{ p.completed_props }}/{{ p.total_props }} complete
+            </span>
+          </div>
+        </div>
+        <div class="text-right shrink-0">
+          <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium
+            {% if p.status == 'active' %}bg-green-100 text-green-700
+            {% elif p.status == 'completed' %}bg-gray-100 text-gray-500
+            {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+            {{ p.status }}
+          </span>
+          <div class="text-xs text-gray-400 mt-1">by {{ p.creator_name }}</div>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center py-20 text-gray-400">
+    <div class="text-5xl mb-4">📋</div>
+    <p class="text-lg font-medium">No projects yet</p>
+    <p class="text-sm mt-1">Create a project to start tracking multi-property tasks.</p>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

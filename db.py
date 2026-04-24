@@ -124,6 +124,34 @@ def init_db():
         PRIMARY KEY (user_id, team_id)
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS projects (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        status      TEXT DEFAULT 'active',
+        created_by  INTEGER REFERENCES users(id),
+        created_at  TEXT
+    )""")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS project_properties (
+        id            SERIAL PRIMARY KEY,
+        project_id    INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+        property_name TEXT NOT NULL,
+        address       TEXT DEFAULT '',
+        lat           DOUBLE PRECISION,
+        lng           DOUBLE PRECISION,
+        added_at      TEXT,
+        added_by      INTEGER REFERENCES users(id)
+    )""")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS task_completions (
+        id                  SERIAL PRIMARY KEY,
+        project_property_id INTEGER REFERENCES project_properties(id) ON DELETE CASCADE,
+        completed_by        INTEGER REFERENCES users(id),
+        completed_at        TEXT,
+        comment             TEXT DEFAULT ''
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")
