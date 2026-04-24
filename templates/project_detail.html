@@ -122,15 +122,6 @@
       </button>
     </div>
 
-    <!-- Route size selector -->
-    <div class="flex items-center gap-2 ml-auto">
-      <label class="text-xs text-gray-500 whitespace-nowrap">Stops per route:</label>
-      <input type="number" id="routeSize" min="5" max="30" value="{{ route_size }}"
-             onchange="changeSize(this.value)"
-             class="w-16 border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700
-                    focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white text-center">
-    </div>
-
     <input id="propSearch" type="text" placeholder="Search properties…"
            oninput="renderList()"
            class="flex-1 min-w-[160px] border border-gray-200 rounded-lg px-3 py-1.5 text-sm
@@ -215,13 +206,6 @@ if (pendingMapped.length) {
   map.fitBounds(L.latLngBounds(latlngs), {padding:[30,30]});
 }
 {% endif %}
-
-/* ── Route size ── */
-function changeSize(val) {
-  const url = new URL(window.location);
-  url.searchParams.set("size", val);
-  window.location = url.toString();
-}
 
 /* ── Selection ── */
 function toggleSelect(id, checked) {
