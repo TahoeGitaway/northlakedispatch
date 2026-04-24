@@ -498,10 +498,14 @@ async function confirmDeleteProject() {
 function updateProgress() {
   const total     = allProps.length;
   const completed = allProps.filter(p => p.completion_id).length;
+  const pending   = total - completed;
   const pct       = total ? Math.round(completed / total * 100) : 0;
   document.getElementById("progressBar").style.width = pct + "%";
-  document.getElementById("progressRemaining").textContent = (total - completed) + " remaining";
+  document.getElementById("progressRemaining").textContent = pending + " remaining";
   document.getElementById("progressPct").textContent = pct + "%";
+  document.getElementById("tab-all").textContent     = `All (${total})`;
+  document.getElementById("tab-pending").textContent = `Pending (${pending})`;
+  document.getElementById("tab-complete").textContent= `Complete (${completed})`;
 }
 
 function copyTaskLink() {
