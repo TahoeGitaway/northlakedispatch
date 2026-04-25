@@ -230,7 +230,7 @@ async function geocodeNew() {
     const res  = await fetch("/admin/properties/geocode", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ address })
+      body:    JSON.stringify({ address, name })
     });
     const data = await res.json();
     document.getElementById("geocodeSpinner").classList.add("hidden");

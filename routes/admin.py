@@ -263,11 +263,41 @@ def admin_properties():
 def geocode_address():
     data    = request.json or {}
     address = (data.get("address") or "").strip()
+    name    = (data.get("name") or "").strip()
     if not address:
         return jsonify({"error": "Address is required. Enter a street address before geocoding."}), 400
 
-    # Strip unit numbers before geocoding — Nominatim works at street level only.
-    # The original address (with unit) is still stored in the database.
+    # ── Try Breezeway first (most reliable for managed properties) ──
+    from routes.briefing import _get_breezeway_token, _fetch_bw_reservations
+    bw_token = _get_breezeway_token()
+    if bw_token and name:
+        try:
+            resp = requests.get(
+                "https://api.breezeway.io/public/inventory/v1/property",
+                headers={"Authorization": f"JWT {bw_token}"},
+                params={"name": name, "limit": 10},
+                timeout=10,
+            )
+            bw_data = resp.json()
+            bw_props = (bw_data.get("results") or bw_data.get("data") or bw_data) \
+                       if isinstance(bw_data, dict) else (bw_data or [])
+            for prop in (bw_props if isinstance(bw_props, list) else []):
+                lat = prop.get("latitude") or prop.get("lat")
+                lng = prop.get("longitude") or prop.get("lng") or prop.get("lon")
+                if lat and lng:
+                    lat, lng = float(lat), float(lng)
+                    if 38.5 <= lat <= 40.0 and -120.8 <= lng <= -119.4:
+                        return jsonify({
+                            "lat":            lat,
+                            "lng":            lng,
+                            "display_name":   prop.get("name") or prop.get("property_name") or name,
+                            "resolved_query": f"Breezeway: {name}",
+                        })
+        except Exception as e:
+            current_app.logger.warning(f"Breezeway geocode attempt failed for '{name}': {e}")
+
+    # ── Fall back to Nominatim ──
+    # Strip unit numbers — Nominatim works at street level only.
     geocode_base = re.sub(
         r'\s*,?\s*(#\s*\d+[a-zA-Z]?|apt\.?\s+\w+|suite\s+\w+|unit\s+\w+|ste\.?\s+\w+)',
         '', address, flags=re.IGNORECASE
@@ -306,7 +336,7 @@ def geocode_address():
             current_app.logger.warning(f"Nominatim geocode attempt failed for '{query}': {e}")
             continue
 
-    return jsonify({"error": f"Couldn't place '{geocode_base}' within the Tahoe region (lat 38.5–40.0, lng -120.8 to -119.4). Try including the city name (e.g. 'Carnelian Bay, CA'), or verify the address is in the service area. (Nominatim returned no results after {len(suffixes)} attempts.)"}), 404
+    return jsonify({"error": f"Couldn't place '{name or geocode_base}' within the Tahoe region. Not found in Breezeway or Nominatim. Use 'Enter coordinates manually' below and paste from Google Maps."}), 404
 
 
 @admin_bp.route("/admin/properties/add", methods=["POST"])
