@@ -548,8 +548,6 @@ function selectDay(ds) {
 
     const loadBtn = document.createElement("a");
     loadBtn.href = `/?load=${route.id}`;
-    loadBtn.target = "_blank";
-    loadBtn.rel = "noopener noreferrer";
     loadBtn.className = "bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors";
     loadBtn.textContent = "Load";
     btns.appendChild(loadBtn);
