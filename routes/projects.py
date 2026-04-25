@@ -67,15 +67,17 @@ def _match_name(name, db_props):
     return None, {"_input": name_clean}
 
 
-def _route_groups(props, service_min=10, day_min=540, speed_kmh=35):
+def _route_groups(props, service_min=15, day_min=540, speed_kmh=35):
     """
     Greedy nearest-neighbor grouping that fills each route up to day_min minutes.
-    Uses haversine drive-time estimates at speed_kmh (conservative for mountain roads).
-    Returns (labels, route_minutes) where labels[i] is the route index for props[i].
+    Returns (labels, route_minutes, route_sequences) where:
+      labels[i]            = route index for props[i]
+      route_minutes[group] = total estimated minutes for that route
+      route_sequences[group] = [prop_indices] in nearest-neighbor visit order
     """
     n = len(props)
     if n == 0:
-        return [], {}
+        return [], {}, {}
 
     def drive_min(a, b):
         lat1, lon1 = math.radians(a["lat"]), math.radians(a["lng"])
@@ -85,25 +87,23 @@ def _route_groups(props, service_min=10, day_min=540, speed_kmh=35):
         km = 2 * 6371 * math.asin(math.sqrt(min(1.0, h)))
         return (km / speed_kmh) * 60
 
-    labels        = [-1] * n
-    route_minutes = {}
-    unvisited     = list(range(n))
-    # Find the centroid of all properties and start from the one nearest to it
+    labels          = [-1] * n
+    route_minutes   = {}
+    route_sequences = {}
+    unvisited       = list(range(n))
     avg_lat = sum(props[i]["lat"] for i in unvisited) / n
     avg_lng = sum(props[i]["lng"] for i in unvisited) / n
     unvisited.sort(key=lambda i: (props[i]["lat"] - avg_lat)**2 + (props[i]["lng"] - avg_lng)**2)
 
     group = 0
     while unvisited:
-        # Each new route starts from the property nearest to the overall centroid
-        # among those still unassigned (keeps routes balanced and central)
         start = unvisited.pop(0)
         labels[start] = group
-        elapsed = service_min
-        current = start
+        sequence = [start]
+        elapsed  = service_min
+        current  = start
 
         while unvisited:
-            # Find nearest unvisited property to the current stop
             best_pos, best_drive = None, float("inf")
             for pos, idx in enumerate(unvisited):
                 d = drive_min(props[current], props[idx])
@@ -112,19 +112,20 @@ def _route_groups(props, service_min=10, day_min=540, speed_kmh=35):
 
             if best_pos is None:
                 break
-            # Stop adding to this route if the next stop would push past the day
             if elapsed + best_drive + service_min > day_min:
                 break
 
             elapsed += best_drive + service_min
             idx = unvisited.pop(best_pos)
             labels[idx] = group
+            sequence.append(idx)
             current = idx
 
-        route_minutes[group] = round(elapsed)
+        route_sequences[group] = sequence
+        route_minutes[group]   = round(elapsed)
         group += 1
 
-    return labels, route_minutes
+    return labels, route_minutes, route_sequences
 
 
 def _get_project(project_id):
@@ -215,17 +216,24 @@ def project_detail(project_id):
     # Greedy nearest-neighbor day-filling grouping
     pending = [p for p in props if not p["completion_id"] and p["lat"] and p["lng"]]
     if pending:
-        labels, route_minutes = _route_groups(pending)
-        label_map  = {pending[i]["id"]: labels[i]  for i in range(len(pending))}
+        labels, route_minutes, route_sequences = _route_groups(pending)
+        label_map  = {pending[i]["id"]: labels[i] for i in range(len(pending))}
+        nn_order_map = {
+            pending[prop_idx]["id"]: pos
+            for seq in route_sequences.values()
+            for pos, prop_idx in enumerate(seq)
+        }
         route_meta = {g: {"minutes": m} for g, m in route_minutes.items()}
         for g, meta in route_meta.items():
             meta["stops"] = sum(1 for lbl in labels if lbl == g)
     else:
-        label_map  = {}
-        route_meta = {}
+        label_map    = {}
+        nn_order_map = {}
+        route_meta   = {}
 
     for p in props:
-        p["cluster"] = label_map.get(p["id"])
+        p["cluster"]  = label_map.get(p["id"])
+        p["nn_order"] = nn_order_map.get(p["id"], 9999)
 
     return render_template("project_detail.html",
         project    = project,
@@ -385,8 +393,10 @@ def get_properties_by_ids():
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
-        "SELECT id, property_name AS name, address, lat, lng "
-        "FROM project_properties WHERE id = ANY(%s)",
+        """SELECT p.id, p.property_name AS name, p.address, p.lat, p.lng
+           FROM project_properties p
+           JOIN unnest(%s::int[]) WITH ORDINALITY AS ord(id, pos) ON p.id = ord.id
+           ORDER BY ord.pos""",
         (ids,)
     )
     props = [dict(r) for r in cur.fetchall()]
@@ -433,7 +443,7 @@ def project_tasks(project_id):
 
     pending = [p for p in props if not p["completion_id"] and p["lat"] and p["lng"]]
     if pending:
-        labels, _ = _route_groups(pending)
+        labels, *_ = _route_groups(pending)
         label_map = {pending[i]["id"]: labels[i] for i in range(len(pending))}
     else:
         label_map = {}

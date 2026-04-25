@@ -345,9 +345,10 @@ function renderList() {
       const items = clusters[c];
       const label = c >= 0 ? `Route ${+c+1}` : "Unassigned";
       items.sort((a, b) => a.property_name.localeCompare(b.property_name));
-      const ids   = items.map(p => p.id).join(",");
+      const nnIds = [...items].sort((a, b) => (a.nn_order ?? 9999) - (b.nn_order ?? 9999)).map(p => p.id).join(",");
+      const allIds = items.map(p => p.id).join(",");
       const meta  = ROUTE_META[+c] || {};
-      const hrs   = meta.minutes ? ` · ~${(meta.minutes/60).toFixed(1)} hrs` : "";
+      const hrs   = meta.minutes ? ` · ~${(meta.minutes/60).toFixed(1)} hrs total (15 min/stop + driving)` : "";
       const allChecked = items.every(p => selectedIds.has(p.id));
       html += `
         <div class="mb-4 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
@@ -360,11 +361,11 @@ function renderList() {
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
-                <input type="checkbox" ${allChecked ? "checked" : ""} onchange="selectRegion([${ids}], this.checked)"
+                <input type="checkbox" ${allChecked ? "checked" : ""} onchange="selectRegion([${allIds}], this.checked)"
                        class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer">
                 All
               </label>
-              <a href="/?props=${ids}" target="_blank" rel="noopener"
+              <a href="/?props=${nnIds}&autooptimize=1" target="_blank" rel="noopener"
                  class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white
                         px-3 py-1.5 rounded-lg font-medium transition-colors">
                 Generate Route →
