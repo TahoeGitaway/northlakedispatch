@@ -274,7 +274,7 @@ def geocode_address():
     ).strip().rstrip(',').strip()
 
     suffixes = [
-        ", Carnelian Bay, CA",
+        ", Carnelian Bay, CA", ", Truckee, CA",
         ", Lake Tahoe, CA", ", Tahoe City, CA", ", South Lake Tahoe, CA",
         ", Kings Beach, CA", ", Tahoe Vista, CA", ", Tahoma, CA",
         ", Incline Village, NV", ", Crystal Bay, NV",

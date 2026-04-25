@@ -77,7 +77,40 @@
     </div>
 
     <div id="geocodeError" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200
-                                   rounded-lg text-sm text-red-700"></div>
+                                   rounded-lg text-sm text-red-700">
+      <div id="geocodeErrorText"></div>
+      <button onclick="showManualCoords()"
+              class="mt-2 text-indigo-600 hover:text-indigo-800 font-medium text-xs underline">
+        Enter coordinates manually instead →
+      </button>
+    </div>
+    <div id="manualCoordsForm" class="hidden mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+      <div class="text-xs font-semibold text-blue-700 mb-2">
+        📍 Manual Coordinates — look up the address on Google Maps, right-click the pin, and copy the coordinates.
+      </div>
+      <div class="flex gap-3 flex-wrap">
+        <div class="flex-1 min-w-28">
+          <label class="block text-xs text-blue-700 mb-1">Latitude</label>
+          <input id="manualLat" type="number" step="0.00001" placeholder="e.g. 39.3282"
+                 class="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm bg-white
+                        focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <div class="flex-1 min-w-28">
+          <label class="block text-xs text-blue-700 mb-1">Longitude</label>
+          <input id="manualLng" type="number" step="0.00001" placeholder="e.g. -120.1834"
+                 class="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm bg-white
+                        focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <div class="flex items-end">
+          <button onclick="confirmManualCoords()"
+                  class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium
+                         px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+            ✓ Use These Coordinates
+          </button>
+        </div>
+      </div>
+      <div id="manualCoordsError" class="hidden mt-2 text-xs text-red-600 font-medium"></div>
+    </div>
     <div id="geocodeSpinner" class="hidden text-sm text-gray-500 italic">Looking up address…</div>
   </div>
 
@@ -203,8 +236,9 @@ async function geocodeNew() {
     document.getElementById("geocodeSpinner").classList.add("hidden");
 
     if (data.error) {
-      document.getElementById("geocodeError").textContent = data.error;
+      document.getElementById("geocodeErrorText").textContent = data.error;
       document.getElementById("geocodeError").classList.remove("hidden");
+      document.getElementById("manualCoordsForm").classList.add("hidden");
       return;
     }
 
@@ -260,6 +294,51 @@ async function confirmAdd() {
 function cancelGeocode() {
   document.getElementById("geocodeResult").classList.add("hidden");
   pendingLat = null; pendingLng = null;
+}
+
+function showManualCoords() {
+  document.getElementById("manualCoordsForm").classList.remove("hidden");
+  document.getElementById("manualLat").focus();
+}
+
+function confirmManualCoords() {
+  const lat = parseFloat(document.getElementById("manualLat").value);
+  const lng = parseFloat(document.getElementById("manualLng").value);
+  const errEl = document.getElementById("manualCoordsError");
+  errEl.classList.add("hidden");
+
+  if (isNaN(lat) || isNaN(lng)) {
+    errEl.textContent = "Enter valid numbers for both latitude and longitude.";
+    errEl.classList.remove("hidden"); return;
+  }
+  if (lat < 38.5 || lat > 40.0 || lng < -120.8 || lng > -119.4) {
+    errEl.textContent = `Those coordinates (${lat}, ${lng}) are outside the Tahoe service area. Double-check you copied them correctly from Google Maps.`;
+    errEl.classList.remove("hidden"); return;
+  }
+
+  pendingLat = lat;
+  pendingLng = lng;
+
+  const name = document.getElementById("newName").value.trim();
+  const address = document.getElementById("newAddress").value.trim();
+  document.getElementById("resolvedName").textContent = address;
+  document.getElementById("resolvedCoords").textContent =
+    `${lat.toFixed(5)}, ${lng.toFixed(5)}  (entered manually)`;
+  document.getElementById("geocodeError").classList.add("hidden");
+  document.getElementById("manualCoordsForm").classList.add("hidden");
+  document.getElementById("geocodeResult").classList.remove("hidden");
+
+  if (!previewMap) {
+    previewMap = L.map("previewMap", { zoomControl: true, scrollWheelZoom: false })
+      .setView([lat, lng], 15);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(previewMap);
+  } else {
+    previewMap.setView([lat, lng], 15);
+  }
+  if (previewMarker) previewMap.removeLayer(previewMarker);
+  previewMarker = L.marker([lat, lng]).addTo(previewMap)
+    .bindPopup(name || address).openPopup();
+  setTimeout(() => previewMap.invalidateSize(), 50);
 }
 
 function filterProps(q) {
