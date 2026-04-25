@@ -79,6 +79,7 @@
     <div id="geocodeError" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200
                                    rounded-lg text-sm text-red-700">
       <div id="geocodeErrorText"></div>
+      <div id="geocodeSuggestions" class="hidden mt-3 space-y-1.5"></div>
       <button onclick="showManualCoords()"
               class="mt-2 text-indigo-600 hover:text-indigo-800 font-medium text-xs underline">
         Enter coordinates manually instead →
@@ -237,6 +238,22 @@ async function geocodeNew() {
 
     if (data.error) {
       document.getElementById("geocodeErrorText").textContent = data.error;
+      // Show suggestions from existing DB properties if available
+      const suggestionsEl = document.getElementById("geocodeSuggestions");
+      if (data.suggestions && data.suggestions.length) {
+        suggestionsEl.innerHTML = data.suggestions.map(s =>
+          `<button onclick="borrowCoords(${s.lat}, ${s.lng}, ${JSON.stringify(s.address)})"
+                   class="w-full text-left px-3 py-2 bg-white border border-blue-200
+                          rounded-lg text-xs hover:bg-blue-50 transition-colors">
+            <span class="font-medium text-gray-800">${s.name}</span>
+            <span class="text-gray-400 ml-1">${s.address}</span>
+            <span class="text-blue-600 ml-2 font-medium">Use these coords →</span>
+          </button>`
+        ).join("");
+        suggestionsEl.classList.remove("hidden");
+      } else {
+        suggestionsEl.classList.add("hidden");
+      }
       document.getElementById("geocodeError").classList.remove("hidden");
       document.getElementById("manualCoordsForm").classList.add("hidden");
       return;
@@ -294,6 +311,29 @@ async function confirmAdd() {
 function cancelGeocode() {
   document.getElementById("geocodeResult").classList.add("hidden");
   pendingLat = null; pendingLng = null;
+}
+
+function borrowCoords(lat, lng, address) {
+  pendingLat = lat; pendingLng = lng;
+  const name = document.getElementById("newName").value.trim();
+  document.getElementById("resolvedName").textContent = address;
+  document.getElementById("resolvedCoords").textContent =
+    `${lat.toFixed(5)}, ${lng.toFixed(5)}  (borrowed from existing property)`;
+  document.getElementById("geocodeError").classList.add("hidden");
+  document.getElementById("manualCoordsForm").classList.add("hidden");
+  document.getElementById("geocodeResult").classList.remove("hidden");
+
+  if (!previewMap) {
+    previewMap = L.map("previewMap", { zoomControl: true, scrollWheelZoom: false })
+      .setView([lat, lng], 15);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(previewMap);
+  } else {
+    previewMap.setView([lat, lng], 15);
+  }
+  if (previewMarker) previewMap.removeLayer(previewMarker);
+  previewMarker = L.marker([lat, lng]).addTo(previewMap)
+    .bindPopup(name || address).openPopup();
+  setTimeout(() => previewMap.invalidateSize(), 50);
 }
 
 function showManualCoords() {
