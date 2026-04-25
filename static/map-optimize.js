@@ -296,7 +296,7 @@ async function submitUpdateRoute() {
     const res  = await fetch(`/projects/properties?ids=${encodeURIComponent(propsParam)}`);
     const data = await res.json();
     if (data.properties && data.properties.length) {
-      data.properties.forEach(p => addStop(p));
+      data.properties.forEach(p => addStop({...p, serviceMinutes: 15}));
       if (autoopt) optimizeRoute(false);
     }
   } catch (e) {

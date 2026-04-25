@@ -367,7 +367,8 @@ function addStop(property, asCheckin = false, asPriority = false) {
   if (selectedStops.find(s => s.name === property.name)) return;
   selectedStops.push({
     _id: makeStopId(), name:property.name, lat:property.lat, lng:property.lng,
-    arrival: asCheckin || asPriority, priority_checkin: asPriority, serviceMinutes: 60
+    arrival: asCheckin || asPriority, priority_checkin: asPriority,
+    serviceMinutes: property.serviceMinutes || 60
   });
   renderStops();
 }
