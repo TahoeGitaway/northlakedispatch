@@ -238,6 +238,21 @@ async function geocodeNew() {
 
     if (data.error) {
       document.getElementById("geocodeErrorText").textContent = data.error;
+      const suggestionsEl = document.getElementById("geocodeSuggestions");
+      if (data.suggestions && data.suggestions.length) {
+        suggestionsEl.innerHTML = data.suggestions.map(s =>
+          `<button onclick="borrowCoords(${s.lat}, ${s.lng}, ${JSON.stringify(s.address)})"
+                   class="w-full text-left px-3 py-2 bg-white border border-gray-200
+                          rounded-lg text-xs hover:bg-blue-50 transition-colors mt-1">
+            <span class="font-medium text-gray-800">${s.name}</span>
+            <span class="text-gray-400 ml-2">${s.address}</span>
+            <span class="text-indigo-600 ml-2 font-medium">Use coords →</span>
+          </button>`
+        ).join("");
+        suggestionsEl.classList.remove("hidden");
+      } else {
+        suggestionsEl.classList.add("hidden");
+      }
       document.getElementById("geocodeError").classList.remove("hidden");
       document.getElementById("manualCoordsForm").classList.add("hidden");
       return;

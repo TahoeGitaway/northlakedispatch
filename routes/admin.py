@@ -307,13 +307,17 @@ def geocode_address():
             continue
 
     # ── Nominatim failed — try Breezeway property list ──
+    bw_error = None
     if name:
         from routes.briefing import _get_breezeway_token
         bw_token = _get_breezeway_token()
-        if bw_token:
+        if not bw_token:
+            bw_error = "Breezeway credentials not configured"
+        else:
             try:
                 name_lower = name.lower().strip()
                 page = 1
+                bw_found_any = False
                 while True:
                     resp = requests.get(
                         "https://api.breezeway.io/public/inventory/v1/property",
@@ -321,11 +325,16 @@ def geocode_address():
                         params={"limit": 100, "page": page, "status": "active"},
                         timeout=15,
                     )
+                    if not resp.ok:
+                        bw_error = f"Breezeway API returned {resp.status_code}: {resp.text[:200]}"
+                        break
                     bw_data = resp.json()
                     props = (bw_data.get("results") or bw_data.get("data") or []) \
                             if isinstance(bw_data, dict) else (bw_data or [])
                     if not props:
+                        bw_error = f"Breezeway returned 0 properties on page {page}"
                         break
+                    bw_found_any = True
                     for prop in props:
                         bw_name = (prop.get("name") or prop.get("property_name") or "").lower().strip()
                         if bw_name == name_lower:
@@ -341,12 +350,45 @@ def geocode_address():
                                         "resolved_query": f"Breezeway: {name}",
                                     })
                     if len(props) < 100:
+                        if bw_found_any:
+                            bw_error = f"Breezeway searched {page} page(s) — '{name}' not found (name may differ in Breezeway)"
                         break
                     page += 1
             except Exception as e:
+                bw_error = f"{type(e).__name__}: {e}"
                 current_app.logger.warning(f"Breezeway property lookup failed for '{name}': {e}")
 
-    return jsonify({"error": f"Couldn't find '{name or geocode_base}' in Nominatim or Breezeway. Use 'Enter coordinates manually' below and paste from Google Maps."}), 404
+    # ── Last resort: find similar properties in our own DB ──
+    suggestions = []
+    keywords = [w for w in re.split(r'\W+', (name + " " + geocode_base)) if len(w) >= 4]
+    if keywords:
+        conn = get_db()
+        cur  = get_cursor(conn)
+        conditions = ' OR '.join(['"Property Name" ILIKE %s OR "Unit Address" ILIKE %s'
+                                  for _ in keywords])
+        params = []
+        for kw in keywords:
+            params += [f'%{kw}%', f'%{kw}%']
+        cur.execute(
+            f'SELECT "Property Name", "Unit Address", "Latitude", "Longitude" '
+            f'FROM properties WHERE "Latitude" IS NOT NULL AND ({conditions}) LIMIT 5',
+            params
+        )
+        suggestions = [dict(r) for r in cur.fetchall()]
+        cur.close(); conn.close()
+
+    debug = bw_error or "Breezeway: no name provided"
+    current_app.logger.warning(f"Geocode failed for '{name}' / '{geocode_base}': {debug}")
+    return jsonify({
+        "error":       f"Nominatim couldn't place this address, and Breezeway lookup failed ({debug}). "
+                       + (f"Found {len(suggestions)} similar propert{'y' if len(suggestions)==1 else 'ies'} in database — pick one below, or enter manually."
+                          if suggestions else "Use 'Enter coordinates manually' below."),
+        "suggestions": [
+            {"name": s["Property Name"], "address": s["Unit Address"],
+             "lat": float(s["Latitude"]), "lng": float(s["Longitude"])}
+            for s in suggestions
+        ],
+    }), 404
 
 
 @admin_bp.route("/admin/properties/add", methods=["POST"])
