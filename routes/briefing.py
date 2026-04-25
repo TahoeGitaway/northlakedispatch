@@ -458,22 +458,30 @@ def calendar_activity():
         if ds not in activity:
             activity[ds] = {"arrivals": 0, "departures": 0, "leases": 0}
 
-    # Arrivals this month
-    for r in _fetch_bw_reservations(token, {"checkin_date_ge": first_ds, "checkin_date_le": last_ds}):
-        ds   = r.get("checkin_date", "")
+    # Single API call: all reservations that overlap this month.
+    # checkin_date_le=last_ds  → checked in before month end
+    # checkout_date_ge=first_ds → checked out after month start
+    # Together they select every stay with any overlap with this month.
+    for r in _fetch_bw_reservations(token, {
+        "checkin_date_le":  last_ds,
+        "checkout_date_ge": first_ds,
+    }):
+        checkin_ds  = r.get("checkin_date",  "") or ""
+        checkout_ds = r.get("checkout_date", "") or ""
         kind = _classify_reservation(r)
-        if ds:
-            ensure(ds)
-            activity[ds]["arrivals"] += 1
+
+        if first_ds <= checkin_ds <= last_ds:
+            ensure(checkin_ds)
+            activity[checkin_ds]["arrivals"] += 1
             if kind == "lease":
-                activity[ds]["leases"] += 1
+                activity[checkin_ds]["leases"] += 1
 
-    # Departures this month
-    for r in _fetch_bw_reservations(token, {"checkout_date_ge": first_ds, "checkout_date_le": last_ds}):
-        ds = r.get("checkout_date", "")
-        if ds:
-            ensure(ds)
-            activity[ds]["departures"] += 1
+        if first_ds <= checkout_ds <= last_ds:
+            ensure(checkout_ds)
+            activity[checkout_ds]["departures"] += 1
 
-    _calendar_cache[cache_key] = (now, activity)
+    # Only cache non-empty results; an empty response likely means the API
+    # call failed or timed out, and we want the next navigation to retry.
+    if activity:
+        _calendar_cache[cache_key] = (now, activity)
     return jsonify(activity)
