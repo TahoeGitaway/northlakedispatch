@@ -157,6 +157,13 @@ def home():
     rows = cur.fetchall()
     cur.execute("SELECT id, name FROM teams ORDER BY name ASC")
     teams = [{"id": t["id"], "name": t["name"]} for t in cur.fetchall()]
+    cur.execute("""
+        SELECT t.id FROM teams t
+        JOIN team_memberships tm ON tm.team_id = t.id
+        WHERE tm.user_id = %s ORDER BY t.name ASC LIMIT 1
+    """, (current_user.id,))
+    row = cur.fetchone()
+    user_team_id = row["id"] if row else None
     cur.close(); conn.close()
     properties = [
         {"name": r["Property Name"], "address": r["Unit Address"],
@@ -169,6 +176,7 @@ def home():
         property_count=len(properties),
         default_start=DEFAULT_START,
         teams=teams,
+        user_team_id=user_team_id,
     )
 
 
@@ -213,9 +221,17 @@ def saved_routes():
     routes = cur.fetchall()
     cur.execute("SELECT id, name FROM teams ORDER BY name ASC")
     teams = [{"id": t["id"], "name": t["name"]} for t in cur.fetchall()]
+    cur.execute("""
+        SELECT t.id FROM teams t
+        JOIN team_memberships tm ON tm.team_id = t.id
+        WHERE tm.user_id = %s ORDER BY t.name ASC LIMIT 1
+    """, (current_user.id,))
+    row = cur.fetchone()
+    user_team_id = row["id"] if row else None
     cur.close(); conn.close()
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    return render_template("routes.html", routes=routes, now_date=today, teams=teams)
+    return render_template("routes.html", routes=routes, now_date=today, teams=teams,
+                           user_team_id=user_team_id)
 
 
 @dispatch_bp.route("/routes/save", methods=["POST"])

@@ -31,7 +31,7 @@
                 class="w-full border rounded-lg px-3 py-2 text-sm
                        focus:outline-none focus:ring-2 focus:ring-indigo-400">
           {% for t in teams %}
-          <option value="{{ t.id }}">{{ t.name }}</option>
+          <option value="{{ t.id }}" {% if t.id == user_team_id %}selected{% endif %}>{{ t.name }}</option>
           {% endfor %}
         </select>
       </div>
