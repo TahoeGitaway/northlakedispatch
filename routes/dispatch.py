@@ -690,15 +690,17 @@ def optimize():
             "matrix_index":     node,
         })
 
-    # Compute route polyline for the map via Google Directions API.
-    polyline_locs = [{"lat": start["lat"], "lng": start["lng"]}] + [
-        {"lat": s["lat"], "lng": s["lng"]} for s in ordered_stops
-    ]
-    if not same_depot:
-        polyline_locs.append({"lat": end["lat"], "lng": end["lng"]})
-    route_polyline, polyline_error = _google_route_polyline(polyline_locs)
-    if polyline_error:
-        return jsonify({"error": f"Google Maps API failed — {polyline_error}"}), 502
+    # Compute route polyline only when using Google Matrix (already paid for the API).
+    # Haversine routes skip this — the frontend draws a dashed straight-line fallback.
+    route_polyline = None
+    if use_google_matrix:
+        polyline_locs = [{"lat": start["lat"], "lng": start["lng"]}] + [
+            {"lat": s["lat"], "lng": s["lng"]} for s in ordered_stops
+        ]
+        if not same_depot:
+            polyline_locs.append({"lat": end["lat"], "lng": end["lng"]})
+        if len(polyline_locs) <= 27:  # Google Directions cap: 25 waypoints + origin + dest
+            route_polyline, _ = _google_route_polyline(polyline_locs)
 
     return jsonify({
         "distance":                  0,
@@ -777,9 +779,10 @@ def geocode():
 def route_geometry():
     data      = request.json or {}
     locations = data.get("locations", [])
-    if len(locations) < 2:
+    # Google Directions allows 25 waypoints + origin + destination = 27 total
+    if len(locations) < 2 or len(locations) > 27:
         return jsonify({"coords": None})
-    coords = _google_route_polyline(locations)
+    coords, _ = _google_route_polyline(locations)
     return jsonify({"coords": coords})
 
 
