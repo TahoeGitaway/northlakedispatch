@@ -87,6 +87,7 @@
 <script>
 const PROJECT_ID  = {{ project.id }};
 let confirmedProps = [];
+let fuzzyState     = [];  // [{input, candidates, currentIdx}]
 
 async function matchNames() {
   const raw   = document.getElementById("pasteArea").value;
@@ -108,11 +109,10 @@ async function matchNames() {
 }
 
 function renderResults(results) {
-  const exact  = results.filter(r => r.type === "exact");
-  const fuzzy  = results.filter(r => r.type === "fuzzy");
-  const none   = results.filter(r => r.type === "none");
+  const exact = results.filter(r => r.type === "exact");
+  const fuzzy = results.filter(r => r.type === "fuzzy");
+  const none  = results.filter(r => r.type === "none");
 
-  // Summary
   document.getElementById("matchSummary").textContent =
     `${exact.length} exact · ${fuzzy.length} fuzzy · ${none.length} not found`;
 
@@ -132,36 +132,13 @@ function renderResults(results) {
     exactSection.classList.add("hidden");
   }
 
-  // Fuzzy
+  // Fuzzy — build state, render each card
   const fuzzySection = document.getElementById("fuzzySection");
   const fuzzyList    = document.getElementById("fuzzyList");
+  fuzzyState = fuzzy.map(r => ({ input: r.input, candidates: r.candidates, currentIdx: 0 }));
   if (fuzzy.length) {
-    fuzzyList.innerHTML = fuzzy.map((r, i) =>
-      `<div class="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm" id="fuzzy-${i}">
-        <div class="flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <span class="text-gray-500">You typed:</span>
-            <span class="font-mono text-gray-700 mx-1">${r.input}</span>
-            <span class="text-gray-400">→</span>
-            <span class="text-gray-500 ml-1">Did you mean</span>
-            <span class="font-semibold text-gray-800 ml-1">${r.name}</span>
-            <span class="text-xs text-gray-400 ml-1">${r.address}</span>
-          </div>
-          <div class="flex gap-2 shrink-0">
-            <button onclick="confirmFuzzy(${i}, ${JSON.stringify(r).replace(/"/g,'&quot;')})"
-                    id="fuzzy-confirm-${i}"
-                    class="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded transition-colors">
-              Yes, that's it
-            </button>
-            <button onclick="rejectFuzzy(${i})"
-                    class="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded transition-colors">
-              Reject
-            </button>
-          </div>
-        </div>
-        <div id="fuzzy-status-${i}" class="mt-1 text-xs text-gray-400"></div>
-      </div>`
-    ).join("");
+    fuzzyList.innerHTML = fuzzy.map((_, i) => `<div id="fuzzy-${i}"></div>`).join("");
+    fuzzy.forEach((_, i) => _renderFuzzyCard(i));
     fuzzySection.classList.remove("hidden");
   } else {
     fuzzySection.classList.add("hidden");
@@ -183,24 +160,67 @@ function renderResults(results) {
     noneSection.classList.add("hidden");
   }
 
-  // Pre-confirm all exact matches
   confirmedProps = exact.map(r => ({name: r.name, address: r.address, lat: r.lat, lng: r.lng}));
-
   updateAddBtn();
   document.getElementById("step2").classList.remove("hidden");
 }
 
-function confirmFuzzy(i, r) {
-  confirmedProps.push({name: r.name, address: r.address, lat: r.lat, lng: r.lng});
-  document.getElementById(`fuzzy-status-${i}`).textContent = "✓ Confirmed";
-  document.getElementById(`fuzzy-confirm-${i}`).disabled = true;
-  document.getElementById(`fuzzy-confirm-${i}`).classList.replace("bg-green-600","bg-gray-300");
+function _renderFuzzyCard(i) {
+  const state = fuzzyState[i];
+  const el    = document.getElementById(`fuzzy-${i}`);
+  if (!el) return;
+
+  if (state.currentIdx >= state.candidates.length) {
+    el.className = "flex items-center gap-2 px-3 py-2 bg-red-50 rounded-lg text-sm";
+    el.innerHTML = `<span class="text-red-400">✕</span>
+      <span class="font-mono text-gray-600">${state.input}</span>
+      <span class="text-xs text-gray-400">— no match found</span>`;
+    return;
+  }
+
+  const c    = state.candidates[state.currentIdx];
+  const more = state.candidates.length > 1;
+  const ofN  = more ? ` <span class="text-gray-300">(${state.currentIdx + 1}/${state.candidates.length})</span>` : "";
+  const nextLabel = state.currentIdx < state.candidates.length - 1 ? "Try next →" : "Not this one";
+
+  el.className = "px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm";
+  el.innerHTML = `
+    <div class="flex items-start justify-between gap-3 flex-wrap">
+      <div class="text-sm">
+        <span class="text-gray-500">You typed:</span>
+        <span class="font-mono text-gray-700 mx-1">${state.input}</span>
+        <span class="text-gray-400">→</span>
+        <span class="text-gray-500 ml-1">Did you mean</span>
+        <span class="font-semibold text-gray-800 ml-1">${c.name}</span>${ofN}
+        <span class="text-xs text-gray-400 ml-1">${c.address}</span>
+      </div>
+      <div class="flex gap-2 shrink-0">
+        <button onclick="confirmFuzzy(${i})"
+                class="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded transition-colors">
+          Yes, that's it
+        </button>
+        <button onclick="rejectFuzzy(${i})"
+                class="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded transition-colors">
+          ${nextLabel}
+        </button>
+      </div>
+    </div>`;
+}
+
+function confirmFuzzy(i) {
+  const c = fuzzyState[i].candidates[fuzzyState[i].currentIdx];
+  confirmedProps.push({name: c.name, address: c.address, lat: c.lat, lng: c.lng});
+  const el = document.getElementById(`fuzzy-${i}`);
+  el.className = "flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg text-sm";
+  el.innerHTML = `<span class="text-green-500">✓</span>
+    <span class="font-medium text-gray-800">${c.name}</span>
+    <span class="text-xs text-gray-400 truncate">${c.address}</span>`;
   updateAddBtn();
 }
 
 function rejectFuzzy(i) {
-  document.getElementById(`fuzzy-status-${i}`).textContent = "✕ Rejected";
-  document.getElementById(`fuzzy-${i}`).classList.add("opacity-40");
+  fuzzyState[i].currentIdx++;
+  _renderFuzzyCard(i);
 }
 
 function updateAddBtn() {

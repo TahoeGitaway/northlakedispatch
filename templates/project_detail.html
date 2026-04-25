@@ -348,6 +348,7 @@ function renderList() {
       const ids   = items.map(p => p.id).join(",");
       const meta  = ROUTE_META[+c] || {};
       const hrs   = meta.minutes ? ` · ~${(meta.minutes/60).toFixed(1)} hrs` : "";
+      const allChecked = items.every(p => selectedIds.has(p.id));
       html += `
         <div class="mb-4 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
           <div class="flex items-center justify-between px-4 py-2.5 gap-3"
@@ -359,7 +360,7 @@ function renderList() {
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
-                <input type="checkbox" onchange="selectRegion([${ids}], this.checked)"
+                <input type="checkbox" ${allChecked ? "checked" : ""} onchange="selectRegion([${ids}], this.checked)"
                        class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer">
                 All
               </label>

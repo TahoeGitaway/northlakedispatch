@@ -2,6 +2,7 @@
 routes/admin.py — admin routes: user management, invites, properties, CSV upload.
 """
 
+import re
 import secrets
 import csv
 import io
@@ -265,13 +266,23 @@ def geocode_address():
     if not address:
         return jsonify({"error": "Address is required. Enter a street address before geocoding."}), 400
 
+    # Strip unit numbers before geocoding — Nominatim works at street level only.
+    # The original address (with unit) is still stored in the database.
+    geocode_base = re.sub(
+        r'\s*,?\s*(#\s*\d+[a-zA-Z]?|apt\.?\s+\w+|suite\s+\w+|unit\s+\w+|ste\.?\s+\w+)',
+        '', address, flags=re.IGNORECASE
+    ).strip().rstrip(',').strip()
+
     suffixes = [
+        ", Carnelian Bay, CA",
         ", Lake Tahoe, CA", ", Tahoe City, CA", ", South Lake Tahoe, CA",
-        ", Kings Beach, CA", ", Incline Village, NV", ", California", "",
+        ", Kings Beach, CA", ", Tahoe Vista, CA", ", Tahoma, CA",
+        ", Incline Village, NV", ", Crystal Bay, NV",
+        ", California", "",
     ]
 
     for suffix in suffixes:
-        query = address + suffix
+        query = geocode_base + suffix
         try:
             resp = requests.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -295,7 +306,7 @@ def geocode_address():
             current_app.logger.warning(f"Nominatim geocode attempt failed for '{query}': {e}")
             continue
 
-    return jsonify({"error": f"Couldn't place '{address}' within the Tahoe region (lat 38.5–40.0, lng -120.8 to -119.4). Try including the city and state, or verify the address is in the service area. (Nominatim returned no results after {len(suffixes)} attempts.)"}), 404
+    return jsonify({"error": f"Couldn't place '{geocode_base}' within the Tahoe region (lat 38.5–40.0, lng -120.8 to -119.4). Try including the city name (e.g. 'Carnelian Bay, CA'), or verify the address is in the service area. (Nominatim returned no results after {len(suffixes)} attempts.)"}), 404
 
 
 @admin_bp.route("/admin/properties/add", methods=["POST"])

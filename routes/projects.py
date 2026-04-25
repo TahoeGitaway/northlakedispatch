@@ -40,7 +40,8 @@ def _load_db_properties():
 
 
 def _match_name(name, db_props):
-    """Return (match_type, matched_row). match_type: 'exact', 'fuzzy', or None."""
+    """Return (match_type, data). match_type: 'exact', 'fuzzy', or None.
+    For 'fuzzy', data is a list of up to 3 candidate dicts ordered by score."""
     name_clean = name.strip()
     name_lower = name_clean.lower()
 
@@ -49,15 +50,19 @@ def _match_name(name, db_props):
             return "exact", dict(row)
 
     db_lowers = [r["Property Name"].lower().strip() for r in db_props]
-    close = difflib.get_close_matches(name_lower, db_lowers, n=1, cutoff=0.55)
+    close = difflib.get_close_matches(name_lower, db_lowers, n=3, cutoff=0.55)
     if close:
-        for row in db_props:
-            if row["Property Name"].lower().strip() == close[0]:
-                score = difflib.SequenceMatcher(None, name_lower, close[0]).ratio()
-                result = dict(row)
-                result["_score"] = round(score, 2)
-                result["_input"] = name_clean
-                return "fuzzy", result
+        candidates = []
+        for match_lower in close:
+            for row in db_props:
+                if row["Property Name"].lower().strip() == match_lower:
+                    score = difflib.SequenceMatcher(None, name_lower, match_lower).ratio()
+                    result = dict(row)
+                    result["_score"] = round(score, 2)
+                    result["_input"] = name_clean
+                    candidates.append(result)
+                    break
+        return "fuzzy", candidates
 
     return None, {"_input": name_clean}
 
@@ -267,13 +272,18 @@ def planner_match(project_id):
             })
         elif mtype == "fuzzy":
             results.append({
-                "type":    "fuzzy",
-                "input":   row["_input"],
-                "name":    row["Property Name"],
-                "address": row["Unit Address"] or "",
-                "lat":     row["Latitude"],
-                "lng":     row["Longitude"],
-                "score":   row["_score"],
+                "type":       "fuzzy",
+                "input":      row[0]["_input"],
+                "candidates": [
+                    {
+                        "name":    c["Property Name"],
+                        "address": c["Unit Address"] or "",
+                        "lat":     c["Latitude"],
+                        "lng":     c["Longitude"],
+                        "score":   c["_score"],
+                    }
+                    for c in row
+                ],
             })
         else:
             results.append({"type": "none", "input": name})
