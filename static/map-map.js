@@ -78,32 +78,7 @@ async function redrawRouteOnMap(precomputedPolyline = null) {
     markers[stop.name] = m;
   });
 
-  // Pre-computed geometry already drawn — no need to fetch again
+  // Pre-computed geometry already drawn (Google Matrix optimize) — no need to fetch again
   if (precomputedPolyline && precomputedPolyline.length > 1) return;
-
-  // ── Fetch real road geometry from server (Google Directions API) in the background ──
-  const ctrl = new AbortController();
-  _routeAbortCtrl = ctrl;
-  setTimeout(() => ctrl.abort(), 10000); // give up after 10 s
-
-  const locations = allPoints.map(s => ({ lat: s.lat, lng: s.lng }));
-  try {
-    const resp  = await fetch("/route-geometry", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ locations }),
-      signal:  ctrl.signal,
-    });
-    const rdata = await resp.json();
-    if (rdata.coords && rdata.coords.length > 1 && !ctrl.signal.aborted) {
-      if (routeLayer) map.removeLayer(routeLayer);
-      routeLayer = L.polyline(rdata.coords, { color:"#6366f1", weight:5 }).addTo(map);
-      map.invalidateSize();
-      map.fitBounds(routeLayer.getBounds(), { padding: [60, 60] });
-    }
-  } catch(_) {
-    // Timeout or error — dashed fallback stays
-  } finally {
-    if (_routeAbortCtrl === ctrl) _routeAbortCtrl = null;
-  }
+  // Dashed straight-line fallback stays — no background Google call
 }

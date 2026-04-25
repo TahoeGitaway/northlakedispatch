@@ -734,8 +734,8 @@ def matrix_row():
     if not new_stop or not existing:
         return jsonify({"error": "Request is missing required fields. Expected 'new_stop' (a single stop object) and 'existing_stops' (a list of current stops)."}), 400
 
-    all_locs       = [new_stop] + existing
-    matrix, _err   = _google_distance_matrix(all_locs)
+    all_locs = [new_stop] + existing
+    matrix   = _haversine_matrix(all_locs)
     return jsonify({
         "from_new": matrix[0][1:],
         "to_new":   [matrix[i + 1][0] for i in range(len(existing))],
@@ -824,12 +824,7 @@ def view_route(route_id):
             computed_driving += gap
     computed_total = computed_service + computed_driving
 
-    # Pre-compute the route polyline so view_route.html needs no external API calls.
-    stops_with_coords = [s for s in schedule if s.get("lat") and s.get("lng")]
-    polyline_locs = [{"lat": DEFAULT_START["lat"], "lng": DEFAULT_START["lng"]}] + [
-        {"lat": float(s["lat"]), "lng": float(s["lng"])} for s in stops_with_coords
-    ]
-    route_polyline, _ = _google_route_polyline(polyline_locs) if len(polyline_locs) >= 2 else (None, None)
+    route_polyline = None
 
     return render_template("view_route.html",
         route_id         = row["id"],
