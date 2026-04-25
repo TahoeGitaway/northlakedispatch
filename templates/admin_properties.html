@@ -238,22 +238,6 @@ async function geocodeNew() {
 
     if (data.error) {
       document.getElementById("geocodeErrorText").textContent = data.error;
-      // Show suggestions from existing DB properties if available
-      const suggestionsEl = document.getElementById("geocodeSuggestions");
-      if (data.suggestions && data.suggestions.length) {
-        suggestionsEl.innerHTML = data.suggestions.map(s =>
-          `<button onclick="borrowCoords(${s.lat}, ${s.lng}, ${JSON.stringify(s.address)})"
-                   class="w-full text-left px-3 py-2 bg-white border border-blue-200
-                          rounded-lg text-xs hover:bg-blue-50 transition-colors">
-            <span class="font-medium text-gray-800">${s.name}</span>
-            <span class="text-gray-400 ml-1">${s.address}</span>
-            <span class="text-blue-600 ml-2 font-medium">Use these coords →</span>
-          </button>`
-        ).join("");
-        suggestionsEl.classList.remove("hidden");
-      } else {
-        suggestionsEl.classList.add("hidden");
-      }
       document.getElementById("geocodeError").classList.remove("hidden");
       document.getElementById("manualCoordsForm").classList.add("hidden");
       return;

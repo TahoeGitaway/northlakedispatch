@@ -306,45 +306,47 @@ def geocode_address():
             current_app.logger.warning(f"Nominatim geocode attempt failed for '{query}': {e}")
             continue
 
-    # ── Nominatim failed — search our own DB for nearby properties ──
-    # Extract keywords from name and address to find similar existing properties.
-    suggestions = []
-    if name or address:
-        conn = get_db()
-        cur  = get_cursor(conn)
-        # Build keyword list: words 4+ chars from name and street name
-        keywords = [w for w in re.split(r'\W+', (name + " " + geocode_base))
-                    if len(w) >= 4]
-        if keywords:
-            conditions = ' OR '.join(['"Property Name" ILIKE %s OR "Unit Address" ILIKE %s'
-                                      for _ in keywords])
-            params = []
-            for kw in keywords:
-                params += [f'%{kw}%', f'%{kw}%']
-            cur.execute(
-                f'SELECT "Property Name", "Unit Address", "Latitude", "Longitude" '
-                f'FROM properties WHERE "Latitude" IS NOT NULL AND ({conditions}) '
-                f'LIMIT 5',
-                params
-            )
-            suggestions = [dict(r) for r in cur.fetchall()]
-        cur.close(); conn.close()
+    # ── Nominatim failed — try Breezeway property list ──
+    if name:
+        from routes.briefing import _get_breezeway_token
+        bw_token = _get_breezeway_token()
+        if bw_token:
+            try:
+                name_lower = name.lower().strip()
+                page = 1
+                while True:
+                    resp = requests.get(
+                        "https://api.breezeway.io/public/inventory/v1/property",
+                        headers={"Authorization": f"JWT {bw_token}"},
+                        params={"limit": 100, "page": page, "status": "active"},
+                        timeout=15,
+                    )
+                    bw_data = resp.json()
+                    props = (bw_data.get("results") or bw_data.get("data") or []) \
+                            if isinstance(bw_data, dict) else (bw_data or [])
+                    if not props:
+                        break
+                    for prop in props:
+                        bw_name = (prop.get("name") or prop.get("property_name") or "").lower().strip()
+                        if bw_name == name_lower:
+                            lat = prop.get("latitude")
+                            lng = prop.get("longitude")
+                            if lat and lng:
+                                lat, lng = float(lat), float(lng)
+                                if 38.5 <= lat <= 40.0 and -120.8 <= lng <= -119.4:
+                                    return jsonify({
+                                        "lat":            lat,
+                                        "lng":            lng,
+                                        "display_name":   prop.get("name") or name,
+                                        "resolved_query": f"Breezeway: {name}",
+                                    })
+                    if len(props) < 100:
+                        break
+                    page += 1
+            except Exception as e:
+                current_app.logger.warning(f"Breezeway property lookup failed for '{name}': {e}")
 
-    if suggestions:
-        return jsonify({
-            "error":       f"Nominatim couldn't place this address. Found {len(suggestions)} similar propert{'y' if len(suggestions)==1 else 'ies'} in the database — borrow coordinates from one below, or enter manually.",
-            "suggestions": [
-                {
-                    "name":    s["Property Name"],
-                    "address": s["Unit Address"],
-                    "lat":     float(s["Latitude"]),
-                    "lng":     float(s["Longitude"]),
-                }
-                for s in suggestions
-            ],
-        }), 404
-
-    return jsonify({"error": f"Couldn't place '{name or geocode_base}' in Nominatim and no similar properties found in the database. Use 'Enter coordinates manually' below and paste from Google Maps."}), 404
+    return jsonify({"error": f"Couldn't find '{name or geocode_base}' in Nominatim or Breezeway. Use 'Enter coordinates manually' below and paste from Google Maps."}), 404
 
 
 @admin_bp.route("/admin/properties/add", methods=["POST"])
