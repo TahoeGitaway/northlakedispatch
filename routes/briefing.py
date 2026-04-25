@@ -106,21 +106,38 @@ def _fetch_breezeway_checkouts(date_str: str) -> list:
     })
 
 
+_BLOCK_TYPES = {"block", "maintenance", "hold", "owner_block", "management_block"}
+
 def _classify_reservation(r: dict) -> str:
-    """Returns 'lease', 'owner', or 'guest'."""
+    """Returns 'lease', 'owner', 'block', or 'guest'.
+
+    Priority order:
+      1. type_stay field (Breezeway's own classification — most authoritative)
+      2. tags containing 'owner' or 'lease'
+      3. Duration fallback: stays >= 30 days → lease
+    Blocks are detected early so they don't inflate lease/guest counts.
+    """
+    ts   = (r.get("type_stay") or "").lower().strip()
+    tags = [str(t).lower() for t in (r.get("tags") or [])]
+
+    if ts in _BLOCK_TYPES or any(t in ("block", "hold") for t in tags):
+        return "block"
+    if ts == "owner" or any("owner" in t for t in tags):
+        return "owner"
+    if ts == "lease" or any("lease" in t for t in tags):
+        return "lease"
+
+    # Duration fallback only when type_stay gives no signal
     checkin  = r.get("checkin_date")  or ""
     checkout = r.get("checkout_date") or ""
     if checkin and checkout:
         try:
-            if (date_cls.fromisoformat(checkout) - date_cls.fromisoformat(checkin)).days >= 30:
+            days = (date_cls.fromisoformat(checkout[:10]) -
+                    date_cls.fromisoformat(checkin[:10])).days
+            if days >= 30:
                 return "lease"
         except Exception:
             pass
-    if r.get("type_stay") == "owner":
-        return "owner"
-    tags = [str(t).lower() for t in (r.get("tags") or [])]
-    if any("owner" in t for t in tags):
-        return "owner"
     return "guest"
 
 
@@ -226,7 +243,10 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
     else:
         lines.append("No dispatch routes are saved for today.")
 
-    # Breezeway arrivals
+    # Breezeway arrivals — exclude blocks
+    checkins  = [r for r in checkins  if _classify_reservation(r) != "block"]
+    checkouts = [r for r in checkouts if _classify_reservation(r) != "block"]
+
     if checkins:
         counts = {"guest": 0, "owner": 0, "lease": 0}
         arr_lines = []
@@ -425,6 +445,32 @@ def daily_briefing():
         return jsonify({**payload, "cached": False})
 
     return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
+
+
+@briefing_bp.route("/briefing/debug-reservations")
+@login_required
+def debug_reservations():
+    """Return raw Breezeway reservation fields for a date — for diagnosing classification."""
+    date_str  = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    checkins  = _fetch_breezeway_checkins(date_str)
+    checkouts = _fetch_breezeway_checkouts(date_str)
+    def summarise(rs):
+        return [
+            {
+                "type_stay":     r.get("type_stay"),
+                "checkin_date":  r.get("checkin_date"),
+                "checkout_date": r.get("checkout_date"),
+                "tags":          r.get("tags"),
+                "name":          _guest_name(r),
+                "classified_as": _classify_reservation(r),
+            }
+            for r in rs
+        ]
+    return jsonify({
+        "date":      date_str,
+        "checkins":  summarise(checkins),
+        "checkouts": summarise(checkouts),
+    })
 
 
 @briefing_bp.route("/briefing/calendar-activity")

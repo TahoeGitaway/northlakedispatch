@@ -290,7 +290,8 @@ async function submitUpdateRoute() {
   const params     = new URLSearchParams(window.location.search);
   const propsParam = params.get("props");
   const autoopt    = params.get("autooptimize") === "1";
-  if (!propsParam) return;
+  // Never auto-optimize when a saved route is also being loaded
+  if (!propsParam || params.get("load")) return;
   window.history.replaceState({}, "", window.location.pathname);
   try {
     const res  = await fetch(`/projects/properties?ids=${encodeURIComponent(propsParam)}`);
