@@ -463,10 +463,11 @@ function renderSchedule() {
     // ── DRIVE TIMES VIEW ──
     if (viewMode === 'drive') {
       let driveMin = 0;
-      // Walk back past any lunch sentinel to find the real previous matrix index
+      // Walk back past lunch/gap sentinels to find the real previous matrix index
       let prevMatrixIdx = 0; // default: depot
       for (let j = si - 1; j >= 0; j--) {
-        if (!optimizedSchedule[j].isLunch) { prevMatrixIdx = optimizedSchedule[j].matrix_index; break; }
+        const s = optimizedSchedule[j];
+        if (!s.isLunch && !s.isGap) { prevMatrixIdx = s.matrix_index; break; }
       }
       if (stop.matrix_index != null && durationMatrix[prevMatrixIdx] != null) {
         driveMin = Math.round((durationMatrix[prevMatrixIdx][stop.matrix_index] || 0) / 60);
@@ -504,16 +505,13 @@ function renderSchedule() {
     // Drive time from previous real stop (or depot) to this stop
     let driveMin = 0;
     const prevStop = si > 0 ? optimizedSchedule[si - 1] : null;
-    const fromIdx  = prevStop && !prevStop.isLunch
-      ? prevStop.matrix_index
-      : prevStop && prevStop.isLunch
-        ? (() => {
-            for (let j = si - 2; j >= 0; j--) {
-              if (!optimizedSchedule[j].isLunch) return optimizedSchedule[j].matrix_index;
-            }
-            return 0;
-          })()
-        : 0; // depot
+    const fromIdx  = (() => {
+      for (let j = si - 1; j >= 0; j--) {
+        const s = optimizedSchedule[j];
+        if (!s.isLunch && !s.isGap) return s.matrix_index;
+      }
+      return 0; // depot
+    })();
     if (
       durationMatrix.length > 0 &&
       fromIdx != null &&

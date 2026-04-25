@@ -36,8 +36,8 @@ def _haversine_matrix(locations):
             dlat, dlng = lat2 - lat1, lng2 - lng1
             a    = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlng/2)**2
             dist = 6_371_000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-            # Tahoe mountain roads ≈ 1.4× straight-line, avg 35 mph (15.6 m/s)
-            mat[i][j] = dist * 1.4 / 15.6
+            # Tahoe mountain roads: 1.8× winding-road factor, avg 25 mph (11.2 m/s)
+            mat[i][j] = dist * 1.8 / 11.2
     return mat
 
 
@@ -716,11 +716,11 @@ def matrix_row():
     if not new_stop or not existing:
         return jsonify({"error": "Request is missing required fields. Expected 'new_stop' (a single stop object) and 'existing_stops' (a list of current stops)."}), 400
 
-    all_locs = [new_stop] + existing
-    mat      = _google_distance_matrix(all_locs)
+    all_locs       = [new_stop] + existing
+    matrix, _err   = _google_distance_matrix(all_locs)
     return jsonify({
-        "from_new": mat[0][1:],
-        "to_new":   [mat[i + 1][0] for i in range(len(existing))],
+        "from_new": matrix[0][1:],
+        "to_new":   [matrix[i + 1][0] for i in range(len(existing))],
     })
 
 
