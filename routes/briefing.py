@@ -397,7 +397,7 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
                 "You are a concise operations briefer for a vacation rental cleaning company "
                 "in Lake Tahoe. Write 2-3 sentences covering: how many routes are planned (use "
                 "'planned', never 'dispatched'); how many guest arrivals and departures; and "
-                "call out lease arrivals or departures specifically if any exist (30+ day stays). "
+                "call out lease arrivals or departures specifically if any exist (30+ day paying guest stays). "
                 "Do NOT name individual technicians or routes — that list appears below your summary. "
                 "Use the actual day name (e.g. 'Thursday') — never use the word 'today'. "
                 "Be direct. Do not start with a greeting."

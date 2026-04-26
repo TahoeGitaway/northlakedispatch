@@ -759,7 +759,7 @@ def chatbot_chat():
         "Classification key used in the data below:\n"
         "  GUEST  = paying guest stay\n"
         "  OWNER  = owner stay or owner-booked reservation\n"
-        "  LEASE  = long-term stay (30+ days)\n"
+        "  LEASE  = paying guest stay that is 30+ days (a long-term rental, still a paying guest — not an owner)\n"
         "  BLOCK  = maintenance block, hold, or owner block — no guests, property unavailable\n\n"
         "A Post Rental Inspection (PRI) is required whenever a non-guest reservation "
         "(OWNER, BLOCK) follows directly after a GUEST stay at the same property. "
