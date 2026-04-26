@@ -161,31 +161,36 @@ def _extract_str(val) -> str:
 def _classify_reservation(r: dict) -> str:
     """Returns 'lease', 'owner', 'block', or 'guest'.
 
-    Uses only type_stay.code and type_reservation.code — NOT tags.
-    Breezeway tags are operational flags ("Owner Next", "Self Clean")
-    that describe prep instructions, not the stay type itself.
-
     Priority order:
-      1. type_reservation.code == hold/block → block
-      2. type_stay.code (most authoritative stay classifier)
-      3. Duration fallback: stays >= 30 days → lease
+      1. type_reservation.code == hold/block → block (overrides everything)
+      2. type_stay.code == owner/lease/guest → use directly
+      3. Tag "Owner Next" → owner (manual correction for BW misclassification;
+         user applies this tag to owner bookings where BW has the type wrong)
+      4. Duration >= 30 days → lease
+      5. guest
     """
     ts = _extract_str(r.get("type_stay"))
     tr = _extract_str(r.get("type_reservation"))
+    tag_names = [_extract_str(t) for t in (r.get("tags") or [])]
 
-    # Holds and maintenance blocks — catch null type_stay cases too
+    # Holds/blocks take priority — even over Owner Next tag
     if tr in _BLOCK_TYPES or ts in _BLOCK_TYPES:
         return "block"
 
-    # type_stay is the authoritative classifier — trust it directly
+    # type_stay is Breezeway's own classification — trust it when set
     if ts == "owner":
         return "owner"
     if ts == "lease":
         return "lease"
+
+    # "Owner Next" = user's manual marker for owner bookings BW miscategorized
+    if "owner next" in tag_names:
+        return "owner"
+
     if ts == "guest":
         return "guest"
 
-    # Duration fallback only when type_stay gives no signal
+    # Duration fallback when type_stay gives no signal at all
     checkin  = r.get("checkin_date")  or ""
     checkout = r.get("checkout_date") or ""
     if checkin and checkout:
