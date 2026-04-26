@@ -191,12 +191,14 @@ _BLOCK_TYPES = {"block", "maintenance", "hold", "owner_block", "management_block
 
 def _extract_str(val) -> str:
     """Safely pull a lowercase string out of whatever Breezeway sends.
-    type_stay and tags can be strings OR nested dicts like {"name": "Guest"}.
+    type_stay / type_reservation are dicts like {"code": "owner", "name": "Owner Stay"}.
+    Prefer 'code' — it is the machine-readable standardised value.
+    Tags are {"id": int, "name": str} with no code field, so name is used as fallback.
     """
     if not val:
         return ""
     if isinstance(val, dict):
-        return (val.get("name") or val.get("code") or
+        return (val.get("code") or val.get("name") or
                 val.get("label") or val.get("type") or "").lower().strip()
     return str(val).lower().strip()
 
