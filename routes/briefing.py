@@ -32,9 +32,11 @@ CACHE_TTL          = 15 * 60   # 15 minutes for briefing
 CALENDAR_CACHE_TTL = 30 * 60   # 30 minutes for calendar activity
 
 # ── In-memory caches ──────────────────────────────────────────────
-_briefing_cache: dict  = {}   # {cache_key: (timestamp, payload)}
-_calendar_cache: dict  = {}   # {(year, month): (timestamp, activity_dict)}
-_bw_token:       dict  = {"value": None, "expires_at": 0}
+_briefing_cache:  dict  = {}   # {cache_key: (timestamp, payload)}
+_calendar_cache:  dict  = {}   # {(year, month): (timestamp, activity_dict)}
+_bw_token:        dict  = {"value": None, "expires_at": 0}
+_property_cache:  dict  = {}   # {property_id: name}
+_property_cache_ts: float = 0
 
 
 # ── Breezeway auth ────────────────────────────────────────────────
@@ -88,6 +90,42 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
     return all_results
 
 
+def _get_property_name(property_id) -> str:
+    """Return a property's display name by Breezeway property_id, cached 1 hour."""
+    global _property_cache, _property_cache_ts
+    if not property_id:
+        return "Unknown Property"
+    now = time.time()
+    if not _property_cache or now - _property_cache_ts > 3600:
+        token = _get_breezeway_token()
+        if token:
+            try:
+                page, limit = 1, 200
+                while True:
+                    resp = requests.get(
+                        "https://api.breezeway.io/public/inventory/v1/property",
+                        headers={"Authorization": f"JWT {token}"},
+                        params={"limit": limit, "page": page},
+                        timeout=15,
+                    )
+                    data = resp.json()
+                    items = (data.get("results", data.get("data", [])) or []) \
+                            if isinstance(data, dict) else (data or [])
+                    for p in items:
+                        pid  = p.get("id")
+                        name = (p.get("name") or p.get("property_name") or
+                                p.get("title") or str(pid))
+                        if pid:
+                            _property_cache[pid] = name
+                    if len(items) < limit:
+                        break
+                    page += 1
+                _property_cache_ts = now
+            except Exception:
+                pass
+    return _property_cache.get(property_id, f"Property {property_id}")
+
+
 def _fetch_breezeway_checkins(date_str: str) -> list:
     token = _get_breezeway_token()
     if not token:
@@ -123,21 +161,29 @@ def _extract_str(val) -> str:
 def _classify_reservation(r: dict) -> str:
     """Returns 'lease', 'owner', 'block', or 'guest'.
 
-    Priority order:
-      1. type_stay field (Breezeway's own classification — most authoritative)
-      2. tags containing 'owner' or 'lease'
-      3. Duration fallback: stays >= 30 days → lease
-    Blocks are detected early so they don't inflate lease/guest counts.
-    """
-    ts   = _extract_str(r.get("type_stay"))
-    tags = [_extract_str(t) for t in (r.get("tags") or [])]
+    Uses only type_stay.code and type_reservation.code — NOT tags.
+    Breezeway tags are operational flags ("Owner Next", "Self Clean")
+    that describe prep instructions, not the stay type itself.
 
-    if ts in _BLOCK_TYPES or any(t in ("block", "hold") for t in tags):
+    Priority order:
+      1. type_reservation.code == hold/block → block
+      2. type_stay.code (most authoritative stay classifier)
+      3. Duration fallback: stays >= 30 days → lease
+    """
+    ts = _extract_str(r.get("type_stay"))
+    tr = _extract_str(r.get("type_reservation"))
+
+    # Holds and maintenance blocks — catch null type_stay cases too
+    if tr in _BLOCK_TYPES or ts in _BLOCK_TYPES:
         return "block"
-    if ts == "owner" or any("owner" in t for t in tags):
+
+    # type_stay is the authoritative classifier — trust it directly
+    if ts == "owner":
         return "owner"
-    if ts == "lease" or any("lease" in t for t in tags):
+    if ts == "lease":
         return "lease"
+    if ts == "guest":
+        return "guest"
 
     # Duration fallback only when type_stay gives no signal
     checkin  = r.get("checkin_date")  or ""
@@ -263,15 +309,15 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
         counts = {"guest": 0, "owner": 0, "lease": 0, "block": 0}
         arr_lines = []
         for r in checkins:
-            kind = _classify_reservation(r)
-            counts[kind] += 1
-            name = _guest_name(r)
-            t    = r.get("checkin_time", "")
+            kind     = _classify_reservation(r)
+            counts[kind] = counts.get(kind, 0) + 1
+            prop     = _get_property_name(r.get("property_id"))
+            t        = r.get("checkin_time", "")
             out_date = r.get("checkout_date", "")
-            prefix = {"lease": "[LEASE] ", "owner": "[OWNER] "}.get(kind, "")
-            entry  = f"- {prefix}{name or 'Guest'}"
+            prefix   = {"lease": "[LEASE] ", "owner": "[OWNER] "}.get(kind, "")
+            entry    = f"- {prefix}{prop}"
             if t:
-                entry += f" checking in at {_fmt_time(t)}"
+                entry += f" — check-in at {_fmt_time(t)}"
             if out_date:
                 entry += f" (checkout {out_date})"
             arr_lines.append(entry)
@@ -290,12 +336,12 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
         dep_lines = []
         for r in checkouts:
             kind = _classify_reservation(r)
-            name = _guest_name(r)
+            prop = _get_property_name(r.get("property_id"))
             t    = r.get("checkout_time", "")
             prefix = {"lease": "[LEASE] ", "owner": "[OWNER] "}.get(kind, "")
-            entry  = f"- {prefix}{name or 'Guest'}"
+            entry  = f"- {prefix}{prop}"
             if t:
-                entry += f" checking out by {_fmt_time(t)}"
+                entry += f" — checkout by {_fmt_time(t)}"
             dep_lines.append(entry)
         lease_note = f" including {lease_ct} lease{'s' if lease_ct!=1 else ''}" if lease_ct else ""
         lines.append(
@@ -488,16 +534,19 @@ def debug_reservations():
                 # Dump every top-level key with a safe-serialized value
                 raw_safe = {k: safe(v) for k, v in r.items()}
                 out.append({
-                    "classified_as": _classify_reservation(r),
-                    "type_stay":     r.get("type_stay"),
-                    "tags":          r.get("tags"),
-                    "checkin_date":  r.get("checkin_date"),
-                    "checkout_date": r.get("checkout_date"),
-                    "checkin_time":  r.get("checkin_time"),
-                    "checkout_time": r.get("checkout_time"),
-                    "guest_name":    _guest_name(r),
-                    "_all_keys":     list(r.keys()),
-                    "_raw":          raw_safe,
+                    "classified_as":   _classify_reservation(r),
+                    "property_id":     r.get("property_id"),
+                    "property_name":   _get_property_name(r.get("property_id")),
+                    "type_stay":       r.get("type_stay"),
+                    "type_reservation":r.get("type_reservation"),
+                    "tags":            r.get("tags"),
+                    "checkin_date":    r.get("checkin_date"),
+                    "checkout_date":   r.get("checkout_date"),
+                    "checkin_time":    r.get("checkin_time"),
+                    "checkout_time":   r.get("checkout_time"),
+                    "guest_name":      _guest_name(r),
+                    "_all_keys":       list(r.keys()),
+                    "_raw":            raw_safe,
                 })
             return out
 
