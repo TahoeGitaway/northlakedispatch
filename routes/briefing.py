@@ -610,12 +610,31 @@ def debug_reservations():
 @briefing_bp.route("/briefing/debug-properties")
 @login_required
 def debug_properties():
-    """Show Breezeway property cache state — use to verify property name lookup."""
+    """Show Breezeway property cache state and raw fields from one property."""
+    token = _get_breezeway_token()
+    raw_sample = None
+    if token:
+        try:
+            resp = requests.get(
+                "https://api.breezeway.io/public/inventory/v1/property",
+                headers={"Authorization": f"JWT {token}"},
+                params={"limit": 1, "page": 1},
+                timeout=15,
+            )
+            data  = resp.json()
+            items = data.get("results", data.get("data", data if isinstance(data, list) else []))
+            if items:
+                raw_sample = items[0]
+        except Exception as e:
+            raw_sample = {"error": str(e)}
+
     err = _load_property_cache()
     return jsonify({
-        "property_count": len(_property_cache),
-        "cache_error":    err or None,
-        "sample":         dict(list(_property_cache.items())[:10]),
+        "property_count":    len(_property_cache),
+        "cache_error":       err or None,
+        "sample_names":      dict(list(_property_cache.items())[:5]),
+        "sample_addresses":  dict(list(_property_addr_cache.items())[:5]),
+        "raw_fields_sample": raw_sample,
     })
 
 
