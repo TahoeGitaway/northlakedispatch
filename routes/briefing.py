@@ -108,6 +108,18 @@ def _fetch_breezeway_checkouts(date_str: str) -> list:
 
 _BLOCK_TYPES = {"block", "maintenance", "hold", "owner_block", "management_block"}
 
+def _extract_str(val) -> str:
+    """Safely pull a lowercase string out of whatever Breezeway sends.
+    type_stay and tags can be strings OR nested dicts like {"name": "Guest"}.
+    """
+    if not val:
+        return ""
+    if isinstance(val, dict):
+        return (val.get("name") or val.get("code") or
+                val.get("label") or val.get("type") or "").lower().strip()
+    return str(val).lower().strip()
+
+
 def _classify_reservation(r: dict) -> str:
     """Returns 'lease', 'owner', 'block', or 'guest'.
 
@@ -117,8 +129,8 @@ def _classify_reservation(r: dict) -> str:
       3. Duration fallback: stays >= 30 days → lease
     Blocks are detected early so they don't inflate lease/guest counts.
     """
-    ts   = (r.get("type_stay") or "").lower().strip()
-    tags = [str(t).lower() for t in (r.get("tags") or [])]
+    ts   = _extract_str(r.get("type_stay"))
+    tags = [_extract_str(t) for t in (r.get("tags") or [])]
 
     if ts in _BLOCK_TYPES or any(t in ("block", "hold") for t in tags):
         return "block"
