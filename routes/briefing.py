@@ -248,7 +248,7 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
     checkouts = [r for r in checkouts if _classify_reservation(r) != "block"]
 
     if checkins:
-        counts = {"guest": 0, "owner": 0, "lease": 0}
+        counts = {"guest": 0, "owner": 0, "lease": 0, "block": 0}
         arr_lines = []
         for r in checkins:
             kind = _classify_reservation(r)
@@ -308,8 +308,8 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
     if not key:
         return None, "ANTHROPIC_API_KEY is not set."
 
-    prompt = _build_prompt(date_str, routes, checkins, checkouts, notes)
     try:
+        prompt = _build_prompt(date_str, routes, checkins, checkouts, notes)
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
             model      = "claude-haiku-4-5-20251001",
@@ -427,42 +427,65 @@ def daily_briefing():
     force_refresh = request.args.get("refresh") == "1"
     now           = time.time()
 
-    cache_key = f"{date_str}:{team_id or ''}"
-    if not force_refresh and cache_key in _briefing_cache:
-        ts, payload = _briefing_cache[cache_key]
-        if now - ts < CACHE_TTL:
-            return jsonify({**payload, "cached": True})
+    try:
+        cache_key = f"{date_str}:{team_id or ''}"
+        if not force_refresh and cache_key in _briefing_cache:
+            ts, payload = _briefing_cache[cache_key]
+            if now - ts < CACHE_TTL:
+                return jsonify({**payload, "cached": True})
 
-    routes   = _fetch_todays_routes(date_str, team_id=team_id)
-    checkins = _fetch_breezeway_checkins(date_str)
-    checkouts= _fetch_breezeway_checkouts(date_str)
-    notes    = _fetch_briefing_notes(date_str)
-    blurb, err_msg = _generate_briefing(date_str, routes, checkins, checkouts, notes)
+        routes    = _fetch_todays_routes(date_str, team_id=team_id)
+        checkins  = _fetch_breezeway_checkins(date_str)
+        checkouts = _fetch_breezeway_checkouts(date_str)
+        notes     = _fetch_briefing_notes(date_str)
+        blurb, err_msg = _generate_briefing(date_str, routes, checkins, checkouts, notes)
 
-    if blurb:
-        payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
-        _briefing_cache[cache_key] = (now, payload)
-        return jsonify({**payload, "cached": False})
+        if blurb:
+            payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
+            _briefing_cache[cache_key] = (now, payload)
+            return jsonify({**payload, "cached": False})
 
-    return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
+        return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
+
+    except Exception as e:
+        import flask
+        flask.current_app.logger.error(f"daily_briefing unhandled: {type(e).__name__}: {e}")
+        return jsonify({"blurb": None, "error": f"Server error: {type(e).__name__}: {e}"}), 500
 
 
 @briefing_bp.route("/briefing/debug-reservations")
 @login_required
 def debug_reservations():
-    """Return raw Breezeway reservation fields for a date — for diagnosing classification."""
+    """Return raw Breezeway reservation fields for a date — for diagnosing classification and discovering field names."""
     date_str  = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     checkins  = _fetch_breezeway_checkins(date_str)
     checkouts = _fetch_breezeway_checkouts(date_str)
     def summarise(rs):
         return [
             {
+                # Classification
+                "classified_as": _classify_reservation(r),
                 "type_stay":     r.get("type_stay"),
+                "tags":          r.get("tags"),
+                # Dates / times
                 "checkin_date":  r.get("checkin_date"),
                 "checkout_date": r.get("checkout_date"),
-                "tags":          r.get("tags"),
-                "name":          _guest_name(r),
-                "classified_as": _classify_reservation(r),
+                "checkin_time":  r.get("checkin_time"),
+                "checkout_time": r.get("checkout_time"),
+                # Property candidates — every field that might name the property
+                "property":      r.get("property"),
+                "unit":          r.get("unit"),
+                "listing":       r.get("listing"),
+                "property_name": r.get("property_name"),
+                "unit_name":     r.get("unit_name"),
+                "listing_name":  r.get("listing_name"),
+                "name":          r.get("name"),
+                # Guests (for reference)
+                "guest_name":    _guest_name(r),
+                # Full top-level keys — so we can see everything Breezeway sends
+                "_all_keys":     list(r.keys()),
+                # Full raw object (truncated nested objects shown as-is)
+                "_raw":          r,
             }
             for r in rs
         ]

@@ -194,10 +194,11 @@ def project_detail(project_id):
                tc.id           AS completion_id,
                tc.completed_at,
                tc.comment,
+               tc.task_type,
                u.name          AS completed_by_name
         FROM project_properties pp
         LEFT JOIN LATERAL (
-            SELECT id, completed_at, comment, completed_by
+            SELECT id, completed_at, comment, completed_by, task_type
             FROM task_completions
             WHERE project_property_id = pp.id
             ORDER BY completed_at DESC LIMIT 1
@@ -340,26 +341,44 @@ def planner_add(project_id):
 
 # ── Task Completion ───────────────────────────────────────────────
 
+VALID_TASK_TYPES = {
+    "departure_clean", "arrival_inspect", "owner_turnover",
+    "deep_clean", "mid_stay", "maintenance",
+}
+
+TASK_TYPE_LABELS = {
+    "departure_clean": "Departure Clean",
+    "arrival_inspect": "Arrival Inspection",
+    "owner_turnover":  "Owner Turnover",
+    "deep_clean":      "Deep Clean",
+    "mid_stay":        "Mid-Stay Check",
+    "maintenance":     "Maintenance",
+}
+
 @projects_bp.route("/<int:project_id>/properties/<int:prop_id>/complete",
                    methods=["POST"])
 @login_required
 def complete_property(project_id, prop_id):
-    data    = request.get_json(force=True)
-    comment = (data.get("comment") or "").strip()
-    now     = datetime.utcnow().isoformat()
+    data      = request.get_json(force=True)
+    comment   = (data.get("comment") or "").strip()
+    task_type = (data.get("task_type") or "departure_clean").strip()
+    if task_type not in VALID_TASK_TYPES:
+        task_type = "departure_clean"
+    now = datetime.utcnow().isoformat()
 
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
         """INSERT INTO task_completions
-           (project_property_id, completed_by, completed_at, comment)
-           VALUES (%s, %s, %s, %s)""",
-        (prop_id, current_user.id, now, comment)
+           (project_property_id, completed_by, completed_at, comment, task_type)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (prop_id, current_user.id, now, comment, task_type)
     )
     conn.commit()
     cur.close(); conn.close()
     return jsonify({"success": True, "completed_by": current_user.name,
-                    "completed_at": now})
+                    "completed_at": now, "task_type": task_type,
+                    "task_type_label": TASK_TYPE_LABELS.get(task_type, task_type)})
 
 
 @projects_bp.route("/<int:project_id>/properties/<int:prop_id>/uncomplete",
@@ -423,10 +442,11 @@ def project_tasks(project_id):
                tc.id           AS completion_id,
                tc.completed_at,
                tc.comment,
+               tc.task_type,
                u.name          AS completed_by_name
         FROM project_properties pp
         LEFT JOIN LATERAL (
-            SELECT id, completed_at, comment, completed_by
+            SELECT id, completed_at, comment, completed_by, task_type
             FROM task_completions
             WHERE project_property_id = pp.id
             ORDER BY completed_at DESC LIMIT 1
@@ -505,12 +525,13 @@ def report_csv(project_id):
     cur.execute("""
         SELECT pp.property_name, pp.address,
                CASE WHEN tc.id IS NOT NULL THEN 'Complete' ELSE 'Pending' END AS status,
+               tc.task_type,
                u.name  AS completed_by,
                tc.completed_at,
                tc.comment
         FROM project_properties pp
         LEFT JOIN LATERAL (
-            SELECT id, completed_at, comment, completed_by
+            SELECT id, completed_at, comment, completed_by, task_type
             FROM task_completions
             WHERE project_property_id = pp.id
             ORDER BY completed_at DESC LIMIT 1
@@ -524,11 +545,12 @@ def report_csv(project_id):
 
     buf = io.StringIO()
     w   = csv.writer(buf)
-    w.writerow(["Property", "Address", "Status",
+    w.writerow(["Property", "Address", "Status", "Task Type",
                 "Completed By", "Completed At", "Comment"])
     for r in rows:
+        label = TASK_TYPE_LABELS.get(r["task_type"] or "", r["task_type"] or "")
         w.writerow([
-            r["property_name"], r["address"], r["status"],
+            r["property_name"], r["address"], r["status"], label,
             r["completed_by"] or "", r["completed_at"] or "", r["comment"] or "",
         ])
 

@@ -42,6 +42,19 @@ const PROJECT_ID = {{ project.id }};
 const COLORS     = {{ colors | safe }};
 let allProps     = {{ props_json | safe }};
 
+const TASK_TYPES = [
+  { code: "departure_clean", label: "Departure Clean" },
+  { code: "arrival_inspect", label: "Arrival Inspection" },
+  { code: "owner_turnover",  label: "Owner Turnover" },
+  { code: "deep_clean",      label: "Deep Clean" },
+  { code: "mid_stay",        label: "Mid-Stay Check" },
+  { code: "maintenance",     label: "Maintenance" },
+];
+const TASK_TYPE_LABELS = Object.fromEntries(TASK_TYPES.map(t => [t.code, t.label]));
+
+// tracks selected task type per card
+const selectedType = {};
+
 function render() {
   const pending   = allProps.filter(p => !p.completion_id);
   const completed = allProps.filter(p =>  p.completion_id);
@@ -102,7 +115,19 @@ function pendingCard(p, regionColor) {
         ${p.address ? `<div class="text-sm text-gray-400 mt-0.5">${p.address}</div>` : ""}
       </div>
 
-      <div id="form-${p.id}" class="hidden px-4 pb-4 pt-1 bg-gray-50 border-t border-gray-100">
+      <div id="form-${p.id}" class="hidden px-4 pb-4 pt-3 bg-gray-50 border-t border-gray-100">
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Task type</div>
+        <div class="grid grid-cols-3 gap-1.5 mb-3" id="typepicker-${p.id}">
+          ${TASK_TYPES.map(t => `
+            <button onclick="selectType(${p.id}, '${t.code}')"
+                    id="type-${p.id}-${t.code}"
+                    class="type-btn py-2 px-1 rounded-xl border text-xs font-semibold text-center
+                           transition-colors border-gray-200 bg-white text-gray-600
+                           active:scale-95"
+                    data-prop="${p.id}" data-code="${t.code}">
+              ${t.label}
+            </button>`).join("")}
+        </div>
         <input type="text" id="comment-${p.id}"
                placeholder="Add a note (optional)"
                class="w-full border border-gray-200 bg-white rounded-xl px-3 py-2.5 text-sm mb-3
@@ -134,23 +159,40 @@ function doneCard(p) {
     ? new Date(p.completed_at).toLocaleDateString("en-US",
         {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"})
     : "";
+  const typeLabel = TASK_TYPE_LABELS[p.task_type] || "";
   return `
     <div class="bg-white rounded-2xl border border-gray-100 mb-2 px-4 py-3 flex items-start gap-3 opacity-50">
       <span class="text-green-500 text-xl mt-0.5 flex-shrink-0">✓</span>
       <div class="min-w-0">
         <div class="text-sm text-gray-500 line-through font-medium">${p.property_name}</div>
-        ${p.completed_by_name || date
-          ? `<div class="text-xs text-gray-400 mt-0.5">${p.completed_by_name || ""}${date ? " · " + date : ""}</div>`
-          : ""}
+        <div class="text-xs text-gray-400 mt-0.5">
+          ${typeLabel ? `<span class="font-semibold">${typeLabel}</span>` : ""}
+          ${p.completed_by_name ? (typeLabel ? " · " : "") + p.completed_by_name : ""}
+          ${date ? " · " + date : ""}
+        </div>
         ${p.comment ? `<div class="text-xs text-gray-500 italic mt-0.5">"${p.comment}"</div>` : ""}
       </div>
     </div>`;
 }
 
+function selectType(propId, code) {
+  selectedType[propId] = code;
+  document.querySelectorAll(`[data-prop="${propId}"]`).forEach(btn => {
+    const selected = btn.dataset.code === code;
+    btn.classList.toggle("bg-indigo-600",  selected);
+    btn.classList.toggle("text-white",     selected);
+    btn.classList.toggle("border-indigo-600", selected);
+    btn.classList.toggle("bg-white",       !selected);
+    btn.classList.toggle("text-gray-600",  !selected);
+    btn.classList.toggle("border-gray-200",!selected);
+  });
+}
+
 function showForm(id) {
   document.getElementById(`form-${id}`).classList.remove("hidden");
   document.getElementById(`doneBtn-${id}`).classList.add("hidden");
-  document.getElementById(`comment-${id}`).focus();
+  // pre-select first type if none chosen yet
+  if (!selectedType[id]) selectType(id, TASK_TYPES[0].code);
 }
 
 function cancelForm(id) {
@@ -160,11 +202,12 @@ function cancelForm(id) {
 }
 
 async function submitComplete(propId) {
-  const comment = (document.getElementById("comment-" + propId)?.value || "").trim();
-  const res  = await fetch(`/projects/${PROJECT_ID}/properties/${propId}/complete`, {
+  const comment   = (document.getElementById("comment-" + propId)?.value || "").trim();
+  const task_type = selectedType[propId] || "departure_clean";
+  const res = await fetch(`/projects/${PROJECT_ID}/properties/${propId}/complete`, {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({comment}),
+    body: JSON.stringify({comment, task_type}),
   });
   const data = await res.json();
   if (data.success) {
@@ -174,7 +217,9 @@ async function submitComplete(propId) {
       p.completed_by_name = data.completed_by;
       p.completed_at      = data.completed_at;
       p.comment           = comment;
+      p.task_type         = data.task_type;
     }
+    delete selectedType[propId];
     updateProgress();
     render();
   }
