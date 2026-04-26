@@ -676,7 +676,7 @@ def chatbot_chat():
     from routes.briefing import (
         _fetch_todays_routes, _fetch_bw_reservations,
         _get_breezeway_token, _classify_reservation,
-        _get_property_name, _get_property_address,
+        _get_property_name, _get_property_address, _extract_str,
     )
 
     data     = request.get_json(force=True)
@@ -756,6 +756,7 @@ def chatbot_chat():
                     t        = r.get("checkin_time", "")
                     checkout = (r.get("checkout_date") or "")[:10]
                     checkin  = (r.get("checkin_date")  or "")[:10]
+                    tag_names = [_extract_str(tg) for tg in (r.get("tags") or [])]
                     nights   = ""
                     if checkin and checkout:
                         try:
@@ -768,6 +769,8 @@ def chatbot_chat():
                     line = f"  - [{kind.upper()}] {prop_str} (checkin {checkin}, checkout {checkout}{nights})"
                     if t:
                         line += f" at {t[:5]}"
+                    if tag_names:
+                        line += f" [tags: {', '.join(tag_names)}]"
                     block.append(line)
             else:
                 block.append("No arrivals this date.")
@@ -782,6 +785,7 @@ def chatbot_chat():
                     t        = r.get("checkout_time", "")
                     checkout = (r.get("checkout_date") or "")[:10]
                     checkin  = (r.get("checkin_date")  or "")[:10]
+                    tag_names = [_extract_str(tg) for tg in (r.get("tags") or [])]
                     nights   = ""
                     if checkin and checkout:
                         try:
@@ -794,6 +798,8 @@ def chatbot_chat():
                     line = f"  - [{kind.upper()}] {prop_str} (checkin {checkin}, checkout {checkout}{nights})"
                     if t:
                         line += f" by {t[:5]}"
+                    if tag_names:
+                        line += f" [tags: {', '.join(tag_names)}]"
                     block.append(line)
             else:
                 block.append("No departures this date.")
@@ -822,7 +828,10 @@ def chatbot_chat():
         "  BLOCK  = maintenance block, hold, or owner block — no guests, property unavailable\n\n"
         "A Post Rental Inspection (PRI) is required whenever a non-guest reservation "
         "(OWNER, BLOCK) follows directly after a GUEST stay at the same property. "
-        "It is a 1-hour damage inspection before the owner arrives.\n\n"
+        "It is a 1-hour damage inspection before the owner arrives.\n"
+        "Tags appear in square brackets after each reservation line, e.g. [tags: owner next]. "
+        "The 'owner next' tag means operations has already noted that this owner arrival "
+        "follows a guest stay and a PRI has been flagged — treat it as already identified.\n\n"
         "In the data below, each date section lists Arrivals (guests checking IN that day) "
         "and Departures (guests checking OUT that day). The checkout date on each departure line "
         "will match the section date.\n"
