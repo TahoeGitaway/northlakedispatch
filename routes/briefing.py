@@ -457,43 +457,45 @@ def daily_briefing():
 @login_required
 def debug_reservations():
     """Return raw Breezeway reservation fields for a date — for diagnosing classification and discovering field names."""
-    date_str  = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
-    checkins  = _fetch_breezeway_checkins(date_str)
-    checkouts = _fetch_breezeway_checkouts(date_str)
-    def summarise(rs):
-        return [
-            {
-                # Classification
-                "classified_as": _classify_reservation(r),
-                "type_stay":     r.get("type_stay"),
-                "tags":          r.get("tags"),
-                # Dates / times
-                "checkin_date":  r.get("checkin_date"),
-                "checkout_date": r.get("checkout_date"),
-                "checkin_time":  r.get("checkin_time"),
-                "checkout_time": r.get("checkout_time"),
-                # Property candidates — every field that might name the property
-                "property":      r.get("property"),
-                "unit":          r.get("unit"),
-                "listing":       r.get("listing"),
-                "property_name": r.get("property_name"),
-                "unit_name":     r.get("unit_name"),
-                "listing_name":  r.get("listing_name"),
-                "name":          r.get("name"),
-                # Guests (for reference)
-                "guest_name":    _guest_name(r),
-                # Full top-level keys — so we can see everything Breezeway sends
-                "_all_keys":     list(r.keys()),
-                # Full raw object (truncated nested objects shown as-is)
-                "_raw":          r,
-            }
-            for r in rs
-        ]
-    return jsonify({
-        "date":      date_str,
-        "checkins":  summarise(checkins),
-        "checkouts": summarise(checkouts),
-    })
+    try:
+        date_str  = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+        checkins  = _fetch_breezeway_checkins(date_str)
+        checkouts = _fetch_breezeway_checkouts(date_str)
+
+        def safe(v):
+            """Convert any value to something jsonify can handle."""
+            try:
+                json.dumps(v)
+                return v
+            except (TypeError, ValueError):
+                return str(v)
+
+        def summarise(rs):
+            out = []
+            for r in rs:
+                # Dump every top-level key with a safe-serialized value
+                raw_safe = {k: safe(v) for k, v in r.items()}
+                out.append({
+                    "classified_as": _classify_reservation(r),
+                    "type_stay":     r.get("type_stay"),
+                    "tags":          r.get("tags"),
+                    "checkin_date":  r.get("checkin_date"),
+                    "checkout_date": r.get("checkout_date"),
+                    "checkin_time":  r.get("checkin_time"),
+                    "checkout_time": r.get("checkout_time"),
+                    "guest_name":    _guest_name(r),
+                    "_all_keys":     list(r.keys()),
+                    "_raw":          raw_safe,
+                })
+            return out
+
+        return jsonify({
+            "date":      date_str,
+            "checkins":  summarise(checkins),
+            "checkouts": summarise(checkouts),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "error_type": type(e).__name__}), 500
 
 
 @briefing_bp.route("/briefing/calendar-activity")
