@@ -674,8 +674,8 @@ def chatbot_page():
 def chatbot_chat():
     import anthropic
     from routes.briefing import (
-        _fetch_todays_routes, _fetch_breezeway_checkins,
-        _fetch_breezeway_checkouts, _classify_reservation,
+        _fetch_todays_routes, _fetch_bw_reservations,
+        _get_breezeway_token, _classify_reservation,
         _get_property_name,
     )
 
@@ -688,15 +688,46 @@ def chatbot_chat():
     if not messages:
         return jsonify({"error": "No message provided."}), 400
 
-    # Fetch and build context for up to 7 dates
-    context_blocks   = []
-    context_summary  = []
+    # Fetch Breezeway data for the full date range in 2 API calls instead of 2×N
+    capped_dates = sorted(dates)[:7]
+    min_date     = capped_dates[0]
+    max_date     = capped_dates[-1]
+    date_set     = set(capped_dates)
 
-    for date_str in dates[:7]:
+    try:
+        token = _get_breezeway_token()
+        if token:
+            all_checkins  = _fetch_bw_reservations(token, {
+                "checkin_date_ge": min_date, "checkin_date_le": max_date,
+            })
+            all_checkouts = _fetch_bw_reservations(token, {
+                "checkout_date_ge": min_date, "checkout_date_le": max_date,
+            })
+        else:
+            all_checkins = all_checkouts = []
+    except Exception:
+        all_checkins = all_checkouts = []
+
+    # Index by date
+    checkins_by_date  = {}
+    checkouts_by_date = {}
+    for r in all_checkins:
+        d = (r.get("checkin_date") or "")[:10]
+        if d in date_set:
+            checkins_by_date.setdefault(d, []).append(r)
+    for r in all_checkouts:
+        d = (r.get("checkout_date") or "")[:10]
+        if d in date_set:
+            checkouts_by_date.setdefault(d, []).append(r)
+
+    context_blocks  = []
+    context_summary = []
+
+    for date_str in capped_dates:
         try:
             routes    = _fetch_todays_routes(date_str)
-            checkins  = _fetch_breezeway_checkins(date_str)
-            checkouts = _fetch_breezeway_checkouts(date_str)
+            checkins  = checkins_by_date.get(date_str, [])
+            checkouts = checkouts_by_date.get(date_str, [])
 
             block = [f"\n=== {date_str} ==="]
 
