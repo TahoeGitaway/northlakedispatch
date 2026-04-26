@@ -208,11 +208,11 @@ def _classify_reservation(r: dict) -> str:
 
     Priority order:
       1. type_reservation.code == hold/block → block (overrides everything)
-      2. type_stay.code == owner/lease/guest → use directly
-      3. Tag "Owner Next" → owner (manual correction for BW misclassification;
-         user applies this tag to owner bookings where BW has the type wrong)
-      4. Duration >= 30 days → lease
-      5. guest
+      2. type_stay.code == owner → owner
+      3. Tag "Owner Next" → owner (manual marker for BW-miscategorised owner bookings)
+      4. Duration >= 30 days → lease (applies to all non-owner, non-block guest stays)
+      5. type_stay.code == lease → lease
+      6. guest
     """
     ts = _extract_str(r.get("type_stay"))
     tr = _extract_str(r.get("type_reservation"))
@@ -222,20 +222,14 @@ def _classify_reservation(r: dict) -> str:
     if tr in _BLOCK_TYPES or ts in _BLOCK_TYPES:
         return "block"
 
-    # type_stay is Breezeway's own classification — trust it when set
+    # Owner stays
     if ts == "owner":
         return "owner"
-    if ts == "lease":
-        return "lease"
-
-    # "Owner Next" = user's manual marker for owner bookings BW miscategorized
     if "owner next" in tag_names:
         return "owner"
 
-    if ts == "guest":
-        return "guest"
-
-    # Duration fallback when type_stay gives no signal at all
+    # Duration check runs for ALL remaining reservations — a paying guest
+    # stay of 30+ nights is a lease regardless of how Breezeway labels it
     checkin  = r.get("checkin_date")  or ""
     checkout = r.get("checkout_date") or ""
     if checkin and checkout:
@@ -246,6 +240,10 @@ def _classify_reservation(r: dict) -> str:
                 return "lease"
         except Exception:
             pass
+
+    if ts == "lease":
+        return "lease"
+
     return "guest"
 
 
