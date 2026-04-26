@@ -90,19 +90,21 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
     return all_results
 
 
-_property_cache_error: str = ""   # last error from property fetch, for diagnostics
+_property_cache_error: str  = ""   # last error from property fetch, for diagnostics
+_property_addr_cache:  dict = {}   # {property_id: address_string}
 
 
 def _load_property_cache() -> str:
     """Fetch all Breezeway properties into _property_cache. Returns error string or ''."""
-    global _property_cache, _property_cache_ts, _property_cache_error
+    global _property_cache, _property_addr_cache, _property_cache_ts, _property_cache_error
     token = _get_breezeway_token()
     if not token:
         _property_cache_error = "No Breezeway token"
         return _property_cache_error
     try:
         page, limit = 1, 200
-        fetched = {}
+        fetched      = {}
+        fetched_addr = {}
         while True:
             resp = requests.get(
                 "https://api.breezeway.io/public/inventory/v1/property",
@@ -119,13 +121,26 @@ def _load_property_cache() -> str:
                 pid  = p.get("id")
                 name = (p.get("name") or p.get("property_name") or
                         p.get("title") or p.get("display_name") or str(pid))
+                # Try several common address field names Breezeway might use
+                addr = (p.get("address") or p.get("full_address") or
+                        p.get("street_address") or p.get("location") or "")
+                if isinstance(addr, dict):
+                    # Some APIs return address as a nested object
+                    parts = [
+                        addr.get("street") or addr.get("line1") or "",
+                        addr.get("city") or "",
+                        addr.get("state") or "",
+                    ]
+                    addr = ", ".join(x for x in parts if x)
                 if pid:
-                    fetched[pid] = name
+                    fetched[pid]      = name
+                    fetched_addr[pid] = str(addr).strip()
             if len(items) < limit:
                 break
             page += 1
-        _property_cache     = fetched
-        _property_cache_ts  = time.time()
+        _property_cache      = fetched
+        _property_addr_cache = fetched_addr
+        _property_cache_ts   = time.time()
         _property_cache_error = ""
         return ""
     except Exception as e:
@@ -133,13 +148,25 @@ def _load_property_cache() -> str:
         return _property_cache_error
 
 
+def _ensure_property_cache():
+    if not _property_cache or time.time() - _property_cache_ts > 3600:
+        _load_property_cache()
+
+
 def _get_property_name(property_id) -> str:
     """Return a property's display name by Breezeway property_id, cached 1 hour."""
     if not property_id:
         return "Unknown Property"
-    if not _property_cache or time.time() - _property_cache_ts > 3600:
-        _load_property_cache()
+    _ensure_property_cache()
     return _property_cache.get(property_id, f"Property {property_id}")
+
+
+def _get_property_address(property_id) -> str:
+    """Return a property's address by Breezeway property_id, cached 1 hour."""
+    if not property_id:
+        return ""
+    _ensure_property_cache()
+    return _property_addr_cache.get(property_id, "")
 
 
 def _fetch_breezeway_checkins(date_str: str) -> list:

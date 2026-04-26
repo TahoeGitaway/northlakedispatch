@@ -676,7 +676,7 @@ def chatbot_chat():
     from routes.briefing import (
         _fetch_todays_routes, _fetch_bw_reservations,
         _get_breezeway_token, _classify_reservation,
-        _get_property_name,
+        _get_property_name, _get_property_address,
     )
 
     data     = request.get_json(force=True)
@@ -750,7 +750,9 @@ def chatbot_chat():
                 block.append(f"Arrivals ({len(checkins)}):")
                 for r in checkins:
                     kind     = _classify_reservation(r)
-                    prop     = _get_property_name(r.get("property_id"))
+                    pid      = r.get("property_id")
+                    prop     = _get_property_name(pid)
+                    addr     = _get_property_address(pid)
                     t        = r.get("checkin_time", "")
                     checkout = (r.get("checkout_date") or "")[:10]
                     checkin  = (r.get("checkin_date")  or "")[:10]
@@ -762,7 +764,8 @@ def chatbot_chat():
                             nights = f", {n} nights"
                         except Exception:
                             pass
-                    line = f"  - [{kind.upper()}] {prop} (checkin {checkin}, checkout {checkout}{nights})"
+                    prop_str = f"{prop}" + (f" — {addr}" if addr else "")
+                    line = f"  - [{kind.upper()}] {prop_str} (checkin {checkin}, checkout {checkout}{nights})"
                     if t:
                         line += f" at {t[:5]}"
                     block.append(line)
@@ -773,7 +776,9 @@ def chatbot_chat():
                 block.append(f"Departures ({len(checkouts)}):")
                 for r in checkouts:
                     kind     = _classify_reservation(r)
-                    prop     = _get_property_name(r.get("property_id"))
+                    pid      = r.get("property_id")
+                    prop     = _get_property_name(pid)
+                    addr     = _get_property_address(pid)
                     t        = r.get("checkout_time", "")
                     checkout = (r.get("checkout_date") or "")[:10]
                     checkin  = (r.get("checkin_date")  or "")[:10]
@@ -785,7 +790,8 @@ def chatbot_chat():
                             nights = f", {n} nights"
                         except Exception:
                             pass
-                    line = f"  - [{kind.upper()}] {prop} (checkin {checkin}, checkout {checkout}{nights})"
+                    prop_str = f"{prop}" + (f" — {addr}" if addr else "")
+                    line = f"  - [{kind.upper()}] {prop_str} (checkin {checkin}, checkout {checkout}{nights})"
                     if t:
                         line += f" by {t[:5]}"
                     block.append(line)
