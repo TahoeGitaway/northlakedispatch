@@ -90,39 +90,55 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
     return all_results
 
 
+_property_cache_error: str = ""   # last error from property fetch, for diagnostics
+
+
+def _load_property_cache() -> str:
+    """Fetch all Breezeway properties into _property_cache. Returns error string or ''."""
+    global _property_cache, _property_cache_ts, _property_cache_error
+    token = _get_breezeway_token()
+    if not token:
+        _property_cache_error = "No Breezeway token"
+        return _property_cache_error
+    try:
+        page, limit = 1, 200
+        fetched = {}
+        while True:
+            resp = requests.get(
+                "https://api.breezeway.io/public/inventory/v1/property",
+                headers={"Authorization": f"JWT {token}"},
+                params={"limit": limit, "page": page},
+                timeout=15,
+            )
+            if not resp.ok:
+                _property_cache_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                return _property_cache_error
+            data = resp.json()
+            items = (data.get("results", data.get("data", data if isinstance(data, list) else [])) or [])
+            for p in items:
+                pid  = p.get("id")
+                name = (p.get("name") or p.get("property_name") or
+                        p.get("title") or p.get("display_name") or str(pid))
+                if pid:
+                    fetched[pid] = name
+            if len(items) < limit:
+                break
+            page += 1
+        _property_cache     = fetched
+        _property_cache_ts  = time.time()
+        _property_cache_error = ""
+        return ""
+    except Exception as e:
+        _property_cache_error = f"{type(e).__name__}: {e}"
+        return _property_cache_error
+
+
 def _get_property_name(property_id) -> str:
     """Return a property's display name by Breezeway property_id, cached 1 hour."""
-    global _property_cache, _property_cache_ts
     if not property_id:
         return "Unknown Property"
-    now = time.time()
-    if not _property_cache or now - _property_cache_ts > 3600:
-        token = _get_breezeway_token()
-        if token:
-            try:
-                page, limit = 1, 200
-                while True:
-                    resp = requests.get(
-                        "https://api.breezeway.io/public/inventory/v1/property",
-                        headers={"Authorization": f"JWT {token}"},
-                        params={"limit": limit, "page": page},
-                        timeout=15,
-                    )
-                    data = resp.json()
-                    items = (data.get("results", data.get("data", [])) or []) \
-                            if isinstance(data, dict) else (data or [])
-                    for p in items:
-                        pid  = p.get("id")
-                        name = (p.get("name") or p.get("property_name") or
-                                p.get("title") or str(pid))
-                        if pid:
-                            _property_cache[pid] = name
-                    if len(items) < limit:
-                        break
-                    page += 1
-                _property_cache_ts = now
-            except Exception:
-                pass
+    if not _property_cache or time.time() - _property_cache_ts > 3600:
+        _load_property_cache()
     return _property_cache.get(property_id, f"Property {property_id}")
 
 
@@ -562,6 +578,18 @@ def debug_reservations():
         })
     except Exception as e:
         return jsonify({"error": str(e), "error_type": type(e).__name__}), 500
+
+
+@briefing_bp.route("/briefing/debug-properties")
+@login_required
+def debug_properties():
+    """Show Breezeway property cache state — use to verify property name lookup."""
+    err = _load_property_cache()
+    return jsonify({
+        "property_count": len(_property_cache),
+        "cache_error":    err or None,
+        "sample":         dict(list(_property_cache.items())[:10]),
+    })
 
 
 @briefing_bp.route("/briefing/calendar-activity")
