@@ -749,10 +749,20 @@ def chatbot_chat():
             if checkins:
                 block.append(f"Arrivals ({len(checkins)}):")
                 for r in checkins:
-                    kind = _classify_reservation(r)
-                    prop = _get_property_name(r.get("property_id"))
-                    t    = r.get("checkin_time", "")
-                    line = f"  - [{kind.upper()}] {prop}"
+                    kind     = _classify_reservation(r)
+                    prop     = _get_property_name(r.get("property_id"))
+                    t        = r.get("checkin_time", "")
+                    checkout = (r.get("checkout_date") or "")[:10]
+                    checkin  = (r.get("checkin_date")  or "")[:10]
+                    nights   = ""
+                    if checkin and checkout:
+                        try:
+                            from datetime import date as _date
+                            n = (_date.fromisoformat(checkout) - _date.fromisoformat(checkin)).days
+                            nights = f", {n} nights"
+                        except Exception:
+                            pass
+                    line = f"  - [{kind.upper()}] {prop} (checkin {checkin}, checkout {checkout}{nights})"
                     if t:
                         line += f" at {t[:5]}"
                     block.append(line)
@@ -762,10 +772,20 @@ def chatbot_chat():
             if checkouts:
                 block.append(f"Departures ({len(checkouts)}):")
                 for r in checkouts:
-                    kind = _classify_reservation(r)
-                    prop = _get_property_name(r.get("property_id"))
-                    t    = r.get("checkout_time", "")
-                    line = f"  - [{kind.upper()}] {prop}"
+                    kind     = _classify_reservation(r)
+                    prop     = _get_property_name(r.get("property_id"))
+                    t        = r.get("checkout_time", "")
+                    checkout = (r.get("checkout_date") or "")[:10]
+                    checkin  = (r.get("checkin_date")  or "")[:10]
+                    nights   = ""
+                    if checkin and checkout:
+                        try:
+                            from datetime import date as _date
+                            n = (_date.fromisoformat(checkout) - _date.fromisoformat(checkin)).days
+                            nights = f", {n} nights"
+                        except Exception:
+                            pass
+                    line = f"  - [{kind.upper()}] {prop} (checkin {checkin}, checkout {checkout}{nights})"
                     if t:
                         line += f" by {t[:5]}"
                     block.append(line)
@@ -790,7 +810,9 @@ def chatbot_chat():
         "Classification key used in the data below:\n"
         "  GUEST  = paying guest stay\n"
         "  OWNER  = owner stay or owner-booked reservation\n"
-        "  LEASE  = paying guest stay that is 30+ days (a long-term rental, still a paying guest — not an owner)\n"
+        "  LEASE  = paying guest stay that is 30+ days (a long-term rental, still a paying guest — not an owner).\n"
+        "          Each reservation line includes checkin date, checkout date, and night count so you can\n"
+        "          identify leases yourself: any GUEST reservation with 30+ nights is a lease departure/arrival.\n"
         "  BLOCK  = maintenance block, hold, or owner block — no guests, property unavailable\n\n"
         "A Post Rental Inspection (PRI) is required whenever a non-guest reservation "
         "(OWNER, BLOCK) follows directly after a GUEST stay at the same property. "
