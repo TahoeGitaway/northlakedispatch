@@ -557,3 +557,61 @@ def report_csv(project_id):
     fname = project["name"].replace(" ", "_") + "_report.csv"
     return Response(buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+
+@projects_bp.route("/<int:project_id>/debug")
+@login_required
+def project_debug(project_id):
+    """Admin-only JSON dump of all task completions for a project."""
+    if not current_user.is_admin:
+        return jsonify({"error": "Admin only"}), 403
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+
+    cur.execute("SELECT id, name, status, created_at FROM projects WHERE id = %s", (project_id,))
+    project = cur.fetchone()
+    if not project:
+        cur.close(); conn.close()
+        return jsonify({"error": "Project not found"}), 404
+
+    cur.execute("""
+        SELECT pp.id, pp.property_name, pp.address, pp.lat, pp.lng, pp.added_at,
+               u_add.name AS added_by_name,
+               tc.id AS completion_id, tc.completed_at, tc.comment, tc.task_type,
+               u_comp.name AS completed_by_name
+        FROM project_properties pp
+        LEFT JOIN users u_add ON u_add.id = pp.added_by
+        LEFT JOIN LATERAL (
+            SELECT id, completed_at, comment, completed_by, task_type
+            FROM task_completions
+            WHERE project_property_id = pp.id
+            ORDER BY completed_at DESC LIMIT 1
+        ) tc ON true
+        LEFT JOIN users u_comp ON u_comp.id = tc.completed_by
+        WHERE pp.project_id = %s
+        ORDER BY pp.property_name
+    """, (project_id,))
+    props = [dict(r) for r in cur.fetchall()]
+
+    cur.execute("""
+        SELECT tc.id, tc.project_property_id, tc.completed_at, tc.comment,
+               tc.task_type, u.name AS completed_by_name, pp.property_name
+        FROM task_completions tc
+        JOIN project_properties pp ON pp.id = tc.project_property_id
+        LEFT JOIN users u ON u.id = tc.completed_by
+        WHERE pp.project_id = %s
+        ORDER BY tc.completed_at DESC
+    """, (project_id,))
+    completions = [dict(r) for r in cur.fetchall()]
+
+    cur.close(); conn.close()
+
+    total    = len(props)
+    done     = sum(1 for p in props if p["completion_id"])
+    return jsonify({
+        "project":     dict(project),
+        "summary":     {"total": total, "completed": done, "pending": total - done},
+        "properties":  props,
+        "all_completions": completions,
+    })

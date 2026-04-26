@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}AI Operations Chat — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6">
+
+  <div class="flex items-center gap-3 mb-5">
+    <h2 class="text-2xl font-bold text-gray-800">AI Operations Chat</h2>
+    <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">Admin Only</span>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+    <!-- LEFT: Date picker + context panel -->
+    <div class="lg:col-span-1 space-y-4">
+
+      <!-- Date selector -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Dates to Assess</div>
+        <div id="selectedDates" class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]"></div>
+        <div class="flex gap-2">
+          <input type="date" id="datePicker"
+                 class="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm
+                        focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <button onclick="addDate()"
+                  class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-3 py-1.5
+                         rounded-lg font-medium transition-colors">
+            Add
+          </button>
+        </div>
+        <button onclick="addToday()"
+                class="mt-2 w-full text-xs text-indigo-600 hover:text-indigo-800 font-medium py-1">
+          + Today
+        </button>
+      </div>
+
+      <!-- What the bot can see -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">What the Bot Can See</div>
+        <div id="contextPanel" class="space-y-2 text-sm text-gray-500">
+          <p class="text-xs italic">Add dates and send a message to load data.</p>
+        </div>
+      </div>
+
+      <!-- System prompt toggle -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        <button onclick="togglePrompt()"
+                class="text-xs font-bold text-gray-400 uppercase tracking-wide w-full text-left flex justify-between">
+          <span>System Prompt</span>
+          <span id="promptToggleIcon">▼ Show</span>
+        </button>
+        <pre id="systemPromptBox"
+             class="hidden mt-2 text-xs text-gray-600 whitespace-pre-wrap bg-gray-50
+                    border border-gray-100 rounded-lg p-3 overflow-y-auto max-h-64"></pre>
+      </div>
+
+    </div>
+
+    <!-- RIGHT: Chat area -->
+    <div class="lg:col-span-2 flex flex-col gap-3">
+
+      <div id="chatMessages"
+           class="bg-white rounded-xl shadow-sm border border-gray-100 p-4
+                  flex flex-col gap-3 overflow-y-auto"
+           style="min-height: 420px; max-height: 600px;">
+        <div class="text-center text-gray-400 text-sm py-10" id="emptyState">
+          Add dates and ask a question — I'll pull the route data and Breezeway arrivals/departures for those days.
+        </div>
+      </div>
+
+      <div class="flex gap-2">
+        <textarea id="chatInput" rows="2"
+                  placeholder="Ask about routes, arrivals, departures, PRIs…"
+                  onkeydown="handleKey(event)"
+                  class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm resize-none
+                         focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        <button onclick="sendMessage()"
+                class="self-end bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5
+                       rounded-xl font-medium text-sm transition-colors">
+          Send
+        </button>
+      </div>
+      <p class="text-xs text-gray-400 -mt-1">Shift+Enter for new line · Enter to send</p>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const today = new Date().toISOString().slice(0, 10);
+document.getElementById("datePicker").value = today;
+
+let selectedDates = [];
+let conversationHistory = [];
+let lastSystemPrompt = "";
+
+function addDate() {
+  const val = document.getElementById("datePicker").value;
+  if (!val || selectedDates.includes(val)) return;
+  selectedDates.push(val);
+  selectedDates.sort();
+  renderDates();
+}
+
+function addToday() {
+  document.getElementById("datePicker").value = today;
+  addDate();
+}
+
+function removeDate(d) {
+  selectedDates = selectedDates.filter(x => x !== d);
+  renderDates();
+}
+
+function renderDates() {
+  const el = document.getElementById("selectedDates");
+  if (!selectedDates.length) {
+    el.innerHTML = '<span class="text-xs text-gray-400 italic">No dates selected</span>';
+    return;
+  }
+  el.innerHTML = selectedDates.map(d => `
+    <span class="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs
+                 font-medium px-2 py-0.5 rounded-full border border-indigo-200">
+      ${d}
+      <button onclick="removeDate('${d}')" class="text-indigo-400 hover:text-indigo-700 font-bold leading-none">×</button>
+    </span>
+  `).join("");
+}
+
+function handleKey(e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+
+function appendMessage(role, text) {
+  document.getElementById("emptyState")?.remove();
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = role === "user"
+    ? "self-end bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap"
+    : "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function appendThinking() {
+  document.getElementById("emptyState")?.remove();
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.id = "thinking";
+  div.className = "self-start bg-gray-100 text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm italic";
+  div.textContent = "Thinking…";
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function updateContextPanel(summary) {
+  const el = document.getElementById("contextPanel");
+  if (!summary || !summary.length) return;
+  el.innerHTML = summary.map(s => {
+    if (s.error) return `<div class="text-red-500 text-xs">${s.date}: error loading</div>`;
+    return `
+      <div class="border border-gray-100 rounded-lg p-2">
+        <div class="font-medium text-gray-700 text-xs mb-1">${s.date}</div>
+        <div class="text-xs space-y-0.5 text-gray-500">
+          <div>📋 ${s.routes} route${s.routes !== 1 ? "s" : ""}</div>
+          <div>✈ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
+          <div>🚪 ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function togglePrompt() {
+  const box  = document.getElementById("systemPromptBox");
+  const icon = document.getElementById("promptToggleIcon");
+  const shown = !box.classList.contains("hidden");
+  box.classList.toggle("hidden", shown);
+  icon.textContent = shown ? "▼ Show" : "▲ Hide";
+  if (!shown && lastSystemPrompt) box.textContent = lastSystemPrompt;
+}
+
+async function sendMessage() {
+  const input = document.getElementById("chatInput");
+  const text  = input.value.trim();
+  if (!text) return;
+  if (!selectedDates.length) {
+    alert("Please add at least one date before chatting.");
+    return;
+  }
+
+  input.value = "";
+  appendMessage("user", text);
+  conversationHistory.push({ role: "user", content: text });
+  appendThinking();
+
+  try {
+    const res  = await fetch("/admin/chatbot/chat", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ messages: conversationHistory, dates: selectedDates }),
+    });
+    const data = await res.json();
+    document.getElementById("thinking")?.remove();
+
+    if (data.error) {
+      appendMessage("assistant", "Error: " + data.error);
+      conversationHistory.pop();
+      return;
+    }
+
+    appendMessage("assistant", data.reply);
+    conversationHistory.push({ role: "assistant", content: data.reply });
+    updateContextPanel(data.context_summary);
+
+    if (data.system_prompt) {
+      lastSystemPrompt = data.system_prompt;
+      document.getElementById("systemPromptBox").textContent = lastSystemPrompt;
+    }
+  } catch (e) {
+    document.getElementById("thinking")?.remove();
+    appendMessage("assistant", "Network error: " + e.message);
+    conversationHistory.pop();
+  }
+}
+
+// Pre-select today
+addToday();
+</script>
+{% endblock %}

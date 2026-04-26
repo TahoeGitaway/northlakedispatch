@@ -52,6 +52,11 @@
                           {% if request.endpoint == 'admin.admin_properties' %}text-indigo-600{% endif %}">
                     Properties
                 </a>
+                <a href="{{ url_for('admin.chatbot_page') }}"
+                   class="text-gray-600 hover:text-indigo-600 font-medium
+                          {% if request.endpoint == 'admin.chatbot_page' %}text-indigo-600{% endif %}">
+                    AI Chat
+                </a>
                 {% endif %}
             </div>
             {% endif %}

@@ -2,6 +2,8 @@
 routes/admin.py — admin routes: user management, invites, properties, CSV upload.
 """
 
+import json
+import os
 import re
 import secrets
 import csv
@@ -655,3 +657,134 @@ def admin_delete_team(team_id):
 @admin_required
 def download_db():
     return jsonify({"info": "Database is PostgreSQL. Use Railway dashboard for backups."}), 200
+
+
+# ── AI Chatbot ────────────────────────────────────────────────────
+
+@admin_bp.route("/admin/chatbot")
+@login_required
+@admin_required
+def chatbot_page():
+    return render_template("admin_chatbot.html")
+
+
+@admin_bp.route("/admin/chatbot/chat", methods=["POST"])
+@login_required
+@admin_required
+def chatbot_chat():
+    import anthropic
+    from routes.briefing import (
+        _fetch_todays_routes, _fetch_breezeway_checkins,
+        _fetch_breezeway_checkouts, _classify_reservation,
+        _get_property_name,
+    )
+
+    data     = request.get_json(force=True)
+    messages = data.get("messages", [])
+    dates    = data.get("dates", [])
+
+    if not dates:
+        return jsonify({"error": "Select at least one date first."}), 400
+    if not messages:
+        return jsonify({"error": "No message provided."}), 400
+
+    # Fetch and build context for up to 7 dates
+    context_blocks   = []
+    context_summary  = []
+
+    for date_str in dates[:7]:
+        try:
+            routes    = _fetch_todays_routes(date_str)
+            checkins  = _fetch_breezeway_checkins(date_str)
+            checkouts = _fetch_breezeway_checkouts(date_str)
+
+            block = [f"\n=== {date_str} ==="]
+
+            if routes:
+                block.append(f"Saved routes ({len(routes)}):")
+                for r in routes:
+                    stops = [s for s in json.loads(r["stops_json"] or "[]")
+                             if not s.get("isLunch")]
+                    line  = f"  - \"{r['name']}\""
+                    if r["assigned_to"]:
+                        line += f" → {r['assigned_to']}"
+                    line += f": {len(stops)} stop{'s' if len(stops) != 1 else ''}"
+                    if (r.get("notes") or "").strip():
+                        line += f". Notes: {r['notes'].strip()}"
+                    block.append(line)
+            else:
+                block.append("No routes saved for this date.")
+
+            if checkins:
+                block.append(f"Arrivals ({len(checkins)}):")
+                for r in checkins:
+                    kind = _classify_reservation(r)
+                    prop = _get_property_name(r.get("property_id"))
+                    t    = r.get("checkin_time", "")
+                    line = f"  - [{kind.upper()}] {prop}"
+                    if t:
+                        line += f" at {t[:5]}"
+                    block.append(line)
+            else:
+                block.append("No arrivals this date.")
+
+            if checkouts:
+                block.append(f"Departures ({len(checkouts)}):")
+                for r in checkouts:
+                    kind = _classify_reservation(r)
+                    prop = _get_property_name(r.get("property_id"))
+                    t    = r.get("checkout_time", "")
+                    line = f"  - [{kind.upper()}] {prop}"
+                    if t:
+                        line += f" by {t[:5]}"
+                    block.append(line)
+            else:
+                block.append("No departures this date.")
+
+            context_blocks.append("\n".join(block))
+            context_summary.append({
+                "date":       date_str,
+                "routes":     len(routes),
+                "arrivals":   len(checkins),
+                "departures": len(checkouts),
+            })
+        except Exception as e:
+            context_blocks.append(f"\n=== {date_str} ===\nData load error: {e}")
+            context_summary.append({"date": date_str, "error": str(e)})
+
+    system_prompt = (
+        "You are an AI operations assistant for Tahoe Getaways, a vacation rental company "
+        "in Lake Tahoe. You help the operations team understand their schedule, guest "
+        "arrivals and departures, and flag any issues.\n\n"
+        "Classification key used in the data below:\n"
+        "  GUEST  = paying guest stay\n"
+        "  OWNER  = owner stay or owner-booked reservation\n"
+        "  LEASE  = long-term stay (30+ days)\n"
+        "  BLOCK  = maintenance block, hold, or owner block — no guests, property unavailable\n\n"
+        "A Post Rental Inspection (PRI) is required whenever a non-guest reservation "
+        "(OWNER, BLOCK) follows directly after a GUEST stay at the same property. "
+        "It is a 1-hour damage inspection before the owner arrives.\n\n"
+        "Data loaded for the selected date(s):\n"
+        + "\n".join(context_blocks)
+        + "\n\nIf asked about something not in this data, say so clearly."
+    )
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
+
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        resp   = client.messages.create(
+            model      = "claude-sonnet-4-6",
+            max_tokens = 1024,
+            system     = system_prompt,
+            messages   = messages,
+        )
+        return jsonify({
+            "reply":           resp.content[0].text,
+            "context_summary": context_summary,
+            "system_prompt":   system_prompt,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
