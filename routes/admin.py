@@ -817,6 +817,9 @@ def chatbot_chat():
         "A Post Rental Inspection (PRI) is required whenever a non-guest reservation "
         "(OWNER, BLOCK) follows directly after a GUEST stay at the same property. "
         "It is a 1-hour damage inspection before the owner arrives.\n\n"
+        "In the data below, each date section lists Arrivals (guests checking IN that day) "
+        "and Departures (guests checking OUT that day). The checkout date on each departure line "
+        "will match the section date.\n\n"
         "Data loaded for the selected date(s):\n"
         + "\n".join(context_blocks)
         + "\n\nIf asked about something not in this data, say so clearly."
