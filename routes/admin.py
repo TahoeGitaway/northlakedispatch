@@ -825,7 +825,9 @@ def chatbot_chat():
         "It is a 1-hour damage inspection before the owner arrives.\n\n"
         "In the data below, each date section lists Arrivals (guests checking IN that day) "
         "and Departures (guests checking OUT that day). The checkout date on each departure line "
-        "will match the section date.\n\n"
+        "will match the section date.\n"
+        "Always address every date you were given, even if it has no routes, arrivals, or departures — "
+        "say so explicitly rather than skipping it.\n\n"
         "Data loaded for the selected date(s):\n"
         + "\n".join(context_blocks)
         + "\n\nIf asked about something not in this data, say so clearly."
