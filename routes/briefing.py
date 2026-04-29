@@ -689,6 +689,9 @@ def calendar_activity():
         checkout_ds = r.get("checkout_date", "") or ""
         kind = _classify_reservation(r)
 
+        if kind == "block":
+            continue  # blocks are internal holds, not real guest/owner activity
+
         if first_ds <= checkin_ds <= last_ds:
             ensure(checkin_ds)
             activity[checkin_ds]["arrivals"] += 1
