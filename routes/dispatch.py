@@ -448,13 +448,17 @@ def _solve_route(
     else:
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
 
+    # Give OR-Tools enough time to find good solutions.
+    # Priority-constrained passes get more time because getting check-ins
+    # before noon is worth the extra seconds. Google Matrix runs also get
+    # more time — real drive times create tighter windows and harder problems.
     n_stops = max(1, size - 1)
     if hard_deadline:
-        secs = max(2, min(5, math.ceil(n_stops / 3)))   # 2 s ≤6, 3 s ≤9, 4 s ≤12, 5 s 13+
+        secs = max(8, min(15, n_stops))     # 8-15 s; GLS needs room to explore
     elif soft_deadline_penalty:
-        secs = max(2, min(4, math.ceil(n_stops / 4)))   # 2 s ≤8, 3 s ≤12, 4 s 13+
+        secs = max(6, min(12, n_stops))     # 6-12 s
     else:
-        secs = max(5, min(10, n_stops))                 # 5-10 s; GLS needs time on flat distance landscapes
+        secs = max(5, min(10, n_stops))     # 5-10 s; unconstrained TSP
     params.time_limit.FromSeconds(secs)
 
     # For unconstrained pure-distance TSP, GLOBAL_CHEAPEST_ARC builds a much
@@ -539,6 +543,14 @@ def optimize():
 
     if not cleaned_stops:
         return jsonify({"error": "None of the submitted stops had valid coordinates (lat/lng). This usually means the property list is out of sync — try refreshing the page and re-adding your stops."}), 400
+
+    # Pre-sort so priority check-ins become low-numbered nodes (1, 2, 3…).
+    # LOCAL_CHEAPEST_INSERTION processes nodes in order, so earlier nodes get
+    # inserted first and tend to land earlier in the final route — which is
+    # exactly what we need for stops that must finish before noon.
+    cleaned_stops.sort(key=lambda s: (
+        0 if s.get("priority_checkin") else (1 if s.get("arrival") else 2)
+    ))
 
     # Build location list. When end differs from start, append it as the
     # final node so OR-Tools can route to it instead of looping back.
