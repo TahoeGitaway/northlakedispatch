@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Base — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6">
+
+  <div class="flex items-center justify-between mb-5">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-800">Knowledge Base</h2>
+      <p class="text-sm text-gray-400 mt-0.5">Everything written here is injected into the AI chatbot automatically.</p>
+    </div>
+    <button onclick="openNew()"
+            class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                   px-4 py-2 rounded-lg transition-colors">
+      + New Entry
+    </button>
+  </div>
+
+  <!-- Editor panel (hidden by default) -->
+  <div id="editorPanel" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
+    <input type="hidden" id="editId">
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div>
+        <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Title</label>
+        <input type="text" id="editTitle" placeholder="e.g. Departure Cleaning SOP"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Category</label>
+        <input type="text" id="editCategory" placeholder="e.g. Cleaning, Owner Relations, Policies"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Content</label>
+      <textarea id="editBody" rows="10"
+                placeholder="Write your policy, SOP, or knowledge here in plain English..."
+                class="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y font-mono"></textarea>
+    </div>
+    <div class="flex gap-2 justify-end">
+      <button onclick="closeEditor()"
+              class="text-sm text-gray-400 hover:text-gray-600 px-4 py-2">Cancel</button>
+      <button onclick="saveEntry()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-5 py-2 rounded-lg transition-colors">
+        Save
+      </button>
+    </div>
+  </div>
+
+  <!-- Entry list grouped by category -->
+  {% set categories = entries | map(attribute='category') | unique | list %}
+  {% if entries %}
+    {% for category in categories %}
+      {% set cat_entries = entries | selectattr('category', 'equalto', category) | list %}
+      <div class="mb-6">
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 px-1">
+          {{ category }}
+        </div>
+        <div class="space-y-2">
+          {% for e in cat_entries %}
+          <div class="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-4
+                      {% if not e.is_active %}opacity-50{% endif %}"
+               id="entry-{{ e.id }}">
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-gray-800 text-sm">{{ e.title }}</span>
+                  {% if not e.is_active %}
+                  <span class="text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">Disabled</span>
+                  {% endif %}
+                </div>
+                <p class="text-xs text-gray-400 mt-1 line-clamp-2">{{ e.body[:200] }}{% if e.body|length > 200 %}…{% endif %}</p>
+                {% if e.author %}
+                <p class="text-xs text-gray-300 mt-1">Last edited by {{ e.author }}</p>
+                {% endif %}
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <button onclick="toggleEntry({{ e.id }}, {{ e.is_active }})"
+                        class="text-xs px-2 py-1 rounded border transition-colors
+                               {% if e.is_active %}border-green-200 text-green-600 hover:bg-green-50
+                               {% else %}border-gray-200 text-gray-400 hover:bg-gray-50{% endif %}">
+                  {{ "On" if e.is_active else "Off" }}
+                </button>
+                <button onclick="editEntry({{ e.id }}, {{ e.title | tojson }}, {{ e.category | tojson }}, {{ e.body | tojson }})"
+                        class="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-600
+                               hover:bg-indigo-50 transition-colors">
+                  Edit
+                </button>
+                <button onclick="deleteEntry({{ e.id }})"
+                        class="text-xs px-2 py-1 rounded border border-red-200 text-red-500
+                               hover:bg-red-50 transition-colors">
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+  <div class="text-center py-20 text-gray-400">
+    <div class="text-5xl mb-4">📄</div>
+    <p class="font-medium text-gray-500">No knowledge entries yet</p>
+    <p class="text-sm mt-1">Add your first policy or SOP above.</p>
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+function openNew() {
+  document.getElementById("editId").value = "";
+  document.getElementById("editTitle").value = "";
+  document.getElementById("editCategory").value = "General";
+  document.getElementById("editBody").value = "";
+  document.getElementById("editorPanel").classList.remove("hidden");
+  document.getElementById("editTitle").focus();
+  document.getElementById("editorPanel").scrollIntoView({behavior: "smooth"});
+}
+
+function editEntry(id, title, category, body) {
+  document.getElementById("editId").value = id;
+  document.getElementById("editTitle").value = title;
+  document.getElementById("editCategory").value = category;
+  document.getElementById("editBody").value = body;
+  document.getElementById("editorPanel").classList.remove("hidden");
+  document.getElementById("editorPanel").scrollIntoView({behavior: "smooth"});
+}
+
+function closeEditor() {
+  document.getElementById("editorPanel").classList.add("hidden");
+}
+
+async function saveEntry() {
+  const id       = document.getElementById("editId").value;
+  const title    = document.getElementById("editTitle").value.trim();
+  const category = document.getElementById("editCategory").value.trim() || "General";
+  const body     = document.getElementById("editBody").value.trim();
+  if (!title || !body) { alert("Title and content are required."); return; }
+
+  const res  = await fetch("/admin/knowledge/save", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({id: id || null, title, category, body}),
+  });
+  const data = await res.json();
+  if (data.success) location.reload();
+  else alert("Error: " + data.error);
+}
+
+async function toggleEntry(id, currentState) {
+  const res  = await fetch(`/admin/knowledge/${id}/toggle`, {method: "POST"});
+  const data = await res.json();
+  if (data.success) location.reload();
+}
+
+async function deleteEntry(id) {
+  if (!confirm("Delete this knowledge entry? The chatbot will no longer see it.")) return;
+  const res  = await fetch(`/admin/knowledge/${id}/delete`, {method: "POST"});
+  const data = await res.json();
+  if (data.success) location.reload();
+}
+</script>
+{% endblock %}

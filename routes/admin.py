@@ -659,6 +659,89 @@ def download_db():
     return jsonify({"info": "Database is PostgreSQL. Use Railway dashboard for backups."}), 200
 
 
+# ── Knowledge Base ───────────────────────────────────────────────
+
+@admin_bp.route("/admin/knowledge")
+@login_required
+@admin_required
+def knowledge_list():
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("""
+        SELECT k.*, u.name AS author
+        FROM chatbot_knowledge k
+        LEFT JOIN users u ON u.id = k.updated_by
+        ORDER BY k.category, k.title
+    """)
+    entries = cur.fetchall()
+    cur.close(); conn.close()
+    return render_template("admin_knowledge.html", entries=entries)
+
+
+@admin_bp.route("/admin/knowledge/save", methods=["POST"])
+@login_required
+@admin_required
+def knowledge_save():
+    data     = request.get_json(force=True)
+    entry_id = data.get("id")
+    title    = (data.get("title") or "").strip()
+    category = (data.get("category") or "General").strip()
+    body     = (data.get("body") or "").strip()
+
+    if not title or not body:
+        return jsonify({"error": "Title and body are required."}), 400
+
+    now  = datetime.utcnow().isoformat()
+    conn = get_db()
+    cur  = get_cursor(conn)
+
+    if entry_id:
+        cur.execute("""
+            UPDATE chatbot_knowledge
+            SET title=%s, category=%s, body=%s, updated_by=%s, updated_at=%s
+            WHERE id=%s
+        """, (title, category, body, current_user.id, now, entry_id))
+    else:
+        cur.execute("""
+            INSERT INTO chatbot_knowledge (title, category, body, is_active, created_by, updated_by, created_at, updated_at)
+            VALUES (%s, %s, %s, 1, %s, %s, %s, %s)
+        """, (title, category, body, current_user.id, current_user.id, now, now))
+
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
+@admin_bp.route("/admin/knowledge/<int:entry_id>/toggle", methods=["POST"])
+@login_required
+@admin_required
+def knowledge_toggle(entry_id):
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT is_active FROM chatbot_knowledge WHERE id=%s", (entry_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        return jsonify({"error": "Not found"}), 404
+    new_state = 0 if row["is_active"] else 1
+    cur.execute("UPDATE chatbot_knowledge SET is_active=%s WHERE id=%s", (new_state, entry_id))
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True, "is_active": new_state})
+
+
+@admin_bp.route("/admin/knowledge/<int:entry_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def knowledge_delete(entry_id):
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("DELETE FROM chatbot_knowledge WHERE id=%s", (entry_id,))
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
 # ── AI Chatbot ────────────────────────────────────────────────────
 
 @admin_bp.route("/admin/chatbot")
@@ -815,7 +898,30 @@ def chatbot_chat():
             context_blocks.append(f"\n=== {date_str} ===\nData load error: {e}")
             context_summary.append({"date": date_str, "error": str(e)})
 
+    # Load active knowledge base entries
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("""
+        SELECT title, category, body FROM chatbot_knowledge
+        WHERE is_active = 1 ORDER BY category, title
+    """)
+    knowledge_rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    if knowledge_rows:
+        kb_lines = ["=== COMPANY KNOWLEDGE BASE ===",
+                    "The following policies and SOPs are from Tahoe Getaways. "
+                    "Use them to answer questions accurately.\n"]
+        for row in knowledge_rows:
+            kb_lines.append(f"[{row['category']}: {row['title']}]")
+            kb_lines.append(row["body"].strip())
+            kb_lines.append("")
+        knowledge_section = "\n".join(kb_lines) + "\n\n"
+    else:
+        knowledge_section = ""
+
     system_prompt = (
+        knowledge_section +
         "You are an AI operations assistant for Tahoe Getaways, a vacation rental company "
         "in Lake Tahoe. You help the operations team understand their schedule, guest "
         "arrivals and departures, and flag any issues.\n\n"

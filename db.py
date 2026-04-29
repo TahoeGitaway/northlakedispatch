@@ -153,6 +153,18 @@ def init_db():
         task_type           TEXT DEFAULT 'departure_clean'
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS chatbot_knowledge (
+        id         SERIAL PRIMARY KEY,
+        title      TEXT NOT NULL,
+        category   TEXT DEFAULT 'General',
+        body       TEXT NOT NULL,
+        is_active  INTEGER DEFAULT 1,
+        created_by INTEGER REFERENCES users(id),
+        updated_by INTEGER REFERENCES users(id),
+        created_at TEXT,
+        updated_at TEXT
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")
