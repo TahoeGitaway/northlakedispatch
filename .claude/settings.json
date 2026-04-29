@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(npm --version)",
+      "PowerShell(Invoke-WebRequest -Uri \"https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-windows-x64.exe\" -OutFile \"C:\\\\Users\\\\madel\\\\geo_project\\\\tailwindcss.exe\")",
+      "Bash(./tailwindcss.exe -c tailwind.config.js -o static/tailwind.min.css --minify)",
+      "Bash(echo \"tailwindcss.exe\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} | SSL: %{ssl_verify_result} | Time: %{time_total}s\" https://northlakedispatch.com)",
+      "Bash(curl -s https://northlakedispatch.com/static/tailwind.min.css)",
+      "Bash(curl -sL https://northlakedispatch.com)",
+      "Bash(curl -sL https://northlakedispatch.com/static/map-schedule.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://northlakedispatch.com/routes)",
+      "Bash(curl -sL https://northlakedispatch.com/static/map-search.js)",
+      "Bash(curl -sL https://northlakedispatch.com/static/map-optimize.js)",
+      "Bash(python breezeway_test.py)",
+      "Bash(python -c \"import sys; sys.stdout.reconfigure\\(encoding='utf-8'\\)\")",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(del breezeway_test.py)",
+      "Bash(python -c ' *)",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(curl -s \"https://developer.breezeway.io/reference/list-properties\")",
+      "Bash(python -c 'import ast, sys *)",
+      "Bash(railway status *)"
+    ]
+  }
+}
