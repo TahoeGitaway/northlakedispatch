@@ -567,6 +567,44 @@ def daily_briefing():
         return jsonify({"blurb": None, "error": f"Server error: {type(e).__name__}: {e}"}), 500
 
 
+@briefing_bp.route("/briefing/day-summary")
+@login_required
+def day_summary():
+    """Return arrivals and departures grouped by type for a given date."""
+    date_str  = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    token     = _get_breezeway_token()
+    if not token:
+        return jsonify({"arrivals": {}, "departures": {}})
+
+    checkins  = _fetch_bw_reservations(token, {
+        "checkin_date_ge": date_str, "checkin_date_le": date_str,
+    })
+    checkouts = _fetch_bw_reservations(token, {
+        "checkout_date_ge": date_str, "checkout_date_le": date_str,
+    })
+
+    arrivals   = {"guest": [], "owner": [], "lease": []}
+    departures = {"guest": [], "owner": [], "lease": []}
+
+    for r in checkins:
+        kind = _classify_reservation(r)
+        if kind == "block":
+            continue
+        prop = _get_property_name(r.get("property_id"))
+        t    = (r.get("checkin_time") or "")[:5]
+        arrivals.setdefault(kind, []).append({"name": prop, "time": t})
+
+    for r in checkouts:
+        kind = _classify_reservation(r)
+        if kind == "block":
+            continue
+        prop = _get_property_name(r.get("property_id"))
+        t    = (r.get("checkout_time") or "")[:5]
+        departures.setdefault(kind, []).append({"name": prop, "time": t})
+
+    return jsonify({"date": date_str, "arrivals": arrivals, "departures": departures})
+
+
 @briefing_bp.route("/briefing/debug-reservations")
 @login_required
 def debug_reservations():

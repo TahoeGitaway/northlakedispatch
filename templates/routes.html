@@ -227,6 +227,20 @@
         <h3 id="dayDetailTitle" class="font-bold text-gray-800 text-lg"></h3>
         <span id="dayDetailCount" class="text-xs text-gray-400"></span>
       </div>
+
+      <!-- Arrivals / Departures summary -->
+      <div id="daySummaryPanel" class="hidden mb-5 grid grid-cols-2 gap-3">
+        <div class="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3">
+          <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Arrivals</div>
+          <div id="daySummaryArrivals" class="space-y-2 text-sm"></div>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3">
+          <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Departures</div>
+          <div id="daySummaryDepartures" class="space-y-2 text-sm"></div>
+        </div>
+      </div>
+      <div id="daySummaryLoading" class="hidden text-xs text-gray-400 mb-4 text-center">Loading arrivals &amp; departures…</div>
+
       <div id="dayDetailRoutes" class="space-y-3"></div>
     </div>
   </div>
@@ -246,6 +260,57 @@
 function startBriefing() {
   document.getElementById("briefingPrompt").classList.add("hidden");
   loadBriefing(false);
+}
+
+async function loadDaySummary(ds) {
+  const panel    = document.getElementById("daySummaryPanel");
+  const loading  = document.getElementById("daySummaryLoading");
+  const arrEl    = document.getElementById("daySummaryArrivals");
+  const depEl    = document.getElementById("daySummaryDepartures");
+
+  panel.classList.add("hidden");
+  loading.classList.remove("hidden");
+  arrEl.innerHTML = "";
+  depEl.innerHTML = "";
+
+  try {
+    const res  = await fetch(`/briefing/day-summary?date=${ds}`);
+    const data = await res.json();
+    loading.classList.add("hidden");
+
+    const TYPE_LABELS = { guest: "Guest", owner: "Owner", lease: "Lease" };
+    const TYPE_COLORS = {
+      guest: "text-blue-600",
+      owner: "text-amber-600",
+      lease: "text-purple-600",
+    };
+
+    function renderGroup(el, groups) {
+      let html = "";
+      for (const kind of ["guest", "owner", "lease"]) {
+        const items = groups[kind] || [];
+        if (!items.length) continue;
+        html += `<div class="mb-1">
+          <span class="text-xs font-bold uppercase tracking-wide ${TYPE_COLORS[kind] || 'text-gray-500'}">
+            ${TYPE_LABELS[kind]} · ${items.length}
+          </span>
+          <ul class="mt-0.5 space-y-0.5">
+            ${items.map(p => `
+              <li class="text-gray-600 text-xs leading-snug truncate" title="${p.name}">
+                ${p.name}${p.time ? ` <span class="text-gray-400">${p.time}</span>` : ""}
+              </li>`).join("")}
+          </ul>
+        </div>`;
+      }
+      el.innerHTML = html || '<span class="text-gray-400 text-xs">None</span>';
+    }
+
+    renderGroup(arrEl, data.arrivals   || {});
+    renderGroup(depEl, data.departures || {});
+    panel.classList.remove("hidden");
+  } catch (e) {
+    loading.classList.add("hidden");
+  }
 }
 
 async function loadBriefing(force = false) {
@@ -505,6 +570,9 @@ function selectDay(ds) {
   document.getElementById("dayDetailTitle").textContent = label;
   document.getElementById("dayDetailCount").textContent =
     routes.length + " route" + (routes.length !== 1 ? "s" : "");
+
+  // Load arrivals/departures summary
+  loadDaySummary(ds);
 
   const container = document.getElementById("dayDetailRoutes");
   container.innerHTML = "";
