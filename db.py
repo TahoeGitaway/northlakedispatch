@@ -176,11 +176,14 @@ def init_db():
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS rescheduled INTEGER DEFAULT 0")
 
-    # Ensure Property Specialist team exists and own all legacy routes
-    cur.execute(
-        "INSERT INTO teams (name, created_at) VALUES ('Property Specialist', %s) ON CONFLICT (name) DO NOTHING",
-        (datetime.utcnow().isoformat(),)
-    )
+    # Ensure default teams exist
+    now_iso = datetime.utcnow().isoformat()
+    for team_name in ("Property Specialist", "Project Management"):
+        cur.execute(
+            "INSERT INTO teams (name, created_at) VALUES (%s, %s) ON CONFLICT (name) DO NOTHING",
+            (team_name, now_iso)
+        )
+
     cur.execute("SELECT id FROM teams WHERE name = 'Property Specialist'")
     ps = cur.fetchone()
     if ps:
