@@ -10,7 +10,8 @@
 <script>
 /* STATE — server data + client state. All functions in /static/map-*.js */
 const properties = {{ properties|tojson }};
-const APP_TEAMS  = {{ teams|tojson }};
+const APP_TEAMS    = {{ teams|tojson }};
+const USER_TEAM_ID = {{ user_team_id | tojson }};
 
 let selectedStops     = [];
 let optimizedSchedule = [];

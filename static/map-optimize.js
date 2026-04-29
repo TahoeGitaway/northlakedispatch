@@ -3,6 +3,21 @@
    Depends on: all state globals, guardResponse, render functions
 ================================================================ */
 
+/* ── TEAM SIDEBAR INIT ── */
+document.addEventListener("DOMContentLoaded", function() {
+  const sel = document.getElementById("sidebarTeamId");
+  const row = document.getElementById("sidebarTeamRow");
+  if (!sel || !row || !window.APP_TEAMS || !APP_TEAMS.length) return;
+  APP_TEAMS.forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t.id;
+    opt.textContent = t.name;
+    if (t.id === window.USER_TEAM_ID) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  row.classList.remove("hidden");
+});
+
 /* ── TOAST ── */
 function showToast(msg, durationMs = 3500) {
   const t = document.createElement("div");
@@ -178,6 +193,12 @@ function openSaveModal() {
   document.getElementById("saveRouteName").value  = sidebarName;
   document.getElementById("saveAssignedTo").value = sidebarAssigned;
   document.getElementById("saveRouteDate").value  = sidebarDate || new Date().toISOString().split("T")[0];
+
+  // Sync team from sidebar to modal
+  const sidebarTeam = document.getElementById("sidebarTeamId");
+  const modalTeam   = document.getElementById("saveTeamId");
+  if (sidebarTeam && modalTeam) modalTeam.value = sidebarTeam.value;
+
   document.getElementById("saveModal").classList.remove("hidden");
 }
 function closeSaveModal() { document.getElementById("saveModal").classList.add("hidden"); }
@@ -241,7 +262,9 @@ async function submitUpdateRoute() {
   const routeDate   = document.getElementById("routeDateField").value;
   const notes       = document.getElementById("routeNotesField").value.trim();
   const notesPublic = document.getElementById("notesPublicField").checked;
-  const teamEl      = document.getElementById("saveTeamId");
+  const sidebarTeam = document.getElementById("sidebarTeamId");
+  const modalTeam   = document.getElementById("saveTeamId");
+  const teamEl      = sidebarTeam || modalTeam;
   const teamId      = teamEl ? parseInt(teamEl.value) || null : null;
   const btn         = document.getElementById("updateRouteBtn");
 
@@ -408,8 +431,12 @@ async function submitUpdateRoute() {
     document.getElementById("routeDateField").value   = data.route_date;
     document.getElementById("routeNotesField").value  = data.notes || "";
     document.getElementById("notesPublicField").checked = data.notes_public || false;
-    const teamEl = document.getElementById("saveTeamId");
-    if (teamEl && data.team_id) teamEl.value = data.team_id;
+    const teamEl      = document.getElementById("saveTeamId");
+    const sidebarTeam = document.getElementById("sidebarTeamId");
+    if (data.team_id) {
+      if (teamEl)      teamEl.value      = data.team_id;
+      if (sidebarTeam) sidebarTeam.value = data.team_id;
+    }
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);
