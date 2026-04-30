@@ -398,7 +398,9 @@ async function submitUpdateRoute() {
         const s       = optimizedSchedule[i];
         const prev    = i === 0 ? null : optimizedSchedule[i - 1];
         const prevEta = prev ? prev.eta_minutes + prev.serviceMinutes : startMinutes;
-        const driveSec = Math.max(0, (s.eta_minutes - prevEta) * 60);
+        const driveSec = (s.drive_seconds != null)
+          ? s.drive_seconds
+          : Math.max(0, (s.eta_minutes - prevEta) * 60);
         durationMatrix[i][i + 1] = driveSec;
         durationMatrix[i + 1][i] = driveSec;
       }

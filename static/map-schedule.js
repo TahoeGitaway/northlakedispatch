@@ -52,6 +52,7 @@ function recalculateTimes() {
       driveSec = durationMatrix[prevMatrixIdx][stop.matrix_index];
     }
 
+    stop.drive_seconds = Math.round(driveSec);
     running          += driveSec / 60;
     stop.eta_minutes  = Math.round(running);
     stop.eta          = minutesToHHMM(stop.eta_minutes);
