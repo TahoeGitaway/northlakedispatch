@@ -117,11 +117,64 @@
   <!-- ── PAGE HEADER ── -->
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
-    <a id="newRouteBtn" href="{{ url_for('dispatch.home') }}"
-       class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
-              px-4 py-2 rounded-lg transition-colors">
-      + New Route
-    </a>
+    <div class="flex items-center gap-2">
+      <button onclick="openPriModal()"
+              class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium
+                     px-4 py-2 rounded-lg transition-colors">
+        🔍 PRI Check
+      </button>
+      <a id="newRouteBtn" href="{{ url_for('dispatch.home') }}"
+         class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                px-4 py-2 rounded-lg transition-colors">
+        + New Route
+      </a>
+    </div>
+  </div>
+
+  <!-- ── PRI CHECK MODAL ── -->
+  <div id="priModal"
+       class="hidden fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div>
+          <h3 class="font-bold text-gray-800">Post Rental Inspection Check</h3>
+          <p id="priSubtitle" class="text-xs text-gray-400 mt-0.5">Scanning next 60 days…</p>
+        </div>
+        <button onclick="closePriModal()"
+                class="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
+      </div>
+
+      <!-- Body -->
+      <div id="priBody" class="overflow-y-auto px-6 py-4 flex-1 text-sm">
+        <!-- Loading -->
+        <div id="priLoading" class="flex items-center gap-3 py-6 text-gray-400">
+          <div class="w-4 h-4 border-2 border-amber-300 border-t-amber-500 rounded-full animate-spin shrink-0"></div>
+          <span>Checking Breezeway reservations…</span>
+        </div>
+        <!-- Error -->
+        <div id="priError" class="hidden py-4 text-red-600"></div>
+        <!-- Results -->
+        <div id="priResults" class="hidden space-y-5">
+          <!-- Needs attention -->
+          <div id="priNeedsSection">
+            <div class="text-xs font-bold uppercase tracking-wide text-red-500 mb-2">
+              Needs Attention
+            </div>
+            <ul id="priNeedsList" class="space-y-2"></ul>
+          </div>
+          <!-- Already tagged -->
+          <div id="priDoneSection" class="hidden">
+            <div class="text-xs font-bold uppercase tracking-wide text-emerald-600 mb-2 mt-4">
+              Already Tagged in Breezeway
+            </div>
+            <ul id="priDoneList" class="space-y-2"></ul>
+          </div>
+        </div>
+      </div>
+
+    </div>
   </div>
 
   <!-- ── THREE-COLUMN GRID ── -->
@@ -159,6 +212,13 @@
 
           <!-- Arrivals / Departures card -->
           <div id="daySummaryPanel" class="hidden">
+            <div class="flex items-center justify-between mb-2 px-1">
+              <span id="daySummaryCachedAt" class="text-xs text-gray-400"></span>
+              <button onclick="loadDaySummary(currentSummaryDate, true)"
+                      class="text-xs text-indigo-400 hover:text-indigo-600 font-medium transition-colors">
+                ↺ Refresh
+              </button>
+            </div>
             <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div style="display:grid; grid-template-columns:1fr 1fr; border-bottom:0;">
                 <!-- Arrivals -->
@@ -345,11 +405,15 @@ function startBriefing() {
   loadBriefing(false);
 }
 
-async function loadDaySummary(ds) {
+let currentSummaryDate = null;
+
+async function loadDaySummary(ds, force = false) {
+  currentSummaryDate = ds;
   const panel    = document.getElementById("daySummaryPanel");
   const loading  = document.getElementById("daySummaryLoading");
   const arrEl    = document.getElementById("daySummaryArrivals");
   const depEl    = document.getElementById("daySummaryDepartures");
+  const cachedEl = document.getElementById("daySummaryCachedAt");
 
   panel.classList.add("hidden");
   loading.classList.remove("hidden");
@@ -357,9 +421,14 @@ async function loadDaySummary(ds) {
   depEl.innerHTML = "";
 
   try {
-    const res  = await fetch(`/briefing/day-summary?date=${ds}`);
+    const url  = `/briefing/day-summary?date=${ds}` + (force ? "&refresh=1" : "");
+    const res  = await fetch(url);
     const data = await res.json();
     loading.classList.add("hidden");
+
+    if (cachedEl) {
+      cachedEl.textContent = data.cached_at ? `Updated ${data.cached_at}` : "";
+    }
 
     const TYPE_LABELS = { guest: "Guest", owner: "Owner", lease: "Lease" };
     const TYPE_COLORS = {
@@ -909,6 +978,122 @@ function showToast(msg) {
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
 }
+
+/* ── PRI CHECK MODAL ── */
+function openPriModal() {
+  document.getElementById("priModal").classList.remove("hidden");
+  document.getElementById("priLoading").classList.remove("hidden");
+  document.getElementById("priError").classList.add("hidden");
+  document.getElementById("priResults").classList.add("hidden");
+  document.getElementById("priSubtitle").textContent = "Scanning next 60 days…";
+  _loadPriCheck();
+}
+
+function closePriModal() {
+  document.getElementById("priModal").classList.add("hidden");
+}
+
+async function _loadPriCheck() {
+  try {
+    const res  = await fetch("/briefing/pri-check");
+    const data = await res.json();
+    document.getElementById("priLoading").classList.add("hidden");
+
+    if (data.error) {
+      document.getElementById("priError").textContent = data.error;
+      document.getElementById("priError").classList.remove("hidden");
+      return;
+    }
+
+    const needs  = data.needs_tag      || [];
+    const done   = data.already_tagged || [];
+    const vacant = data.no_booking     || [];
+    const through = data.scanned_through || "";
+    const total  = needs.length + done.length + vacant.length;
+
+    document.getElementById("priSubtitle").textContent =
+      `Scanned through ${through} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
+
+    // Build all content into priResults directly
+    const resultsEl = document.getElementById("priResults");
+    resultsEl.innerHTML = "";
+
+    if (!total) {
+      resultsEl.innerHTML = '<p class="text-gray-400 text-sm italic text-center py-4">No PRIs flagged in this window.</p>';
+    }
+
+    if (needs.length) {
+      resultsEl.appendChild(_priSection("🔴 Needs Owner Next tag", needs.length));
+      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-3";
+      needs.forEach(p => ul.appendChild(_priRow(p, "red")));
+      resultsEl.appendChild(ul);
+    }
+
+    if (vacant.length) {
+      resultsEl.appendChild(_priSection("🟠 Create vacancy PRI", vacant.length));
+      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-3";
+      vacant.forEach(p => ul.appendChild(_priVacancyRow(p)));
+      resultsEl.appendChild(ul);
+    }
+
+    if (done.length) {
+      resultsEl.appendChild(_priSection("🟢 Already tagged", done.length));
+      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-3";
+      done.forEach(p => ul.appendChild(_priRow(p, "green")));
+      resultsEl.appendChild(ul);
+    }
+
+    document.getElementById("priResults").classList.remove("hidden");
+  } catch (e) {
+    document.getElementById("priLoading").classList.add("hidden");
+    document.getElementById("priError").textContent = "Could not load PRI data: " + e.message;
+    document.getElementById("priError").classList.remove("hidden");
+  }
+}
+
+function _priSection(label, count) {
+  const d = document.createElement("div");
+  d.className = "text-xs font-bold uppercase tracking-wide mb-1.5";
+  d.textContent = `${label} (${count})`;
+  return d;
+}
+
+function _priRow(p, color) {
+  const colors = {
+    red:   "border-red-100 bg-red-50",
+    green: "border-emerald-100 bg-emerald-50",
+  };
+  const actionColors = { red: "text-red-500", green: "text-emerald-600" };
+  const actions = {
+    red:   'Add "owner next" tag in Breezeway',
+    green: "✓ Owner Next tagged in Breezeway",
+  };
+  const li = document.createElement("li");
+  li.className = `rounded-xl px-4 py-3 border ${colors[color]}`;
+  const typeLabel = p.next_type === "block" ? "BLOCK" : "Owner stay";
+  const co = new Date(p.checkout_date + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric"});
+  const ci = new Date(p.next_checkin  + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric"});
+  li.innerHTML = `
+    <div class="font-semibold text-gray-800 text-sm truncate">${p.property}</div>
+    <div class="text-xs text-gray-500 mt-1">Out <strong>${co}</strong> · next: ${typeLabel} <strong>${ci}</strong></div>
+    <div class="text-xs font-medium mt-1 ${actionColors[color]}">${actions[color]}</div>`;
+  return li;
+}
+
+function _priVacancyRow(p) {
+  const li = document.createElement("li");
+  li.className = "rounded-xl px-4 py-3 border border-orange-100 bg-orange-50";
+  const co = new Date(p.checkout_date + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric"});
+  li.innerHTML = `
+    <div class="font-semibold text-gray-800 text-sm truncate">${p.property}</div>
+    <div class="text-xs text-gray-500 mt-1">Checked out <strong>${co}</strong> · no upcoming reservation</div>
+    <div class="text-xs text-orange-500 font-medium mt-1">Create vacancy PRI manually</div>`;
+  return li;
+}
+
+document.getElementById("priModal").addEventListener("click", function(e) {
+  if (e.target === this) closePriModal();
+});
 </script>
 
 {% endblock %}

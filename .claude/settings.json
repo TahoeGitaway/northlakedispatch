@@ -21,7 +21,9 @@
       "Bash(.venv/Scripts/python -c ' *)",
       "Bash(curl -s \"https://developer.breezeway.io/reference/list-properties\")",
       "Bash(python -c 'import ast, sys *)",
-      "Bash(railway status *)"
+      "Bash(railway status *)",
+      "Read(//c/Users/madel/chatbotclub//**)",
+      "Read(//c/Users/madel/chatbotclub/**)"
     ]
   }
 }

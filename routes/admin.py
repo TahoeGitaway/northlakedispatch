@@ -22,6 +22,11 @@ from routes.auth import admin_required
 
 admin_bp = Blueprint("admin", __name__)
 
+# ── Breezeway context cache (avoids re-fetching on every chat message) ──
+import time as _time
+_bw_ctx_cache: dict = {}   # {cache_key: (timestamp, checkins, checkouts)}
+_BW_CTX_TTL = 10 * 60     # 10 minutes
+
 
 # ── User management ───────────────────────────────────────────────
 
@@ -771,25 +776,31 @@ def chatbot_chat():
     if not messages:
         return jsonify({"error": "No message provided."}), 400
 
-    # Fetch Breezeway data for the full date range in 2 API calls instead of 2×N
+    # Fetch Breezeway data for the full date range — cached 10 min per date range
     capped_dates = sorted(dates)[:7]
     min_date     = capped_dates[0]
     max_date     = capped_dates[-1]
     date_set     = set(capped_dates)
 
-    try:
-        token = _get_breezeway_token()
-        if token:
-            all_checkins  = _fetch_bw_reservations(token, {
-                "checkin_date_ge": min_date, "checkin_date_le": max_date,
-            })
-            all_checkouts = _fetch_bw_reservations(token, {
-                "checkout_date_ge": min_date, "checkout_date_le": max_date,
-            })
-        else:
+    cache_key = f"{min_date}:{max_date}"
+    cached    = _bw_ctx_cache.get(cache_key)
+    if cached and _time.time() - cached[0] < _BW_CTX_TTL:
+        all_checkins, all_checkouts = cached[1], cached[2]
+    else:
+        try:
+            token = _get_breezeway_token()
+            if token:
+                all_checkins  = _fetch_bw_reservations(token, {
+                    "checkin_date_ge": min_date, "checkin_date_le": max_date,
+                })
+                all_checkouts = _fetch_bw_reservations(token, {
+                    "checkout_date_ge": min_date, "checkout_date_le": max_date,
+                })
+            else:
+                all_checkins = all_checkouts = []
+        except Exception:
             all_checkins = all_checkouts = []
-    except Exception:
-        all_checkins = all_checkouts = []
+        _bw_ctx_cache[cache_key] = (_time.time(), all_checkins, all_checkouts)
 
     # Index by date
     checkins_by_date  = {}
@@ -932,20 +943,25 @@ def chatbot_chat():
         "          Each reservation line includes checkin date, checkout date, and night count so you can\n"
         "          identify leases yourself: any GUEST reservation with 30+ nights is a lease departure/arrival.\n"
         "  BLOCK  = maintenance block, hold, or owner block — no guests, property unavailable\n\n"
-        "A Post Rental Inspection (PRI) is required whenever a non-guest reservation "
-        "(OWNER, BLOCK) follows directly after a GUEST stay at the same property. "
-        "It is a 1-hour damage inspection before the owner or maintenance team arrives.\n"
-        "Tags appear in square brackets after each reservation line, e.g. [tags: owner next].\n"
-        "The 'owner next' tag is how operations flags a PRI in Breezeway — it is manually added "
-        "to the upcoming non-guest booking once the need for a PRI has been identified.\n"
-        "When asked to find PRI flags, cross-reference all loaded dates and look for "
-        "GUEST departures at a property where the SAME property has an upcoming non-guest "
-        "(OWNER or BLOCK) arrival in the loaded data. Then report two groups:\n"
-        "  1. Already tagged: non-guest arrival has [tags: owner next] — PRI already identified, no action needed.\n"
-        "  2. Needs tagging: non-guest arrival does NOT have [tags: owner next] — "
-        "operations still needs to add 'Owner Next' tag to this booking in Breezeway.\n"
-        "Note: you can only detect this pattern within the dates you have been given. "
-        "If the upcoming non-guest arrival falls outside the selected date range, you cannot assess it.\n\n"
+        "POST RENTAL INSPECTION (PRI)\n"
+        "A PRI is a 1-hour damage inspection required when a short-term GUEST stay (<30 days) "
+        "is followed by a non-guest reservation at the same property.\n\n"
+        "PRI is required when:\n"
+        "  - A short-term GUEST checks out AND the very next reservation at that property "
+        "is an OWNER stay or BLOCK (maintenance/hold)\n"
+        "  - OR there is no upcoming reservation at that property in the next 60 days "
+        "(vacancy PRI — created manually by ops)\n\n"
+        "How it is flagged in Breezeway:\n"
+        "  - The 'owner next' tag is added to the upcoming OWNER or BLOCK booking\n"
+        "  - This tag is added manually by operations once the need is identified\n"
+        "  - If no upcoming reservation exists, ops creates the inspection manually\n\n"
+        "When asked to find PRIs, look for GUEST departures in the loaded data where "
+        "the SAME property has an upcoming OWNER or BLOCK arrival. Report three groups:\n"
+        "  🔴 Needs tagging: next booking is OWNER/BLOCK but does NOT have [tags: owner next]\n"
+        "  🟢 Already tagged: next booking is OWNER/BLOCK and already has [tags: owner next]\n"
+        "  🟠 Vacancy PRI: guest checked out, no upcoming reservation visible in the loaded data\n"
+        "Note: you can only assess this within the dates loaded. If the upcoming OWNER/BLOCK "
+        "arrival falls outside the selected date range, you cannot confirm its tag status.\n\n"
         "In the data below, each date section lists Arrivals (guests checking IN that day) "
         "and Departures (guests checking OUT that day). The checkout date on each departure line "
         "will match the section date.\n"
@@ -962,11 +978,13 @@ def chatbot_chat():
 
     try:
         client = anthropic.Anthropic(api_key=key)
+        # Keep last 20 messages to prevent unbounded context growth
+        trimmed = messages[-20:] if len(messages) > 20 else messages
         resp   = client.messages.create(
             model      = "claude-sonnet-4-6",
-            max_tokens = 4096,
+            max_tokens = 1200,
             system     = system_prompt,
-            messages   = messages,
+            messages   = trimmed,
         )
         return jsonify({
             "reply":           resp.content[0].text,

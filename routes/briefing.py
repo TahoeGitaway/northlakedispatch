@@ -13,7 +13,7 @@ import calendar as cal_mod
 import json
 import os
 import time
-from datetime import date as date_cls, datetime
+from datetime import date as date_cls, datetime, timedelta
 
 import anthropic
 import requests
@@ -32,10 +32,11 @@ CACHE_TTL          = 15 * 60   # 15 minutes for briefing
 CALENDAR_CACHE_TTL = 30 * 60   # 30 minutes for calendar activity
 
 # ── In-memory caches ──────────────────────────────────────────────
-_briefing_cache:  dict  = {}   # {cache_key: (timestamp, payload)}
-_calendar_cache:  dict  = {}   # {(year, month): (timestamp, activity_dict)}
-_bw_token:        dict  = {"value": None, "expires_at": 0}
-_property_cache:  dict  = {}   # {property_id: name}
+_briefing_cache:    dict  = {}   # {cache_key: (timestamp, payload)}
+_calendar_cache:    dict  = {}   # {(year, month): (timestamp, activity_dict)}
+_day_summary_cache: dict  = {}   # {date_str: (timestamp, payload)}
+_bw_token:          dict  = {"value": None, "expires_at": 0}
+_property_cache:    dict  = {}   # {property_id: name}
 _property_cache_ts: float = 0
 
 
@@ -570,11 +571,21 @@ def daily_briefing():
 @briefing_bp.route("/briefing/day-summary")
 @login_required
 def day_summary():
-    """Return arrivals and departures grouped by type for a given date."""
-    date_str  = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
-    token     = _get_breezeway_token()
+    """Return arrivals and departures grouped by type for a given date.
+
+    Results are cached per-date until explicitly refreshed via ?refresh=1.
+    """
+    date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    force    = request.args.get("refresh") == "1"
+
+    cached = _day_summary_cache.get(date_str)
+    if cached and not force:
+        ts, payload = cached
+        return jsonify({**payload, "cached_at": datetime.utcfromtimestamp(ts).strftime("%I:%M %p UTC")})
+
+    token = _get_breezeway_token()
     if not token:
-        return jsonify({"arrivals": {}, "departures": {}})
+        return jsonify({"arrivals": {}, "departures": {}, "cached_at": None})
 
     checkins  = _fetch_bw_reservations(token, {
         "checkin_date_ge": date_str, "checkin_date_le": date_str,
@@ -602,7 +613,132 @@ def day_summary():
         t    = (r.get("checkout_time") or "")[:5]
         departures.setdefault(kind, []).append({"name": prop, "time": t})
 
-    return jsonify({"date": date_str, "arrivals": arrivals, "departures": departures})
+    payload = {"date": date_str, "arrivals": arrivals, "departures": departures}
+    ts      = time.time()
+    _day_summary_cache[date_str] = (ts, payload)
+    cached_at = datetime.utcfromtimestamp(ts).strftime("%I:%M %p UTC")
+
+    return jsonify({**payload, "cached_at": cached_at})
+
+
+@briefing_bp.route("/briefing/pri-check")
+@login_required
+def pri_check():
+    """Scan next 60 days of short-term guest checkouts for PRI needs.
+
+    PRI required when a short-term guest (<30 days) checks out AND:
+      - The immediately next reservation at that property is OWNER or BLOCK
+        → needs "owner next" tag in Breezeway (or already tagged = done)
+      - OR there is no upcoming reservation within 60 days
+        → vacancy PRI must be created manually by ops
+    """
+    start_param = request.args.get("start_date")
+    try:
+        today = date_cls.fromisoformat(start_param) if start_param else date_cls.today()
+    except Exception:
+        today = date_cls.today()
+
+    scan_end = today + timedelta(days=60)
+    far_end  = today + timedelta(days=60)   # same window for vacancy check
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."}), 500
+
+    today_str    = today.isoformat()
+    scan_end_str = scan_end.isoformat()
+    far_end_str  = far_end.isoformat()
+
+    # Short-term guest checkouts in next 60 days
+    checkouts = _fetch_bw_reservations(token, {
+        "checkout_date_ge": today_str,
+        "checkout_date_le": scan_end_str,
+    })
+    # All upcoming reservations in next 60 days (to find what follows each checkout)
+    upcoming = _fetch_bw_reservations(token, {
+        "checkin_date_ge": today_str,
+        "checkin_date_le": far_end_str,
+    })
+
+    # Group upcoming by property, sorted ascending by checkin date
+    by_prop = {}
+    for r in upcoming:
+        pid = r.get("property_id")
+        if pid:
+            by_prop.setdefault(pid, []).append(r)
+    for pid in by_prop:
+        by_prop[pid].sort(key=lambda r: r.get("checkin_date", ""))
+
+    needs_tag    = []   # 🔴 next is OWNER/BLOCK, not yet tagged
+    already_done = []   # 🟢 next is OWNER/BLOCK, already tagged "owner next"
+    no_booking   = []   # 🟠 no upcoming reservation found → vacancy PRI
+
+    for co in checkouts:
+        # Only short-term guest stays trigger a PRI (< 30 days, classified "guest")
+        if _classify_reservation(co) != "guest":
+            continue
+
+        pid = co.get("property_id")
+        if not pid:
+            continue
+
+        co_date_str = (co.get("checkout_date") or "")[:10]
+        try:
+            co_date = date_cls.fromisoformat(co_date_str)
+        except Exception:
+            continue
+
+        prop_name = _get_property_name(pid)
+
+        # Find the immediately next reservation at this property
+        next_r       = None
+        next_ci_date = None
+        for r in by_prop.get(pid, []):
+            ci_str = (r.get("checkin_date") or "")[:10]
+            try:
+                ci_date = date_cls.fromisoformat(ci_str)
+            except Exception:
+                continue
+            if ci_date > co_date:
+                next_r       = r
+                next_ci_date = ci_date
+                break
+
+        # No upcoming reservation in scan window → vacancy PRI
+        if not next_r or not next_ci_date:
+            no_booking.append({
+                "property":      prop_name,
+                "checkout_date": co_date_str,
+            })
+            continue
+
+        # PRI only triggered if next reservation is OWNER or BLOCK
+        next_kind = _classify_reservation(next_r)
+        if next_kind not in ("owner", "block"):
+            continue   # guest or lease following → no PRI needed
+
+        # Check for existing "owner next" tag on the upcoming booking
+        tag_names = [_extract_str(t) for t in (next_r.get("tags") or [])]
+        tagged    = "owner next" in tag_names
+
+        entry = {
+            "property":      prop_name,
+            "checkout_date": co_date_str,
+            "next_checkin":  next_ci_date.isoformat(),
+            "next_type":     next_kind,
+        }
+        (already_done if tagged else needs_tag).append(entry)
+
+    needs_tag.sort(key=lambda r: r["checkout_date"])
+    already_done.sort(key=lambda r: r["checkout_date"])
+    no_booking.sort(key=lambda r: r["checkout_date"])
+
+    return jsonify({
+        "needs_tag":       needs_tag,
+        "already_tagged":  already_done,
+        "no_booking":      no_booking,
+        "scanned_through": scan_end_str,
+    })
 
 
 @briefing_bp.route("/briefing/debug-reservations")
