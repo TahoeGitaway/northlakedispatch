@@ -118,11 +118,13 @@
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
     <div class="flex items-center gap-2">
+      {% if current_user.is_admin %}
       <a href="/admin/pri-check" target="_blank"
          class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium
                 px-4 py-2 rounded-lg transition-colors inline-block">
         🔍 PRI Check ↗
       </a>
+      {% endif %}
       <a id="newRouteBtn" href="{{ url_for('dispatch.home') }}"
          class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
                 px-4 py-2 rounded-lg transition-colors">
@@ -156,6 +158,15 @@
           <div class="flex items-start justify-between gap-2 mb-4">
             <h3 id="dayDetailTitle" class="font-bold text-gray-800 text-base leading-snug"></h3>
             <span id="dayDetailCount" class="text-xs text-gray-400 shrink-0 mt-0.5"></span>
+          </div>
+
+          <!-- Load button (shown before data is fetched) -->
+          <div id="daySummaryPrompt" class="hidden mb-3">
+            <button onclick="loadDaySummary(currentSummaryDate)"
+                    class="text-xs text-indigo-500 hover:text-indigo-700 font-medium
+                           border border-indigo-200 rounded-lg px-3 py-1.5 transition-colors">
+              Load arrivals &amp; departures
+            </button>
           </div>
 
           <!-- Loading indicator -->
@@ -370,6 +381,7 @@ async function loadDaySummary(ds, force = false) {
   const depEl    = document.getElementById("daySummaryDepartures");
   const cachedEl = document.getElementById("daySummaryCachedAt");
 
+  document.getElementById("daySummaryPrompt").classList.add("hidden");
   panel.classList.add("hidden");
   loading.classList.remove("hidden");
   arrEl.innerHTML = "";
@@ -667,7 +679,10 @@ function selectDay(ds) {
   document.getElementById("dayDetailCount").textContent =
     routes.length + " route" + (routes.length !== 1 ? "s" : "");
 
-  loadDaySummary(ds);
+  // Reset arrivals/departures — only load when user explicitly requests it
+  document.getElementById("daySummaryPanel").classList.add("hidden");
+  document.getElementById("daySummaryLoading").classList.add("hidden");
+  document.getElementById("daySummaryPrompt").classList.remove("hidden");
 
   const container = document.getElementById("dayDetailRoutes");
   container.innerHTML = "";
