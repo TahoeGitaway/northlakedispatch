@@ -14,6 +14,7 @@ import json
 import os
 import time
 from datetime import date as date_cls, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import anthropic
 import requests
@@ -23,6 +24,12 @@ from flask_login import login_required, current_user
 from db import get_db, get_cursor
 
 briefing_bp = Blueprint("briefing", __name__)
+
+_PACIFIC = ZoneInfo("America/Los_Angeles")
+
+def _fmt_pacific(ts: float) -> str:
+    """Format a unix timestamp as 12-hour Pacific time, e.g. '2:34 PM PT'."""
+    return datetime.fromtimestamp(ts, tz=_PACIFIC).strftime("%I:%M %p PT").lstrip("0")
 
 ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY", "")
 BREEZEWAY_CLIENT_ID     = os.environ.get("BREEZEWAY_CLIENT_ID", "")
@@ -547,7 +554,7 @@ def daily_briefing():
         if not force_refresh and cache_key in _briefing_cache:
             ts, payload = _briefing_cache[cache_key]
             if now - ts < CACHE_TTL:
-                return jsonify({**payload, "cached": True})
+                return jsonify({**payload, "cached": True, "cached_at": _fmt_pacific(ts)})
 
         routes    = _fetch_todays_routes(date_str, team_id=team_id)
         checkins  = _fetch_breezeway_checkins(date_str)
@@ -558,7 +565,7 @@ def daily_briefing():
         if blurb:
             payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
             _briefing_cache[cache_key] = (now, payload)
-            return jsonify({**payload, "cached": False})
+            return jsonify({**payload, "cached": False, "cached_at": _fmt_pacific(now)})
 
         return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
 
@@ -581,7 +588,7 @@ def day_summary():
     cached = _day_summary_cache.get(date_str)
     if cached and not force:
         ts, payload = cached
-        return jsonify({**payload, "cached_at": datetime.utcfromtimestamp(ts).strftime("%I:%M %p UTC")})
+        return jsonify({**payload, "cached_at": _fmt_pacific(ts)})
 
     token = _get_breezeway_token()
     if not token:
@@ -616,7 +623,7 @@ def day_summary():
     payload = {"date": date_str, "arrivals": arrivals, "departures": departures}
     ts      = time.time()
     _day_summary_cache[date_str] = (ts, payload)
-    cached_at = datetime.utcfromtimestamp(ts).strftime("%I:%M %p UTC")
+    cached_at = _fmt_pacific(ts)
 
     return jsonify({**payload, "cached_at": cached_at})
 
@@ -638,18 +645,27 @@ def pri_check():
     except Exception:
         today = date_cls.today()
 
-    scan_end = today + timedelta(days=60)
+    # days=30 → quick report (only show first 30 days), days=60 → full (default)
+    try:
+        report_days = int(request.args.get("days", 60))
+    except Exception:
+        report_days = 60
+    report_days = max(1, min(report_days, 60))
+
+    scan_end = today + timedelta(days=60)          # always scan 60 days for vacancy calc
+    report_end = today + timedelta(days=report_days)  # display cutoff
     far_end  = today + timedelta(days=150)  # look further ahead to find what follows late checkouts
 
     token = _get_breezeway_token()
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 500
 
-    today_str    = today.isoformat()
-    scan_end_str = scan_end.isoformat()
-    far_end_str  = far_end.isoformat()
+    today_str      = today.isoformat()
+    scan_end_str   = scan_end.isoformat()
+    report_end_str = report_end.isoformat()
+    far_end_str    = far_end.isoformat()
 
-    # Short-term guest checkouts in next 60 days
+    # Short-term guest checkouts in next 60 days (always full window for vacancy calc)
     raw_checkouts = _fetch_bw_reservations(token, {
         "checkout_date_ge": today_str,
         "checkout_date_le": scan_end_str,
@@ -661,9 +677,10 @@ def pri_check():
     })
 
     # Validate dates server-side — Breezeway may not filter precisely for range queries
+    # Filter to report_end (30 or 60 days) for display, but scan_end used for vacancy calc
     checkouts = [
         r for r in raw_checkouts
-        if today_str <= (r.get("checkout_date") or "")[:10] <= scan_end_str
+        if today_str <= (r.get("checkout_date") or "")[:10] <= report_end_str
     ]
     upcoming = [
         r for r in raw_upcoming
@@ -716,9 +733,11 @@ def pri_check():
 
         # No upcoming reservation in scan window → vacancy PRI
         if not next_r or not next_ci_date:
+            vacancy_days = (scan_end - co_date).days
             no_booking.append({
                 "property":      prop_name,
                 "checkout_date": co_date_str,
+                "vacancy_days":  vacancy_days,
             })
             continue
 
@@ -731,11 +750,13 @@ def pri_check():
         tag_names = [_extract_str(t) for t in (next_r.get("tags") or [])]
         tagged    = "owner next" in tag_names
 
+        gap_days = (next_ci_date - co_date).days
         entry = {
             "property":      prop_name,
             "checkout_date": co_date_str,
             "next_checkin":  next_ci_date.isoformat(),
             "next_type":     next_kind,
+            "vacancy_days":  gap_days if gap_days >= 30 else None,
         }
         (already_done if tagged else needs_tag).append(entry)
 
@@ -747,7 +768,8 @@ def pri_check():
         "needs_tag":       needs_tag,
         "already_tagged":  already_done,
         "no_booking":      no_booking,
-        "scanned_through": scan_end_str,
+        "scanned_through": report_end_str,
+        "report_days":     report_days,
     })
 
 

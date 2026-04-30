@@ -292,11 +292,13 @@ async function runPriCheck() {
       needs.forEach(p => {
         const co = _fmtDate(p.checkout_date);
         const ci = _fmtDate(p.next_checkin);
-        const typeLabel = p.next_type === "block" ? "BLOCK" : "Owner stay";
+        const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
+        const vacLine = p.vacancy_days ? `<div class="text-gray-400" style="font-size:0.7rem;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
         html += `<div class="rounded-lg bg-red-50 border border-red-100 px-3 py-2 mb-1">
           <div class="font-medium text-gray-800 truncate" title="${p.property}">${p.property}</div>
-          <div class="text-gray-400">Out ${co} · next: ${typeLabel} ${ci}</div>
-          <div class="text-red-500 font-medium mt-0.5">Add "owner next" tag in Breezeway</div>
+          <div class="text-gray-400">Guest out ${co} → ${typeLabel} in ${ci}</div>
+          ${vacLine}
+          <div class="text-red-500 font-medium mt-0.5">Add "owner next" tag in Breezeway on the incoming reservation</div>
         </div>`;
       });
     }
@@ -305,9 +307,11 @@ async function runPriCheck() {
       html += `<div class="font-bold text-orange-500 mb-1 mt-2">🟠 Create vacancy PRI (${vacant.length})</div>`;
       vacant.forEach(p => {
         const co = _fmtDate(p.checkout_date);
+        const vacLine = p.vacancy_days ? `<div class="text-gray-400" style="font-size:0.7rem;">${p.vacancy_days}+-day vacancy (no booking in 60-day window)</div>` : "";
         html += `<div class="rounded-lg bg-orange-50 border border-orange-100 px-3 py-2 mb-1">
           <div class="font-medium text-gray-800 truncate" title="${p.property}">${p.property}</div>
-          <div class="text-gray-400">Checked out ${co} · no upcoming reservation in 60 days</div>
+          <div class="text-gray-400">Guest out ${co} · no upcoming booking found</div>
+          ${vacLine}
           <div class="text-orange-500 font-medium mt-0.5">Create vacancy PRI manually</div>
         </div>`;
       });
@@ -318,9 +322,12 @@ async function runPriCheck() {
       done.forEach(p => {
         const co = _fmtDate(p.checkout_date);
         const ci = _fmtDate(p.next_checkin);
+        const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
+        const vacLine = p.vacancy_days ? `<div class="text-gray-400" style="font-size:0.7rem;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
         html += `<div class="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2 mb-1">
           <div class="font-medium text-gray-700 truncate" title="${p.property}">${p.property}</div>
-          <div class="text-gray-400">Out ${co} · next ${ci}</div>
+          <div class="text-gray-400">Guest out ${co} → ${typeLabel} in ${ci}</div>
+          ${vacLine}
           <div class="text-emerald-600 font-medium mt-0.5">✓ Owner Next tagged in Breezeway</div>
         </div>`;
       });

@@ -136,16 +136,29 @@
        class="hidden fixed inset-0 z-[10000] flex items-center justify-center p-4"
        style="background:rgba(0,0,0,0.5);">
     <div class="bg-white rounded-2xl shadow-2xl w-full"
-         style="max-width:32rem; max-height:85vh; display:flex; flex-direction:column;">
+         style="max-width:56rem; max-height:88vh; display:flex; flex-direction:column;">
 
       <!-- Header -->
       <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100" style="flex-shrink:0;">
         <div>
           <h3 class="font-bold text-gray-800">Post Rental Inspection Check</h3>
-          <p id="priSubtitle" class="text-xs text-gray-400 mt-0.5">Scanning next 60 days…</p>
+          <p id="priSubtitle" class="text-xs text-gray-400 mt-0.5">Scanning…</p>
         </div>
-        <button onclick="closePriModal()"
-                class="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
+        <div class="flex items-center gap-3">
+          <!-- Quick / Full toggle -->
+          <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs font-medium">
+            <button id="priQuickBtn" onclick="switchPriMode(30)"
+                    class="px-3 py-1.5 bg-amber-500 text-white transition-colors">
+              Next 30 days
+            </button>
+            <button id="priFullBtn" onclick="switchPriMode(60)"
+                    class="px-3 py-1.5 bg-white text-gray-500 hover:bg-gray-50 transition-colors">
+              Full 60 days
+            </button>
+          </div>
+          <button onclick="closePriModal()"
+                  class="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
+        </div>
       </div>
 
       <!-- Body -->
@@ -370,7 +383,7 @@
 
             <!-- Result -->
             <div id="briefingCard" class="hidden">
-              <div class="flex items-start justify-between gap-2 mb-2">
+              <div class="flex items-start justify-between gap-2 mb-1">
                 <div id="briefingDateLabel"
                      class="text-xs font-semibold text-indigo-500 uppercase tracking-wide leading-snug">
                 </div>
@@ -380,6 +393,7 @@
                   ↺ Refresh
                 </button>
               </div>
+              <div id="briefingCachedAt" class="text-xs text-gray-400 mb-2"></div>
               <p id="briefingText" class="text-sm text-gray-600 leading-relaxed mb-3"></p>
               <ul id="briefingRouteList" class="space-y-1.5 text-sm"></ul>
             </div>
@@ -486,6 +500,8 @@ async function loadBriefing(force = false) {
       const labelDate = new Date((selectedDate || TODAY_STR) + "T00:00:00");
       document.getElementById("briefingDateLabel").textContent =
         labelDate.toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric", year:"numeric" });
+      document.getElementById("briefingCachedAt").textContent =
+        data.cached_at ? `Pinned ${data.cached_at}` : "";
       document.getElementById("briefingText").textContent = data.blurb;
 
       const listEl = document.getElementById("briefingRouteList");
@@ -982,12 +998,15 @@ function showToast(msg) {
 }
 
 /* ── PRI CHECK MODAL ── */
+let _priModeDays = 30;
+
 function openPriModal() {
   document.getElementById("priModal").classList.remove("hidden");
   document.getElementById("priLoading").classList.remove("hidden");
   document.getElementById("priError").classList.add("hidden");
   document.getElementById("priResults").classList.add("hidden");
-  document.getElementById("priSubtitle").textContent = "Scanning next 60 days…";
+  _priModeDays = 30;
+  _updatePriToggle();
   _loadPriCheck();
 }
 
@@ -995,9 +1014,30 @@ function closePriModal() {
   document.getElementById("priModal").classList.add("hidden");
 }
 
+function switchPriMode(days) {
+  _priModeDays = days;
+  _updatePriToggle();
+  document.getElementById("priLoading").classList.remove("hidden");
+  document.getElementById("priError").classList.add("hidden");
+  document.getElementById("priResults").classList.add("hidden");
+  _loadPriCheck();
+}
+
+function _updatePriToggle() {
+  const q = document.getElementById("priQuickBtn");
+  const f = document.getElementById("priFullBtn");
+  if (_priModeDays === 30) {
+    q.className = "px-3 py-1.5 bg-amber-500 text-white transition-colors";
+    f.className = "px-3 py-1.5 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
+  } else {
+    q.className = "px-3 py-1.5 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
+    f.className = "px-3 py-1.5 bg-amber-500 text-white transition-colors";
+  }
+}
+
 async function _loadPriCheck() {
   try {
-    const res  = await fetch("/briefing/pri-check");
+    const res  = await fetch(`/briefing/pri-check?days=${_priModeDays}`);
     const data = await res.json();
     document.getElementById("priLoading").classList.add("hidden");
 
@@ -1014,9 +1054,8 @@ async function _loadPriCheck() {
     const total  = needs.length + done.length + vacant.length;
 
     document.getElementById("priSubtitle").textContent =
-      `Scanned through ${through} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
+      `Through ${through} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
 
-    // Build all content into priResults directly
     const resultsEl = document.getElementById("priResults");
     resultsEl.innerHTML = "";
 
@@ -1026,21 +1065,21 @@ async function _loadPriCheck() {
 
     if (needs.length) {
       resultsEl.appendChild(_priSection("🔴 Needs Owner Next tag", needs.length));
-      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-3";
+      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-4";
       needs.forEach(p => ul.appendChild(_priRow(p, "red")));
       resultsEl.appendChild(ul);
     }
 
     if (vacant.length) {
       resultsEl.appendChild(_priSection("🟠 Create vacancy PRI", vacant.length));
-      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-3";
+      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-4";
       vacant.forEach(p => ul.appendChild(_priVacancyRow(p)));
       resultsEl.appendChild(ul);
     }
 
     if (done.length) {
       resultsEl.appendChild(_priSection("🟢 Already tagged", done.length));
-      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-3";
+      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-4";
       done.forEach(p => ul.appendChild(_priRow(p, "green")));
       resultsEl.appendChild(ul);
     }
@@ -1055,41 +1094,48 @@ async function _loadPriCheck() {
 
 function _priSection(label, count) {
   const d = document.createElement("div");
-  d.className = "text-xs font-bold uppercase tracking-wide mb-1.5";
+  d.className = "text-xs font-bold uppercase tracking-wide mb-2 mt-1";
+  d.style.color = label.startsWith("🔴") ? "#ef4444"
+                : label.startsWith("🟠") ? "#f97316"
+                : "#10b981";
   d.textContent = `${label} (${count})`;
   return d;
 }
 
 function _priRow(p, color) {
-  const colors = {
-    red:   "border-red-100 bg-red-50",
-    green: "border-emerald-100 bg-emerald-50",
+  const palette = {
+    red:   { border: "#fecaca", bg: "#fef2f2", action: "#ef4444", actionText: 'Add "owner next" tag in Breezeway on the incoming reservation' },
+    green: { border: "#a7f3d0", bg: "#ecfdf5", action: "#059669", actionText: "✓ Owner Next tagged in Breezeway" },
   };
-  const actionColors = { red: "text-red-500", green: "text-emerald-600" };
-  const actions = {
-    red:   'Add "owner next" tag in Breezeway',
-    green: "✓ Owner Next tagged in Breezeway",
-  };
+  const c = palette[color];
   const li = document.createElement("li");
-  li.className = `rounded-xl px-4 py-3 border ${colors[color]}`;
-  const typeLabel = p.next_type === "block" ? "BLOCK" : "Owner stay";
+  li.style.cssText = `border-radius:10px; padding:12px 14px; border:1px solid ${c.border}; background:${c.bg};`;
+  const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
   const co = new Date(p.checkout_date + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
   const ci = new Date(p.next_checkin  + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
+  const vacancyHtml = p.vacancy_days
+    ? `<div style="font-size:0.7rem; color:#9ca3af; margin-top:2px;">${p.vacancy_days}-day vacancy before arrival</div>`
+    : "";
   li.innerHTML = `
-    <div class="font-semibold text-gray-800 text-sm truncate">${p.property}</div>
-    <div class="text-xs text-gray-500 mt-1">Out <strong>${co}</strong> · next: ${typeLabel} <strong>${ci}</strong></div>
-    <div class="text-xs font-medium mt-1 ${actionColors[color]}">${actions[color]}</div>`;
+    <div style="font-weight:600; font-size:0.875rem; color:#1f2937; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.property}</div>
+    <div style="font-size:0.75rem; color:#6b7280; margin-top:3px;">Guest out <strong>${co}</strong> → ${typeLabel} in <strong>${ci}</strong></div>
+    ${vacancyHtml}
+    <div style="font-size:0.75rem; font-weight:500; margin-top:4px; color:${c.action};">${c.actionText}</div>`;
   return li;
 }
 
 function _priVacancyRow(p) {
   const li = document.createElement("li");
-  li.className = "rounded-xl px-4 py-3 border border-orange-100 bg-orange-50";
+  li.style.cssText = "border-radius:10px; padding:12px 14px; border:1px solid #fed7aa; background:#fff7ed;";
   const co = new Date(p.checkout_date + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
+  const vacancyHtml = p.vacancy_days
+    ? `<div style="font-size:0.7rem; color:#9ca3af; margin-top:2px;">${p.vacancy_days}+-day vacancy (no booking found in 60-day window)</div>`
+    : "";
   li.innerHTML = `
-    <div class="font-semibold text-gray-800 text-sm truncate">${p.property}</div>
-    <div class="text-xs text-gray-500 mt-1">Checked out <strong>${co}</strong> · no upcoming reservation</div>
-    <div class="text-xs text-orange-500 font-medium mt-1">Create vacancy PRI manually</div>`;
+    <div style="font-weight:600; font-size:0.875rem; color:#1f2937; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.property}</div>
+    <div style="font-size:0.75rem; color:#6b7280; margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
+    ${vacancyHtml}
+    <div style="font-size:0.75rem; font-weight:500; margin-top:4px; color:#ea580c;">Create vacancy PRI manually</div>`;
   return li;
 }
 
