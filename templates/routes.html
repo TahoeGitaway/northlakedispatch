@@ -118,77 +118,16 @@
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
     <div class="flex items-center gap-2">
-      <button onclick="openPriModal()"
-              class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium
-                     px-4 py-2 rounded-lg transition-colors">
-        🔍 PRI Check
-      </button>
+      <a href="/admin/pri-check" target="_blank"
+         class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium
+                px-4 py-2 rounded-lg transition-colors inline-block">
+        🔍 PRI Check ↗
+      </a>
       <a id="newRouteBtn" href="{{ url_for('dispatch.home') }}"
          class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
                 px-4 py-2 rounded-lg transition-colors">
         + New Route
       </a>
-    </div>
-  </div>
-
-  <!-- ── PRI CHECK MODAL ── -->
-  <div id="priModal"
-       class="hidden fixed inset-0 z-[10000] flex items-center justify-center p-4"
-       style="background:rgba(0,0,0,0.5);">
-    <div class="bg-white rounded-2xl shadow-2xl w-full"
-         style="max-width:56rem; max-height:88vh; display:flex; flex-direction:column;">
-
-      <!-- Header -->
-      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100" style="flex-shrink:0;">
-        <div>
-          <h3 class="font-bold text-gray-800">Post Rental Inspection Check</h3>
-          <p id="priSubtitle" class="text-xs text-gray-400 mt-0.5">Scanning…</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <!-- Quick / Full toggle -->
-          <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs font-medium">
-            <button id="priQuickBtn" onclick="switchPriMode(30)"
-                    class="px-3 py-1.5 bg-amber-500 text-white transition-colors">
-              Next 30 days
-            </button>
-            <button id="priFullBtn" onclick="switchPriMode(60)"
-                    class="px-3 py-1.5 bg-white text-gray-500 hover:bg-gray-50 transition-colors">
-              Full 60 days
-            </button>
-          </div>
-          <button onclick="closePriModal()"
-                  class="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
-        </div>
-      </div>
-
-      <!-- Body -->
-      <div id="priBody" class="px-6 py-4 text-sm" style="overflow-y:auto; flex:1 1 0; min-height:0;">
-        <!-- Loading -->
-        <div id="priLoading" class="flex items-center gap-3 py-6 text-gray-400">
-          <div class="w-4 h-4 border-2 border-amber-300 border-t-amber-500 rounded-full animate-spin shrink-0"></div>
-          <span>Checking Breezeway reservations…</span>
-        </div>
-        <!-- Error -->
-        <div id="priError" class="hidden py-4 text-red-600"></div>
-        <!-- Results -->
-        <div id="priResults" class="hidden space-y-5">
-          <!-- Needs attention -->
-          <div id="priNeedsSection">
-            <div class="text-xs font-bold uppercase tracking-wide text-red-500 mb-2">
-              Needs Attention
-            </div>
-            <ul id="priNeedsList" class="space-y-2"></ul>
-          </div>
-          <!-- Already tagged -->
-          <div id="priDoneSection" class="hidden">
-            <div class="text-xs font-bold uppercase tracking-wide text-emerald-600 mb-2 mt-4">
-              Already Tagged in Breezeway
-            </div>
-            <ul id="priDoneList" class="space-y-2"></ul>
-          </div>
-        </div>
-      </div>
-
     </div>
   </div>
 
@@ -997,151 +936,7 @@ function showToast(msg) {
   setTimeout(() => t.remove(), 3000);
 }
 
-/* ── PRI CHECK MODAL ── */
-let _priModeDays = 30;
-
-function openPriModal() {
-  document.getElementById("priModal").classList.remove("hidden");
-  document.getElementById("priLoading").classList.remove("hidden");
-  document.getElementById("priError").classList.add("hidden");
-  document.getElementById("priResults").classList.add("hidden");
-  _priModeDays = 30;
-  _updatePriToggle();
-  _loadPriCheck();
-}
-
-function closePriModal() {
-  document.getElementById("priModal").classList.add("hidden");
-}
-
-function switchPriMode(days) {
-  _priModeDays = days;
-  _updatePriToggle();
-  document.getElementById("priLoading").classList.remove("hidden");
-  document.getElementById("priError").classList.add("hidden");
-  document.getElementById("priResults").classList.add("hidden");
-  _loadPriCheck();
-}
-
-function _updatePriToggle() {
-  const q = document.getElementById("priQuickBtn");
-  const f = document.getElementById("priFullBtn");
-  if (_priModeDays === 30) {
-    q.className = "px-3 py-1.5 bg-amber-500 text-white transition-colors";
-    f.className = "px-3 py-1.5 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
-  } else {
-    q.className = "px-3 py-1.5 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
-    f.className = "px-3 py-1.5 bg-amber-500 text-white transition-colors";
-  }
-}
-
-async function _loadPriCheck() {
-  try {
-    const res  = await fetch(`/briefing/pri-check?days=${_priModeDays}`);
-    const data = await res.json();
-    document.getElementById("priLoading").classList.add("hidden");
-
-    if (data.error) {
-      document.getElementById("priError").textContent = data.error;
-      document.getElementById("priError").classList.remove("hidden");
-      return;
-    }
-
-    const needs  = data.needs_tag      || [];
-    const done   = data.already_tagged || [];
-    const vacant = data.no_booking     || [];
-    const through = data.scanned_through || "";
-    const total  = needs.length + done.length + vacant.length;
-
-    document.getElementById("priSubtitle").textContent =
-      `Through ${through} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
-
-    const resultsEl = document.getElementById("priResults");
-    resultsEl.innerHTML = "";
-
-    if (!total) {
-      resultsEl.innerHTML = '<p class="text-gray-400 text-sm italic text-center py-4">No PRIs flagged in this window.</p>';
-    }
-
-    if (needs.length) {
-      resultsEl.appendChild(_priSection("🔴 Needs Owner Next tag", needs.length));
-      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-4";
-      needs.forEach(p => ul.appendChild(_priRow(p, "red")));
-      resultsEl.appendChild(ul);
-    }
-
-    if (vacant.length) {
-      resultsEl.appendChild(_priSection("🟠 Create vacancy PRI", vacant.length));
-      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-4";
-      vacant.forEach(p => ul.appendChild(_priVacancyRow(p)));
-      resultsEl.appendChild(ul);
-    }
-
-    if (done.length) {
-      resultsEl.appendChild(_priSection("🟢 Already tagged", done.length));
-      const ul = document.createElement("ul"); ul.className = "space-y-2 mb-4";
-      done.forEach(p => ul.appendChild(_priRow(p, "green")));
-      resultsEl.appendChild(ul);
-    }
-
-    document.getElementById("priResults").classList.remove("hidden");
-  } catch (e) {
-    document.getElementById("priLoading").classList.add("hidden");
-    document.getElementById("priError").textContent = "Could not load PRI data: " + e.message;
-    document.getElementById("priError").classList.remove("hidden");
-  }
-}
-
-function _priSection(label, count) {
-  const d = document.createElement("div");
-  d.className = "text-xs font-bold uppercase tracking-wide mb-2 mt-1";
-  d.style.color = label.startsWith("🔴") ? "#ef4444"
-                : label.startsWith("🟠") ? "#f97316"
-                : "#10b981";
-  d.textContent = `${label} (${count})`;
-  return d;
-}
-
-function _priRow(p, color) {
-  const palette = {
-    red:   { border: "#fecaca", bg: "#fef2f2", action: "#ef4444", actionText: 'Add "owner next" tag in Breezeway on the incoming reservation' },
-    green: { border: "#a7f3d0", bg: "#ecfdf5", action: "#059669", actionText: "✓ Owner Next tagged in Breezeway" },
-  };
-  const c = palette[color];
-  const li = document.createElement("li");
-  li.style.cssText = `border-radius:10px; padding:12px 14px; border:1px solid ${c.border}; background:${c.bg};`;
-  const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
-  const co = new Date(p.checkout_date + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
-  const ci = new Date(p.next_checkin  + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
-  const vacancyHtml = p.vacancy_days
-    ? `<div style="font-size:0.7rem; color:#9ca3af; margin-top:2px;">${p.vacancy_days}-day vacancy before arrival</div>`
-    : "";
-  li.innerHTML = `
-    <div style="font-weight:600; font-size:0.875rem; color:#1f2937; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.property}</div>
-    <div style="font-size:0.75rem; color:#6b7280; margin-top:3px;">Guest out <strong>${co}</strong> → ${typeLabel} in <strong>${ci}</strong></div>
-    ${vacancyHtml}
-    <div style="font-size:0.75rem; font-weight:500; margin-top:4px; color:${c.action};">${c.actionText}</div>`;
-  return li;
-}
-
-function _priVacancyRow(p) {
-  const li = document.createElement("li");
-  li.style.cssText = "border-radius:10px; padding:12px 14px; border:1px solid #fed7aa; background:#fff7ed;";
-  const co = new Date(p.checkout_date + "T00:00:00").toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
-  const vacancyHtml = p.vacancy_days
-    ? `<div style="font-size:0.7rem; color:#9ca3af; margin-top:2px;">${p.vacancy_days}+-day vacancy (no booking found in 60-day window)</div>`
-    : "";
-  li.innerHTML = `
-    <div style="font-weight:600; font-size:0.875rem; color:#1f2937; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.property}</div>
-    <div style="font-size:0.75rem; color:#6b7280; margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
-    ${vacancyHtml}
-    <div style="font-size:0.75rem; font-weight:500; margin-top:4px; color:#ea580c;">Create vacancy PRI manually</div>`;
-  return li;
-}
-
-document.getElementById("priModal").addEventListener("click", function(e) {
-  if (e.target === this) closePriModal();
-});
+/* PRI check now opens in a new tab at /admin/pri-check */
 </script>
 
 {% endblock %}

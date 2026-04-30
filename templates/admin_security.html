@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Security Overview — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-8">
+
+  <!-- PIN gate -->
+  {% if locked %}
+  <div class="flex items-center justify-center min-h-[60vh]">
+    <div class="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 w-full max-w-sm text-center">
+      <div class="text-4xl mb-3">🔒</div>
+      <h2 class="text-xl font-bold text-gray-800 mb-1">Security Overview</h2>
+      <p class="text-sm text-gray-400 mb-6">Enter the security PIN to continue.</p>
+      {% if error %}
+      <div class="text-sm text-red-500 mb-3 font-medium">Incorrect PIN — try again.</div>
+      {% endif %}
+      <form method="POST" action="{{ url_for('admin.security_page') }}">
+        <input type="password" name="pin" autofocus
+               placeholder="PIN"
+               class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-center
+                      text-lg tracking-widest mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        <button type="submit"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
+                       py-2.5 rounded-xl transition-colors">
+          Unlock
+        </button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+
+  <!-- Header -->
+  <div class="flex items-center gap-3 mb-8">
+    <div class="text-3xl">🛡️</div>
+    <div>
+      <h2 class="text-2xl font-bold text-gray-800">Security Overview</h2>
+      <p class="text-sm text-gray-400">North Lake Dispatch — how your data and operations are protected</p>
+    </div>
+    <span class="ml-auto text-xs bg-emerald-100 text-emerald-700 font-semibold px-3 py-1 rounded-full">
+      Admin Only
+    </span>
+  </div>
+
+  <!-- Summary banner -->
+  <div class="bg-indigo-50 border border-indigo-100 rounded-2xl px-6 py-5 mb-8 flex gap-4 items-start">
+    <div class="text-2xl mt-0.5">✅</div>
+    <div>
+      <div class="font-semibold text-indigo-800 mb-1">Platform security summary</div>
+      <p class="text-sm text-indigo-700 leading-relaxed">
+        North Lake Dispatch is a private, login-gated operations platform. All sensitive data —
+        guest reservations, property addresses, API credentials — is handled server-side and never
+        exposed to the browser. Access is controlled by role-based authentication, and the platform
+        is hosted on Railway with environment-variable secrets management.
+      </p>
+    </div>
+  </div>
+
+  <div class="space-y-5">
+
+    <!-- Authentication -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-gray-50 bg-gray-50">
+        <span class="text-lg">🔐</span>
+        <h3 class="font-bold text-gray-800">Authentication &amp; Access Control</h3>
+        <span class="ml-auto text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full">Implemented</span>
+      </div>
+      <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">All routes require login.</strong> Every page and API endpoint is protected with <code class="bg-gray-100 px-1 rounded">@login_required</code>. Unauthenticated requests are redirected to the login page — no data is served to anonymous users.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Role-based access.</strong> Admin-only pages (user management, knowledge base, AI chat, security overview, PRI check, CSV upload) require <code class="bg-gray-100 px-1 rounded">@admin_required</code> on top of login. A logged-in non-admin user cannot reach any admin endpoint.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Passwords are hashed.</strong> User passwords are stored using Werkzeug's <code class="bg-gray-100 px-1 rounded">generate_password_hash</code> (PBKDF2-SHA256). Plain-text passwords are never stored.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Session management.</strong> Flask-Login manages sessions with a cryptographically signed cookie (HMAC using the server's secret key). Sessions expire after 8 hours.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">This page is double-gated.</strong> Access to this security overview requires both admin login and a separate PIN, so it cannot be stumbled upon by any admin user.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- API & Credentials -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-gray-50 bg-gray-50">
+        <span class="text-lg">🔑</span>
+        <h3 class="font-bold text-gray-800">API Credentials &amp; Secrets</h3>
+        <span class="ml-auto text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full">Implemented</span>
+      </div>
+      <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">All API keys are environment variables.</strong> Anthropic, Breezeway, Google Maps, and SendGrid credentials are stored exclusively as Railway environment variables — never in source code or committed files.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Keys are never sent to the browser.</strong> API credentials are read server-side at request time. No credential ever appears in HTML, JavaScript, or API responses.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Breezeway JWT tokens are short-lived.</strong> The app requests a fresh Breezeway access token on demand and uses it only server-side. Tokens are not cached to disk or returned to clients.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Guest Data Protection -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-gray-50 bg-gray-50">
+        <span class="text-lg">🏠</span>
+        <h3 class="font-bold text-gray-800">Guest &amp; Reservation Data</h3>
+        <span class="ml-auto text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full">Implemented</span>
+      </div>
+      <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Breezeway data stays server-side.</strong> Reservation details fetched from Breezeway are used to build AI prompts and route context on the server. Raw reservation objects are never sent to the browser.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">AI system prompts are not returned to the client.</strong> The chatbot endpoint previously returned the full system prompt (containing Breezeway context) in the JSON response. This has been removed — only the AI reply is returned.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Debug endpoints are admin-gated.</strong> The <code class="bg-gray-100 px-1 rounded">/briefing/debug-reservations</code> and <code class="bg-gray-100 px-1 rounded">/briefing/debug-properties</code> endpoints that return raw Breezeway data require admin role — not just login.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Server-side reservation filtering.</strong> Even if Breezeway's date-range API returns records outside the requested window, the app validates and filters all reservation dates server-side before processing.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Map & Third-Party -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-gray-50 bg-gray-50">
+        <span class="text-lg">🗺️</span>
+        <h3 class="font-bold text-gray-800">Maps &amp; Third-Party Services</h3>
+        <span class="ml-auto text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full">Implemented</span>
+      </div>
+      <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Map tiles require no API key.</strong> All maps use CartoDB Voyager tiles, which are served anonymously over HTTPS with no user-identifiable information transmitted.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Google Maps API key is server-side only.</strong> The Google Maps Distance Matrix API (used for route optimization) is called from the server. The key is never embedded in frontend JavaScript.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">AI API calls are server-side.</strong> All calls to Anthropic (Claude) are made from the Flask backend. The Anthropic API key never touches the browser.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Database -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-gray-50 bg-gray-50">
+        <span class="text-lg">🗄️</span>
+        <h3 class="font-bold text-gray-800">Database &amp; Infrastructure</h3>
+        <span class="ml-auto text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full">Implemented</span>
+      </div>
+      <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">PostgreSQL on Railway.</strong> The database is a managed Railway PostgreSQL instance, not publicly accessible. The connection URL is an environment variable.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Parameterized queries.</strong> All database queries use <code class="bg-gray-100 px-1 rounded">%s</code> parameterization via psycopg2 — user input is never interpolated directly into SQL strings, preventing SQL injection.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+          <span><strong class="text-gray-800">Hosted on Railway.</strong> The app is deployed on Railway's isolated container infrastructure with HTTPS enforced. No local ports are exposed. All traffic is encrypted in transit.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Open items -->
+    <div class="bg-white rounded-2xl shadow-sm border border-amber-100 overflow-hidden">
+      <div class="flex items-center gap-3 px-6 py-4 border-b border-amber-50 bg-amber-50">
+        <span class="text-lg">⚠️</span>
+        <h3 class="font-bold text-amber-800">Planned Improvements</h3>
+        <span class="ml-auto text-xs bg-amber-100 text-amber-700 font-medium px-2 py-0.5 rounded-full">Roadmap</span>
+      </div>
+      <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
+        <div class="flex gap-3">
+          <span class="text-amber-400 mt-0.5 shrink-0">○</span>
+          <span><strong class="text-gray-800">CSRF protection.</strong> POST endpoints currently rely on session authentication alone. Adding Flask-WTF CSRF tokens would prevent cross-site request forgery attacks from malicious third-party sites.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-amber-400 mt-0.5 shrink-0">○</span>
+          <span><strong class="text-gray-800">HTTP security headers.</strong> Adding <code class="bg-gray-100 px-1 rounded">X-Frame-Options</code>, <code class="bg-gray-100 px-1 rounded">X-Content-Type-Options</code>, and <code class="bg-gray-100 px-1 rounded">Strict-Transport-Security</code> headers would harden against clickjacking and MIME-sniffing attacks.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-amber-400 mt-0.5 shrink-0">○</span>
+          <span><strong class="text-gray-800">Guest PII stripping.</strong> Breezeway reservation objects are cached in server memory with all fields intact. Stripping guest names and contact info before caching would limit exposure if memory were somehow accessed.</span>
+        </div>
+        <div class="flex gap-3">
+          <span class="text-amber-400 mt-0.5 shrink-0">○</span>
+          <span><strong class="text-gray-800">Session timeout reduction.</strong> Sessions currently last 8 hours. Reducing to 2–4 hours would limit the window of exposure on shared or unattended workstations.</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="text-xs text-gray-400 text-center mt-8">
+    Last reviewed April 30, 2026 · North Lake Dispatch Admin
+  </p>
+
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}PRI Check — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-xl font-bold text-gray-800">Post Rental Inspection Check</h2>
+      <p class="text-xs text-gray-400 mt-0.5">
+        Scans guest checkouts and flags properties needing a PRI based on what follows.
+      </p>
+    </div>
+    <button onclick="reload()"
+            class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1">
+      ↺ Refresh
+    </button>
+  </div>
+
+  <!-- Disclaimer banner -->
+  <div class="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 mb-5 text-sm text-amber-900 space-y-1.5 leading-relaxed">
+    <div class="font-semibold text-amber-800 flex items-center gap-2">
+      <span>⚠️</span> Before acting on these results, read this
+    </div>
+    <ul class="space-y-1.5 text-amber-800 text-xs list-none pl-1">
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Owner Next status is pulled from Streamline reservations via the Breezeway API.</strong> The flag shown here reflects what Breezeway has synced from Streamline at the time of this scan — it is not live data from Streamline directly.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>There may be a lag between Streamline and Breezeway.</strong> A reservation added or modified in Streamline may not appear here immediately. When in doubt, verify directly in Streamline.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>This does not reflect tasks in the system.</strong> A property appearing here as "needs tag" or "vacancy PRI" does not mean a task has been created — that step must still be done manually in Breezeway.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Workflow failure can still occur.</strong> This tool identifies properties that need action — it does not confirm the action was completed. Always verify PRI tasks are created and assigned.</span></li>
+    </ul>
+  </div>
+
+  <!-- Toggle -->
+  <div class="flex items-center gap-3 mb-5">
+    <div class="flex rounded-lg overflow-hidden border border-gray-200 text-sm font-medium">
+      <button id="btnQuick" onclick="setMode(30)"
+              class="px-4 py-2 bg-amber-500 text-white transition-colors">
+        Next 30 days
+      </button>
+      <button id="btnFull" onclick="setMode(60)"
+              class="px-4 py-2 bg-white text-gray-500 hover:bg-gray-50 transition-colors">
+        Full 60 days
+      </button>
+    </div>
+    <span id="subtitle" class="text-xs text-gray-400"></span>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-amber-300 border-t-amber-500 rounded-full animate-spin"></div>
+    <span>Checking Breezeway reservations…</span>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm"
+       style="background:#fef2f2; border:1px solid #fecaca;"></div>
+
+  <!-- Results -->
+  <div id="results" class="hidden space-y-6"></div>
+
+</div>
+
+<script>
+let _days = 30;
+
+function setMode(d) {
+  _days = d;
+  document.getElementById("btnQuick").className =
+    d === 30 ? "px-4 py-2 bg-amber-500 text-white transition-colors"
+             : "px-4 py-2 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
+  document.getElementById("btnFull").className =
+    d === 60 ? "px-4 py-2 bg-amber-500 text-white transition-colors"
+             : "px-4 py-2 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
+  load();
+}
+
+function reload() { load(); }
+
+function _fmtDate(ds) {
+  if (!ds) return "—";
+  return new Date(ds + "T00:00:00").toLocaleDateString("en-US",
+    { month: "short", day: "numeric", year: "numeric" });
+}
+
+function _section(label, color) {
+  const d = document.createElement("div");
+  d.style.cssText = `font-size:0.7rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.06em; color:${color}; margin-bottom:8px;`;
+  return d;
+}
+
+function _card(bg, border, html) {
+  const li = document.createElement("div");
+  li.style.cssText = `border-radius:10px; padding:13px 16px; border:1px solid ${border};
+    background:${bg}; margin-bottom:8px;`;
+  li.innerHTML = html;
+  return li;
+}
+
+function buildSection(title, color, items, cardFn) {
+  if (!items.length) return null;
+  const wrap = document.createElement("div");
+  const hdr  = _section(`${title} (${items.length})`, color);
+  hdr.textContent = `${title} (${items.length})`;
+  wrap.appendChild(hdr);
+  items.forEach(p => wrap.appendChild(cardFn(p)));
+  return wrap;
+}
+
+function redCard(p) {
+  const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
+  const co = _fmtDate(p.checkout_date), ci = _fmtDate(p.next_checkin);
+  const vacLine = p.vacancy_days
+    ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
+  return _card("#fef2f2", "#fecaca", `
+    <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
+    <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> → ${typeLabel} in <strong>${ci}</strong></div>
+    ${vacLine}
+    <div style="font-size:0.75rem;font-weight:500;color:#ef4444;margin-top:4px;">Add "owner next" tag in Breezeway on the incoming reservation</div>
+  `);
+}
+
+function orangeCard(p) {
+  const co = _fmtDate(p.checkout_date);
+  const vacLine = p.vacancy_days
+    ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">${p.vacancy_days}+-day vacancy (no booking in 60-day window)</div>` : "";
+  return _card("#fff7ed", "#fed7aa", `
+    <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
+    <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
+    ${vacLine}
+    <div style="font-size:0.75rem;font-weight:500;color:#ea580c;margin-top:4px;">Create vacancy PRI manually</div>
+  `);
+}
+
+function greenCard(p) {
+  const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
+  const co = _fmtDate(p.checkout_date), ci = _fmtDate(p.next_checkin);
+  const vacLine = p.vacancy_days
+    ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
+  return _card("#ecfdf5", "#a7f3d0", `
+    <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
+    <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> → ${typeLabel} in <strong>${ci}</strong></div>
+    ${vacLine}
+    <div style="font-size:0.75rem;font-weight:500;color:#059669;margin-top:4px;">✓ Owner Next tagged in Breezeway</div>
+  `);
+}
+
+async function load() {
+  document.getElementById("loading").classList.remove("hidden");
+  document.getElementById("errorBox").classList.add("hidden");
+  document.getElementById("results").classList.add("hidden");
+  document.getElementById("subtitle").textContent = "";
+
+  try {
+    const res  = await fetch(`/briefing/pri-check?days=${_days}`);
+    const data = await res.json();
+    document.getElementById("loading").classList.add("hidden");
+
+    if (data.error) {
+      document.getElementById("errorBox").textContent = data.error;
+      document.getElementById("errorBox").classList.remove("hidden");
+      return;
+    }
+
+    const needs  = data.needs_tag      || [];
+    const done   = data.already_tagged || [];
+    const vacant = data.no_booking     || [];
+    const total  = needs.length + done.length + vacant.length;
+
+    document.getElementById("subtitle").textContent =
+      `Through ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
+
+    const resultsEl = document.getElementById("results");
+    resultsEl.innerHTML = "";
+
+    if (!total) {
+      resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
+        No PRIs flagged in this window.</div>`;
+    } else {
+      const s1 = buildSection("🔴 Needs Owner Next tag", "#ef4444", needs, redCard);
+      const s2 = buildSection("🟠 Create vacancy PRI",   "#f97316", vacant, orangeCard);
+      const s3 = buildSection("🟢 Already tagged",       "#059669", done, greenCard);
+      if (s1) resultsEl.appendChild(s1);
+      if (s2) resultsEl.appendChild(s2);
+      if (s3) resultsEl.appendChild(s3);
+    }
+
+    resultsEl.classList.remove("hidden");
+  } catch (e) {
+    document.getElementById("loading").classList.add("hidden");
+    document.getElementById("errorBox").textContent = "Could not load PRI data: " + e.message;
+    document.getElementById("errorBox").classList.remove("hidden");
+  }
+}
+
+// Auto-load on page open
+load();
+</script>
+{% endblock %}

@@ -62,6 +62,11 @@
                           {% if request.endpoint == 'admin.knowledge_list' %}text-indigo-600{% endif %}">
                     Knowledge
                 </a>
+                <a href="{{ url_for('admin.security_page') }}"
+                   class="text-gray-600 hover:text-indigo-600 font-medium
+                          {% if request.endpoint == 'admin.security_page' %}text-indigo-600{% endif %}">
+                    🛡️ Security
+                </a>
                 {% endif %}
             </div>
             {% endif %}

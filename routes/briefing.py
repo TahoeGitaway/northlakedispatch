@@ -29,8 +29,11 @@ briefing_bp = Blueprint("briefing", __name__)
 _PACIFIC = ZoneInfo("America/Los_Angeles")
 
 def _fmt_pacific(ts: float) -> str:
-    """Format a unix timestamp as 12-hour Pacific time, e.g. '2:34 PM PT'."""
-    return datetime.fromtimestamp(ts, tz=_PACIFIC).strftime("%I:%M %p PT").lstrip("0")
+    """Format a unix timestamp as Pacific date + time, e.g. 'May 3, 2:34 PM PT'."""
+    dt = datetime.fromtimestamp(ts, tz=_PACIFIC)
+    time_str = dt.strftime("%I:%M %p PT").lstrip("0")
+    date_str = dt.strftime("%b ") + str(dt.day)
+    return f"{date_str}, {time_str}"
 
 ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY", "")
 BREEZEWAY_CLIENT_ID     = os.environ.get("BREEZEWAY_CLIENT_ID", "")

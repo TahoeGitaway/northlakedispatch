@@ -756,6 +756,13 @@ def chatbot_page():
     return render_template("admin_chatbot.html")
 
 
+@admin_bp.route("/admin/pri-check")
+@login_required
+@admin_required
+def pri_check_page():
+    return render_template("admin_pri_check.html")
+
+
 @admin_bp.route("/admin/chatbot/chat", methods=["POST"])
 @login_required
 @admin_required
@@ -992,3 +999,24 @@ def chatbot_chat():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Security overview page ────────────────────────────────────────
+
+_SECURITY_PIN = os.environ.get("SECURITY_PAGE_PIN", "")
+
+@admin_bp.route("/admin/security", methods=["GET", "POST"])
+@login_required
+@admin_required
+def security_page():
+    unlocked = request.session_key = None  # reset
+    session_key = "security_unlocked"
+    from flask import session
+    if request.method == "POST":
+        pin = (request.form.get("pin") or "").strip()
+        if _SECURITY_PIN and pin != _SECURITY_PIN:
+            return render_template("admin_security.html", locked=True, error=True)
+        session[session_key] = True
+        return redirect(url_for("admin.security_page"))
+    locked = bool(_SECURITY_PIN) and not session.get(session_key)
+    return render_template("admin_security.html", locked=locked, error=False)
