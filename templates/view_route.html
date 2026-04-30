@@ -221,7 +221,7 @@ const startLocation = { lat: 39.34207, lng: -120.21422 };
 
 const map = L.map('map', { zoomControl: true, scrollWheelZoom: false })
   .setView([39.3279, -120.1833], 11);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18 }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© OpenStreetMap © CARTO' }).addTo(map);
 
 // Numbered div-icon — no external CDN dependency, guaranteed to render
 function makeStopIcon(num, bg) {

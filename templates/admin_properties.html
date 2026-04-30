@@ -269,7 +269,7 @@ async function geocodeNew() {
     if (!previewMap) {
       previewMap = L.map("previewMap", { zoomControl:true, scrollWheelZoom:false })
         .setView([data.lat, data.lng], 15);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:18 }).addTo(previewMap);
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom:19, attribution:'© OpenStreetMap © CARTO' }).addTo(previewMap);
     } else {
       previewMap.setView([data.lat, data.lng], 15);
     }
@@ -325,7 +325,7 @@ function borrowCoords(lat, lng, address) {
   if (!previewMap) {
     previewMap = L.map("previewMap", { zoomControl: true, scrollWheelZoom: false })
       .setView([lat, lng], 15);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(previewMap);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 19, attribution: "© OpenStreetMap © CARTO" }).addTo(previewMap);
   } else {
     previewMap.setView([lat, lng], 15);
   }
@@ -370,7 +370,7 @@ function confirmManualCoords() {
   if (!previewMap) {
     previewMap = L.map("previewMap", { zoomControl: true, scrollWheelZoom: false })
       .setView([lat, lng], 15);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(previewMap);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 19, attribution: "© OpenStreetMap © CARTO" }).addTo(previewMap);
   } else {
     previewMap.setView([lat, lng], 15);
   }

@@ -96,7 +96,7 @@ let markers      = {};
 
 // Init map
 const map = L.map('map').setView([39.3279, -120.1833], 11);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© OpenStreetMap © CARTO' }).addTo(map);
 
 // Add all markers
 properties.forEach(p => {

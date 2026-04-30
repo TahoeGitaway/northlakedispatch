@@ -15,7 +15,10 @@ const map = L.map('map', {
   maxBoundsViscosity: 0.8,
 }).setView([39.3279, -120.1833], 11);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:18 }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
+}).addTo(map);
 
 function clearRouteMarkers() {
   activeRouteMarkers.forEach(m => map.removeLayer(m));

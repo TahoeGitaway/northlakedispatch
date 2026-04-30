@@ -171,7 +171,7 @@ let selectedIds   = new Set();
 /* ── Map ── */
 {% if props %}
 const map = L.map("projectMap").setView([39.25, -120.05], 11);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:18}).addTo(map);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 19, attribution: "© OpenStreetMap © CARTO" }).addTo(map);
 
 const pendingMapped = allProps.filter(p => !p.completion_id && p.lat && p.lng);
 const clusterGroups = {};

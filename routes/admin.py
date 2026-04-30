@@ -989,7 +989,6 @@ def chatbot_chat():
         return jsonify({
             "reply":           resp.content[0].text,
             "context_summary": context_summary,
-            "system_prompt":   system_prompt,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

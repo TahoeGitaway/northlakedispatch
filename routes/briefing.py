@@ -22,6 +22,7 @@ from flask import Blueprint, jsonify, request
 from flask_login import login_required, current_user
 
 from db import get_db, get_cursor
+from routes.auth import admin_required
 
 briefing_bp = Blueprint("briefing", __name__)
 
@@ -334,6 +335,10 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
     day_name = date_obj.strftime("%A, %B ") + str(date_obj.day)
     lines    = [f"Today is {day_name}.\n"]
 
+    # Dispatcher notes — placed first so the AI treats them as the lead
+    if notes:
+        lines.append(f"DISPATCHER NOTES (most important — lead with this):\n{notes}")
+
     # Routes
     if routes:
         route_lines = []
@@ -410,9 +415,6 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
         lines[-2] = "(Breezeway data not available — credentials not configured.)"
         lines[-1] = ""
 
-    if notes:
-        lines.append(f"Additional notes from the dispatcher:\n{notes}")
-
     return "\n\n".join(l for l in lines if l)
 
 
@@ -427,23 +429,25 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
             model      = "claude-haiku-4-5-20251001",
-            max_tokens = 180,
+            max_tokens = 240,
             system     = (
                 "You are a concise operations briefer for a vacation rental cleaning company "
-                "in Lake Tahoe. Write 2-3 sentences using ONLY the data provided — never infer, "
-                "invent, or add any detail not explicitly present.\n"
-                "Cover: how many routes are planned (use 'planned', never 'dispatched'); "
-                "how many guest arrivals and departures; call out lease arrivals or departures "
-                "if any are marked [LEASE] in the data.\n"
+                "in Lake Tahoe. Write 2-3 sentences using ONLY the data provided.\n\n"
+                "PRIORITY ORDER — address these in order if data is present:\n"
+                "1. DISPATCHER NOTES: If notes are provided, they are the most important part "
+                "of the briefing. Weave the substance of the notes naturally into the briefing — "
+                "quote or paraphrase the key point directly. Do not bury notes at the end.\n"
+                "2. CHARACTER OF THE DAY: Describe what makes today notable — unusual mix of "
+                "work types, lease departures, owner stays, priority check-ins, anything operationally "
+                "meaningful. Avoid just listing stop counts.\n"
+                "3. ARRIVALS/DEPARTURES: Mention guest, owner, or lease arrivals/departures only "
+                "if they add context. Call out [LEASE] or [OWNER] if present.\n\n"
                 "Rules:\n"
                 "- Never rename or reclassify a reservation. [OWNER] = owner stay, "
-                "[LEASE] = long-term paying guest (30+ days), [GUEST] = regular guest, "
-                "[BLOCK] = maintenance/hold. Use these exactly as given.\n"
-                "- Do not name individual properties.\n"
-                "- Do not name individual technicians or routes.\n"
-                "- Do not describe transitions between consecutive reservations.\n"
+                "[LEASE] = long-term paying guest (30+ days), [GUEST] = regular guest.\n"
+                "- Do not name individual properties or technicians.\n"
                 "- Use the actual day name (e.g. 'Thursday') — never 'today'.\n"
-                "- Be direct. Do not start with a greeting."
+                "- Do not start with a greeting. Be direct."
             ),
             messages   = [{"role": "user", "content": prompt}],
         )
@@ -726,7 +730,7 @@ def pri_check():
                 ci_date = date_cls.fromisoformat(ci_str)
             except Exception:
                 continue
-            if ci_date > co_date:
+            if ci_date >= co_date:  # >= catches same-day owner turnovers
                 next_r       = r
                 next_ci_date = ci_date
                 break
@@ -775,6 +779,7 @@ def pri_check():
 
 @briefing_bp.route("/briefing/debug-reservations")
 @login_required
+@admin_required
 def debug_reservations():
     """Return raw Breezeway reservation fields for a date — for diagnosing classification and discovering field names."""
     try:
@@ -823,6 +828,7 @@ def debug_reservations():
 
 @briefing_bp.route("/briefing/debug-properties")
 @login_required
+@admin_required
 def debug_properties():
     """Show Breezeway property cache state and raw fields from one property."""
     token = _get_breezeway_token()
