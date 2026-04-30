@@ -36,30 +36,14 @@
   .cal-cell.today .cal-date { color: #fff; }
   .cal-cell.selected { background: #312e81; color: #fff; box-shadow: 0 0 0 2px #4f46e5; }
   .cal-cell.selected .cal-date { color: #fff; }
-  .cal-date {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: #374151;
-    line-height: 1;
-  }
-  .cal-dot-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    margin-top: 3px;
-  }
-  .cal-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #6366f1;
-    flex-shrink: 0;
-  }
+  .cal-date { font-size: 0.8rem; font-weight: 600; color: #374151; line-height: 1; }
+  .cal-dot-row { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 3px; }
+  .cal-dot { width: 6px; height: 6px; border-radius: 50%; background: #6366f1; flex-shrink: 0; }
   .cal-cell.today .cal-dot,
   .cal-cell.selected .cal-dot { background: #a5b4fc; }
   .cal-activity { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
-  .cal-arr  { font-size: 9px; font-weight: 700; color: #059669; }
-  .cal-dep  { font-size: 9px; font-weight: 700; color: #d97706; }
+  .cal-arr { font-size: 9px; font-weight: 700; color: #059669; }
+  .cal-dep { font-size: 9px; font-weight: 700; color: #d97706; }
   .cal-cell.today .cal-arr, .cal-cell.selected .cal-arr { color: #6ee7b7; }
   .cal-cell.today .cal-dep, .cal-cell.selected .cal-dep { color: #fde68a; }
 
@@ -76,14 +60,61 @@
   }
   .month-nav button:hover { background: #f3f4f6; }
 
-  /* ── DAY DETAIL ── */
-  #dayDetail {
-    transition: opacity 0.15s;
+  /* ── THREE-COLUMN LAYOUT ── */
+  .routes-3col {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+  .col-left   { order: 2; }
+  .col-center { order: 1; }
+  .col-right  { order: 3; }
+
+  @media (min-width: 1024px) {
+    .routes-3col {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+    .col-left   { order: 1; }
+    .col-center { order: 2; }
+    .col-right  { order: 3; }
+    .briefing-sticky { position: sticky; top: 1.5rem; }
+  }
+
+  /* ── ARRIVALS / DEPARTURES ── */
+  .summary-type-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .summary-prop {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+  .summary-prop-name {
+    font-size: 0.72rem;
+    color: #374151;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .summary-prop-time {
+    font-size: 0.7rem;
+    color: #9ca3af;
+    flex-shrink: 0;
   }
 </style>
 
-<div class="max-w-3xl mx-auto px-6 py-8">
+<div class="max-w-7xl mx-auto px-4 py-8">
 
+  <!-- ── PAGE HEADER ── -->
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-gray-800">Saved Routes</h2>
     <a id="newRouteBtn" href="{{ url_for('dispatch.home') }}"
@@ -93,166 +124,218 @@
     </a>
   </div>
 
-  <!-- ── BRIEFING SECTION (Property Specialist only) ── -->
-  <div id="briefingSection">
+  <!-- ── THREE-COLUMN GRID ── -->
+  <div class="routes-3col">
 
-  <!-- ── BRIEFING NOTES ── -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
-    <div class="flex items-center justify-between mb-2">
-      <label class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-        Notes for Today's AI Briefing
-      </label>
-      <span id="notesSaveStatus" class="text-xs text-gray-400"></span>
-    </div>
-    <textarea id="briefingNotes" rows="3"
-              placeholder="Add context for Claude — e.g. road closures, staff changes, special requests, anything unusual today…"
-              class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700
-                     focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none
-                     placeholder-gray-300"></textarea>
-    <div class="flex justify-end mt-2">
-      <button onclick="saveNotes()"
-              class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-medium
-                     px-4 py-1.5 rounded-lg transition-colors">
-        Save Notes
-      </button>
-    </div>
-  </div>
+    <!-- ════════════════════════════════════════
+         LEFT — Arrivals / Departures
+    ════════════════════════════════════════ -->
+    <div class="col-left">
+      <div id="dayDetail">
 
-  <!-- ── AI DAILY BRIEFING ── -->
-  <!-- Prompt button (shown by default) -->
-  <div id="briefingPrompt" class="mb-6">
-    <button onclick="startBriefing()"
-            class="w-full bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100
-                   rounded-xl px-5 py-4 flex items-center gap-3 text-sm text-indigo-500
-                   hover:border-indigo-300 hover:text-indigo-700 transition-colors text-left">
-      <span class="text-indigo-400 font-bold text-base shrink-0">✦</span>
-      <span class="font-medium">Generate today's AI briefing</span>
-      <span class="ml-auto text-xs text-indigo-300 font-normal">~$0.001 per generation</span>
-    </button>
-  </div>
+        <!-- Empty state (before a day is clicked) -->
+        <div id="dayDetailEmpty"
+             class="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-10
+                    text-center text-gray-400">
+          <div class="text-4xl mb-3">📅</div>
+          <p class="text-sm font-medium text-gray-500">Select a day</p>
+          <p class="text-xs mt-1">Click the calendar to see arrivals &amp; departures.</p>
+        </div>
 
-  <!-- Loading state -->
-  <div id="briefingLoading"
-       class="hidden bg-white border border-gray-200
-              rounded-xl px-5 py-4 mb-6 flex items-center gap-3 text-sm text-gray-500">
-    <div class="w-4 h-4 border-2 border-indigo-200 border-t-indigo-500 rounded-full
-                animate-spin shrink-0"></div>
-    <span>Generating today's briefing…</span>
-  </div>
+        <!-- Day summary (shown after click) -->
+        <div id="dayDetailContent" class="hidden">
 
-  <!-- Result card -->
-  <div id="briefingCard"
-       class="hidden bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6">
-    <div class="flex items-start justify-between gap-3">
-      <div class="flex items-start gap-3 flex-1 min-w-0">
-        <span class="text-indigo-400 font-bold text-base shrink-0 mt-0.5">✦</span>
-        <div class="min-w-0">
-          <div id="briefingDateLabel" class="text-xs font-semibold text-indigo-500 uppercase tracking-wide mb-1">
-            Briefing
+          <!-- Day heading -->
+          <div class="flex items-start justify-between gap-2 mb-4">
+            <h3 id="dayDetailTitle" class="font-bold text-gray-800 text-base leading-snug"></h3>
+            <span id="dayDetailCount" class="text-xs text-gray-400 shrink-0 mt-0.5"></span>
           </div>
-          <p id="briefingText" class="text-sm text-gray-600 leading-relaxed mb-3"></p>
-          <ul id="briefingRouteList" class="space-y-1 text-sm"></ul>
+
+          <!-- Loading indicator -->
+          <div id="daySummaryLoading"
+               class="hidden text-xs text-gray-400 mb-4 text-center py-4">
+            Loading arrivals &amp; departures…
+          </div>
+
+          <!-- Arrivals / Departures card -->
+          <div id="daySummaryPanel" class="hidden">
+            <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div style="display:grid; grid-template-columns:1fr 1fr; border-bottom:0;">
+                <!-- Arrivals -->
+                <div class="px-4 py-4" style="border-right:1px solid #f3f4f6;">
+                  <div class="summary-type-label text-emerald-600 mb-3">Arrivals</div>
+                  <div id="daySummaryArrivals"></div>
+                </div>
+                <!-- Departures -->
+                <div class="px-4 py-4">
+                  <div class="summary-type-label text-amber-500 mb-3">Departures</div>
+                  <div id="daySummaryDepartures"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
-      <button onclick="loadBriefing(true)"
-              class="shrink-0 text-xs text-indigo-400 hover:text-indigo-600
-                     font-medium whitespace-nowrap mt-0.5 transition-colors">
-        ↺ Refresh
-      </button>
-    </div>
-  </div>
+    </div><!-- /col-left -->
 
-  <!-- Error state -->
-  <div id="briefingError"
-       class="hidden bg-red-50 border border-red-200 rounded-xl px-5 py-3 mb-6 text-sm text-red-700">
-    <span class="font-semibold">Briefing unavailable.</span>
-    <span id="briefingErrorDetail" class="ml-1"></span>
-  </div>
 
-  </div><!-- /briefingSection -->
+    <!-- ════════════════════════════════════════
+         CENTER — Calendar + Routes
+    ════════════════════════════════════════ -->
+    <div class="col-center">
 
-  {% if routes %}
+      {% if routes %}
 
-  <!-- ── TEAM TABS ── -->
-  <div class="flex gap-1 flex-wrap mb-4" id="teamTabsRow">
-    <button onclick="selectTeam(null)"
-            id="teamTab-all"
-            class="team-tab px-3 py-1.5 rounded-full text-xs font-medium border transition-colors
-                   border-gray-200 text-gray-500 hover:bg-gray-100">
-      All Teams
-    </button>
-    {% for t in teams %}
-    <button onclick="selectTeam({{ t.id }})"
-            id="teamTab-{{ t.id }}"
-            class="team-tab px-3 py-1.5 rounded-full text-xs font-medium border transition-colors
-                   border-gray-200 text-gray-500 hover:bg-gray-100">
-      {{ t.name }}
-    </button>
-    {% endfor %}
-  </div>
-
-  <!-- ── CALENDAR ── -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
-
-    <!-- Month navigation -->
-    <div class="month-nav flex items-center justify-between mb-4">
-      <button onclick="changeMonth(-1)">← Prev</button>
-      <div id="monthLabel" class="font-bold text-gray-800 text-base"></div>
-      <button onclick="changeMonth(1)">Next →</button>
-    </div>
-
-    <!-- Day-of-week headers -->
-    <div class="cal-grid mb-1">
-      {% for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
-      <div class="cal-day-header">{{ d }}</div>
-      {% endfor %}
-    </div>
-
-    <!-- Calendar cells (built by JS) -->
-    <div class="cal-grid" id="calGrid"></div>
-  </div>
-
-  <!-- ── STAFF LIST ── -->
-  <div id="staffSection" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
-    <div id="staffContent"></div>
-  </div>
-
-  <!-- ── DAY DETAIL ── -->
-  <div id="dayDetail">
-    <div id="dayDetailEmpty" class="text-center py-10 text-gray-400 text-sm">
-      Click a day on the calendar to see its routes.
-    </div>
-    <div id="dayDetailContent" class="hidden">
-      <div class="flex items-center justify-between mb-3">
-        <h3 id="dayDetailTitle" class="font-bold text-gray-800 text-lg"></h3>
-        <span id="dayDetailCount" class="text-xs text-gray-400"></span>
+      <!-- Team tabs -->
+      <div class="flex gap-1 flex-wrap mb-4" id="teamTabsRow">
+        <button onclick="selectTeam(null)"
+                id="teamTab-all"
+                class="team-tab px-3 py-1.5 rounded-full text-xs font-medium border
+                       transition-colors border-gray-200 text-gray-500 hover:bg-gray-100">
+          All Teams
+        </button>
+        {% for t in teams %}
+        <button onclick="selectTeam({{ t.id }})"
+                id="teamTab-{{ t.id }}"
+                class="team-tab px-3 py-1.5 rounded-full text-xs font-medium border
+                       transition-colors border-gray-200 text-gray-500 hover:bg-gray-100">
+          {{ t.name }}
+        </button>
+        {% endfor %}
       </div>
 
-      <!-- Arrivals / Departures summary -->
-      <div id="daySummaryPanel" class="hidden mb-5 grid grid-cols-2 gap-3">
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3">
-          <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Arrivals</div>
-          <div id="daySummaryArrivals" class="space-y-2 text-sm"></div>
+      <!-- Calendar -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-4">
+        <div class="month-nav flex items-center justify-between mb-4">
+          <button onclick="changeMonth(-1)">← Prev</button>
+          <div id="monthLabel" class="font-bold text-gray-800 text-base"></div>
+          <button onclick="changeMonth(1)">Next →</button>
         </div>
-        <div class="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3">
-          <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Departures</div>
-          <div id="daySummaryDepartures" class="space-y-2 text-sm"></div>
+        <div class="cal-grid mb-1">
+          {% for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
+          <div class="cal-day-header">{{ d }}</div>
+          {% endfor %}
         </div>
+        <div class="cal-grid" id="calGrid"></div>
       </div>
-      <div id="daySummaryLoading" class="hidden text-xs text-gray-400 mb-4 text-center">Loading arrivals &amp; departures…</div>
 
+      <!-- Staff section -->
+      <div id="staffSection"
+           class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+        <div id="staffContent"></div>
+      </div>
+
+      <!-- Routes list (populated by JS when a day is selected) -->
       <div id="dayDetailRoutes" class="space-y-3"></div>
-    </div>
-  </div>
 
-  {% else %}
-  <div class="text-center py-20 text-gray-400">
-    <div class="text-5xl mb-4">🗺</div>
-    <p class="text-lg font-medium">No saved routes yet</p>
-    <p class="text-sm mt-1">Optimize a route on the map and save it to see it here.</p>
-  </div>
-  {% endif %}
+      {% else %}
 
+      <div class="text-center py-20 text-gray-400">
+        <div class="text-5xl mb-4">🗺</div>
+        <p class="text-lg font-medium">No saved routes yet</p>
+        <p class="text-sm mt-1">Optimize a route on the map and save it to see it here.</p>
+      </div>
+
+      {% endif %}
+
+    </div><!-- /col-center -->
+
+
+    <!-- ════════════════════════════════════════
+         RIGHT — AI Briefing
+    ════════════════════════════════════════ -->
+    <div class="col-right">
+      <div id="briefingSection">
+        <div class="briefing-sticky bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+
+          <!-- Card header -->
+          <div class="px-5 py-3.5 border-b border-indigo-100 flex items-center gap-2"
+               style="background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);">
+            <span class="text-indigo-400 font-bold text-base leading-none">✦</span>
+            <span class="text-sm font-semibold text-indigo-700 tracking-wide">AI Briefing</span>
+          </div>
+
+          <!-- Notes -->
+          <div class="px-5 pt-4 pb-3">
+            <div class="flex items-center justify-between mb-2">
+              <label class="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                Notes for today
+              </label>
+              <span id="notesSaveStatus" class="text-xs text-gray-400"></span>
+            </div>
+            <textarea id="briefingNotes" rows="5"
+                      placeholder="Road closures, staff changes, special requests, anything unusual today…"
+                      class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm
+                             text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300
+                             resize-none placeholder-gray-300"
+                      style="background:#fafafa;"></textarea>
+            <div class="flex justify-end mt-2.5">
+              <button onclick="saveNotes()"
+                      class="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-medium
+                             px-4 py-1.5 rounded-lg transition-colors">
+                Save Notes
+              </button>
+            </div>
+          </div>
+
+          <!-- Divider -->
+          <div style="border-top:1px solid #f3f4f6; margin:0 20px;"></div>
+
+          <!-- Generate / Loading / Card / Error -->
+          <div class="px-5 py-4">
+
+            <!-- Prompt button -->
+            <div id="briefingPrompt">
+              <button onclick="startBriefing()"
+                      class="w-full rounded-xl px-4 py-3 flex items-center gap-2.5 text-sm
+                             text-indigo-500 hover:text-indigo-700 transition-colors text-left"
+                      style="background:linear-gradient(135deg,#eef2ff,#f5f3ff);
+                             border:1px solid #e0e7ff;">
+                <span class="text-indigo-400 font-bold shrink-0">✦</span>
+                <span class="font-medium">Generate today's briefing</span>
+                <span class="ml-auto text-xs text-indigo-300 font-normal whitespace-nowrap">~$0.001</span>
+              </button>
+            </div>
+
+            <!-- Loading -->
+            <div id="briefingLoading"
+                 class="hidden flex items-center gap-3 py-2 text-sm text-gray-500">
+              <div class="w-4 h-4 border-2 border-indigo-200 border-t-indigo-500
+                          rounded-full animate-spin shrink-0"></div>
+              <span>Generating briefing…</span>
+            </div>
+
+            <!-- Result -->
+            <div id="briefingCard" class="hidden">
+              <div class="flex items-start justify-between gap-2 mb-2">
+                <div id="briefingDateLabel"
+                     class="text-xs font-semibold text-indigo-500 uppercase tracking-wide leading-snug">
+                </div>
+                <button onclick="loadBriefing(true)"
+                        class="shrink-0 text-xs text-indigo-400 hover:text-indigo-600
+                               font-medium whitespace-nowrap transition-colors">
+                  ↺ Refresh
+                </button>
+              </div>
+              <p id="briefingText" class="text-sm text-gray-600 leading-relaxed mb-3"></p>
+              <ul id="briefingRouteList" class="space-y-1.5 text-sm"></ul>
+            </div>
+
+            <!-- Error -->
+            <div id="briefingError"
+                 class="hidden rounded-xl px-4 py-3 text-sm text-red-700"
+                 style="background:#fef2f2; border:1px solid #fecaca;">
+              <span class="font-semibold">Briefing unavailable.</span>
+              <span id="briefingErrorDetail" class="ml-1"></span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div><!-- /col-right -->
+
+  </div><!-- /routes-3col -->
 </div>
 
 <script>
@@ -290,19 +373,20 @@ async function loadDaySummary(ds) {
       for (const kind of ["guest", "owner", "lease"]) {
         const items = groups[kind] || [];
         if (!items.length) continue;
-        html += `<div class="mb-1">
-          <span class="text-xs font-bold uppercase tracking-wide ${TYPE_COLORS[kind] || 'text-gray-500'}">
-            ${TYPE_LABELS[kind]} · ${items.length}
-          </span>
-          <ul class="mt-0.5 space-y-0.5">
+        html += `<div style="margin-bottom:10px;">
+          <div class="summary-type-label ${TYPE_COLORS[kind] || 'text-gray-500'}" style="margin-bottom:5px;">
+            ${TYPE_LABELS[kind]} <span style="opacity:0.6;">· ${items.length}</span>
+          </div>
+          <ul style="margin:0;padding:0;list-style:none;">
             ${items.map(p => `
-              <li class="text-gray-600 text-xs leading-snug truncate" title="${p.name}">
-                ${p.name}${p.time ? ` <span class="text-gray-400">${p.time}</span>` : ""}
+              <li class="summary-prop" style="margin-bottom:3px;" title="${p.name}">
+                <span class="summary-prop-name">${p.name}</span>
+                ${p.time ? `<span class="summary-prop-time">${p.time}</span>` : ""}
               </li>`).join("")}
           </ul>
         </div>`;
       }
-      el.innerHTML = html || '<span class="text-gray-400 text-xs">None</span>';
+      el.innerHTML = html || '<span style="font-size:0.75rem;color:#9ca3af;font-style:italic;">None</span>';
     }
 
     renderGroup(arrEl, data.arrivals   || {});
@@ -338,7 +422,6 @@ async function loadBriefing(force = false) {
       (data.routes || []).forEach(r => {
         const div = document.createElement("div");
         div.className = "text-sm leading-snug";
-
         const tech = r.assigned_to
           ? `<strong class="text-gray-900">${r.assigned_to}</strong> — `
           : "";
@@ -377,8 +460,8 @@ const allRoutes = [
   }{{ "," if not loop.last }}
   {% endfor %}
 ];
-const TODAY_STR   = "{{ now_date }}";
-const ALL_TEAMS   = {{ teams | tojson }};
+const TODAY_STR    = "{{ now_date }}";
+const ALL_TEAMS    = {{ teams | tojson }};
 const USER_TEAM_ID = {{ user_team_id | tojson }};
 
 /* ── Default to the logged-in user's own team ── */
@@ -386,7 +469,7 @@ const PS_TEAM    = ALL_TEAMS.find(t => t.name === "Property Specialist");
 const PS_TEAM_ID = PS_TEAM ? PS_TEAM.id : null;
 let selectedTeamId = USER_TEAM_ID !== null ? USER_TEAM_ID : PS_TEAM_ID;
 
-/* ── Dot colors: Property Specialist = purple, others cycle a palette ── */
+/* ── Dot colors ── */
 const TEAM_DOT_COLORS = {};
 const _dotPalette = ['#059669', '#d97706', '#7c3aed', '#0891b2', '#e11d48'];
 let _paletteIdx = 0;
@@ -394,9 +477,9 @@ ALL_TEAMS.forEach(t => {
   TEAM_DOT_COLORS[t.id] = (t.name === 'Property Specialist') ? '#6366f1' : _dotPalette[_paletteIdx++];
 });
 
-/* ── Build a filtered map: dateStr → [route, ...] based on selectedTeamId ── */
-let routesByDate  = {};
-let activityByDate = {};   // {dateStr: {arrivals, departures, leases}}
+/* ── Build a filtered map: dateStr → [route, ...] ── */
+let routesByDate   = {};
+let activityByDate = {};
 
 function buildRoutesByDate() {
   routesByDate = {};
@@ -412,18 +495,16 @@ function buildRoutesByDate() {
 
 function selectTeam(teamId) {
   selectedTeamId = teamId;
-  // Update tab styles
   document.querySelectorAll(".team-tab").forEach(btn => {
     btn.classList.remove("bg-indigo-600", "text-white", "border-indigo-600");
     btn.classList.add("border-gray-200", "text-gray-500");
   });
-  const activeId = teamId ? `teamTab-${teamId}` : "teamTab-all";
+  const activeId  = teamId ? `teamTab-${teamId}` : "teamTab-all";
   const activeBtn = document.getElementById(activeId);
   if (activeBtn) {
     activeBtn.classList.remove("border-gray-200", "text-gray-500");
     activeBtn.classList.add("bg-indigo-600", "text-white", "border-indigo-600");
   }
-  // Briefing section only shows on the Property Specialist tab
   const isPS = teamId === PS_TEAM_ID;
   document.getElementById("briefingSection").classList.toggle("hidden", !isPS);
   if (isPS) {
@@ -432,21 +513,19 @@ function selectTeam(teamId) {
     document.getElementById("briefingLoading").classList.add("hidden");
     document.getElementById("briefingError").classList.add("hidden");
   }
-  // Rebuild calendar with filtered routes
   buildRoutesByDate();
   buildCalendar();
-  // Re-select current day if one is selected
   if (selectedDate) selectDay(selectedDate);
 }
 
 buildRoutesByDate();
 
 /* ── Calendar state ── */
-const todayParts  = TODAY_STR.split("-").map(Number);
-let calYear  = todayParts[0];
-let calMonth = todayParts[1];
-let selectedDate = null;
-let staffEntries = [];
+const todayParts = TODAY_STR.split("-").map(Number);
+let calYear   = todayParts[0];
+let calMonth  = todayParts[1];
+let selectedDate  = null;
+let staffEntries  = [];
 
 function dateStr(y, m, d) {
   return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
@@ -454,16 +533,12 @@ function dateStr(y, m, d) {
 function monthLabel(y, m) {
   return new Date(y, m - 1, 1).toLocaleString('default', { month:'long', year:'numeric' });
 }
-function daysInMonth(y, m) {
-  return new Date(y, m, 0).getDate();
-}
-function firstDayOfWeek(y, m) {
-  return new Date(y, m - 1, 1).getDay();
-}
+function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
+function firstDayOfWeek(y, m) { return new Date(y, m - 1, 1).getDay(); }
 
 function buildCalendar() {
   document.getElementById("monthLabel").textContent = monthLabel(calYear, calMonth);
-  const grid     = document.getElementById("calGrid");
+  const grid = document.getElementById("calGrid");
   grid.innerHTML = "";
 
   const startDow = firstDayOfWeek(calYear, calMonth);
@@ -476,7 +551,7 @@ function buildCalendar() {
   }
 
   for (let d = 1; d <= days; d++) {
-    const ds    = dateStr(calYear, calMonth, d);
+    const ds     = dateStr(calYear, calMonth, d);
     const routes = routesByDate[ds] || [];
     const isToday    = ds === TODAY_STR;
     const isSelected = ds === selectedDate;
@@ -506,7 +581,6 @@ function buildCalendar() {
       cell.appendChild(dotRow);
     }
 
-    // Breezeway activity badges only make sense on the Property Specialist tab
     if (selectedTeamId === PS_TEAM_ID) {
       const act = activityByDate[ds];
       if (act && (act.arrivals || act.departures)) {
@@ -519,7 +593,6 @@ function buildCalendar() {
     }
 
     cell.addEventListener("click", () => selectDay(ds));
-
     grid.appendChild(cell);
   }
 }
@@ -538,24 +611,21 @@ async function loadCalendarActivity(year, month) {
     const data = await res.json();
     activityByDate = {...activityByDate, ...data};
     buildCalendar();
-  } catch (e) { /* fail silently — calendar works without activity */ }
+  } catch (e) {}
 }
 
 function selectDay(ds) {
   selectedDate = ds;
   buildCalendar();
 
-  // Update "+ New Route" link to pre-fill this date
   const newRouteBtn = document.getElementById("newRouteBtn");
   if (newRouteBtn) newRouteBtn.href = `/?date=${ds}`;
 
-  // Reset briefing UI for the newly selected day
   document.getElementById("briefingPrompt").classList.remove("hidden");
   document.getElementById("briefingCard").classList.add("hidden");
   document.getElementById("briefingLoading").classList.add("hidden");
   document.getElementById("briefingError").classList.add("hidden");
 
-  // Show staff section immediately with empty state; loadNotes() fills it in
   staffEntries = [];
   document.getElementById("staffSection").classList.remove("hidden");
   _renderStaffSection();
@@ -571,7 +641,6 @@ function selectDay(ds) {
   document.getElementById("dayDetailCount").textContent =
     routes.length + " route" + (routes.length !== 1 ? "s" : "");
 
-  // Load arrivals/departures summary
   loadDaySummary(ds);
 
   const container = document.getElementById("dayDetailRoutes");
@@ -608,7 +677,6 @@ function selectDay(ds) {
     if (route.distance)       metaHtml += `<span>🛣 ${(route.distance/1609).toFixed(1)} mi</span>`;
     meta.innerHTML = metaHtml;
     info.appendChild(meta);
-
     div.appendChild(info);
 
     const btns = document.createElement("div");
@@ -637,7 +705,6 @@ function selectDay(ds) {
         const res = await fetch(`/routes/${route.id}/delete`, { method: "POST" });
         const data = await res.json();
         if (data.error) { alert("Delete failed: " + data.error); delBtn.disabled = false; delBtn.textContent = "Delete"; return; }
-        // Remove from local data and re-render the day
         routesByDate[selectedDate] = (routesByDate[selectedDate] || []).filter(r => r.id !== route.id);
         buildCalendar();
         selectDay(selectedDate);
@@ -679,7 +746,7 @@ function _renderStaffSection() {
     ${has ? '<button onclick="deleteStaffList()" class="text-xs text-red-400 hover:text-red-600 font-medium transition-colors">Delete all</button>' : ''}
   </div>`;
   staffEntries.forEach((entry, i) => {
-    const d = entry.saved_at ? new Date(entry.saved_at) : null;
+    const d   = entry.saved_at ? new Date(entry.saved_at) : null;
     const lbl = d ? d.toLocaleDateString("en-US", {month:"short", day:"numeric"}) : "";
     if (i === 0) {
       html += `<div class="flex items-start justify-between gap-2 mb-2">
@@ -781,19 +848,16 @@ async function saveNotes() {
 
 document.addEventListener("DOMContentLoaded", () => {
   loadNotes();
-  // Activate the default team tab
   const defaultTabId = selectedTeamId ? `teamTab-${selectedTeamId}` : "teamTab-all";
-  const defaultTab = document.getElementById(defaultTabId);
+  const defaultTab   = document.getElementById(defaultTabId);
   if (defaultTab) {
     defaultTab.classList.remove("border-gray-200", "text-gray-500");
     defaultTab.classList.add("bg-indigo-600", "text-white", "border-indigo-600");
   }
-  // Show briefing section only when starting on Property Specialist tab
   document.getElementById("briefingSection").classList.toggle("hidden", selectedTeamId !== PS_TEAM_ID);
   buildCalendar();
   loadCalendarActivity(calYear, calMonth);
 
-  // If redirected from save with ?date=, jump straight to that day
   const urlDate = new URLSearchParams(window.location.search).get("date");
   if (urlDate) {
     const parts = urlDate.split("-").map(Number);
@@ -812,8 +876,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .sort();
     if (futureDates.length) {
       const parts = futureDates[0].split("-").map(Number);
-      calYear  = parts[0];
-      calMonth = parts[1];
+      calYear = parts[0]; calMonth = parts[1];
       buildCalendar();
       selectDay(futureDates[0]);
     } else {
@@ -822,8 +885,7 @@ document.addEventListener("DOMContentLoaded", () => {
         .sort().reverse();
       if (pastDates.length) {
         const parts = pastDates[0].split("-").map(Number);
-        calYear  = parts[0];
-        calMonth = parts[1];
+        calYear = parts[0]; calMonth = parts[1];
         buildCalendar();
         selectDay(pastDates[0]);
       }
