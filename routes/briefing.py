@@ -639,7 +639,7 @@ def pri_check():
         today = date_cls.today()
 
     scan_end = today + timedelta(days=60)
-    far_end  = today + timedelta(days=60)   # same window for vacancy check
+    far_end  = today + timedelta(days=150)  # look further ahead to find what follows late checkouts
 
     token = _get_breezeway_token()
     if not token:
@@ -650,15 +650,25 @@ def pri_check():
     far_end_str  = far_end.isoformat()
 
     # Short-term guest checkouts in next 60 days
-    checkouts = _fetch_bw_reservations(token, {
+    raw_checkouts = _fetch_bw_reservations(token, {
         "checkout_date_ge": today_str,
         "checkout_date_le": scan_end_str,
     })
-    # All upcoming reservations in next 60 days (to find what follows each checkout)
-    upcoming = _fetch_bw_reservations(token, {
+    # All upcoming reservations in next 150 days (to find what follows each checkout)
+    raw_upcoming = _fetch_bw_reservations(token, {
         "checkin_date_ge": today_str,
         "checkin_date_le": far_end_str,
     })
+
+    # Validate dates server-side — Breezeway may not filter precisely for range queries
+    checkouts = [
+        r for r in raw_checkouts
+        if today_str <= (r.get("checkout_date") or "")[:10] <= scan_end_str
+    ]
+    upcoming = [
+        r for r in raw_upcoming
+        if (r.get("checkin_date") or "")[:10] >= today_str
+    ]
 
     # Group upcoming by property, sorted ascending by checkin date
     by_prop = {}
