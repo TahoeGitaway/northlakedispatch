@@ -68,6 +68,7 @@ function clearRouteStale() {
 async function optimizeRoute(useGoogleMatrix = false) {
   if (!selectedStops.length) { alert("Add at least one stop first."); return; }
   clearRouteStale();
+  _lunchWasMoved = false;
 
   // If re-optimizing an existing route, rebuild selectedStops from the current
   // schedule (captures any service-time / check-in changes made post-optimize)
@@ -123,8 +124,13 @@ async function optimizeRoute(useGoogleMatrix = false) {
     isOptimized = true;
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
-    if (getLunchEnabled()) insertLunchAt(lunchMins);
-    recalculateTimes();
+    if (getLunchEnabled()) {
+      insertLunchAt(lunchMins);
+      recalculateTimes();
+      if (_guardLunchAgainstCheckins()) recalculateTimes();
+    } else {
+      recalculateTimes();
+    }
 
     lastStats = {
       total_duration:   data.total_duration,
@@ -145,6 +151,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
     if (data.total_duration > 10 * 3600) warns.push("⚠ Route exceeds 10-hour shift.");
     if (data.late_priority_checkins?.length) warns.push(`⚠ Priority check-ins after 12PM: ${data.late_priority_checkins.join(", ")}`);
     if (data.late_checkins?.length) warns.push(`⚠ Late check-ins (after 4PM): ${data.late_checkins.join(", ")}`);
+    if (_lunchWasMoved) warns.push("⚠ Lunch moved after last check-in — check-ins take priority over efficiency.");
     if (warns.length) {
       wb.classList.remove("hidden");
       wb.classList.add((data.late_checkins?.length || data.late_priority_checkins?.length) ? "deadline-warning" : "shift-warning");

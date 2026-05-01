@@ -96,6 +96,33 @@ function insertLunchAt(etaMinutes) {
   optimizedSchedule.splice(idx, 0, makeLunchSentinel(etaMinutes));
 }
 
+let _lunchWasMoved = false; // set true when lunch is auto-relocated to protect check-ins
+
+/**
+ * If the current lunch position makes any check-in stop late (finish > 4 PM),
+ * moves lunch to immediately after the last check-in stop.
+ * Must be called AFTER recalculateTimes() has set stop.late.
+ * Returns true if lunch was moved.
+ */
+function _guardLunchAgainstCheckins() {
+  if (!optimizedSchedule.find(s => s.isLunch)) return false;
+  const anyLate = optimizedSchedule.some(
+    s => !s.isLunch && !s.isGap && s.arrival && s.late
+  );
+  if (!anyLate) return false;
+
+  _lunchWasMoved = true;
+  // Remove lunch, then find the last check-in stop index
+  optimizedSchedule = optimizedSchedule.filter(s => !s.isLunch);
+  let lastCheckinIdx = -1;
+  for (let i = 0; i < optimizedSchedule.length; i++) {
+    if (optimizedSchedule[i].arrival) lastCheckinIdx = i;
+  }
+  // Insert lunch right after the last check-in (eta placeholder; recalculate will fix it)
+  optimizedSchedule.splice(Math.max(0, lastCheckinIdx + 1), 0, makeLunchSentinel(0));
+  return true;
+}
+
 function toggleLunch() {
   if (!isOptimized) return;
   if (!getLunchEnabled()) {
@@ -104,6 +131,10 @@ function toggleLunch() {
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     insertLunchAt(lunchMins);
     recalculateTimes();
+    if (_guardLunchAgainstCheckins()) {
+      recalculateTimes();
+      _showLunchMovedWarning();
+    }
   }
   renderSchedule();
 }
@@ -112,7 +143,19 @@ function moveLunchTo(lunchMins) {
   if (!isOptimized || !getLunchEnabled()) return;
   insertLunchAt(lunchMins);
   recalculateTimes();
+  if (_guardLunchAgainstCheckins()) {
+    recalculateTimes();
+    _showLunchMovedWarning();
+  }
   renderSchedule();
+}
+
+function _showLunchMovedWarning() {
+  const wb = document.getElementById("warningBox");
+  if (!wb) return;
+  wb.classList.remove("hidden", "shift-warning");
+  wb.classList.add("deadline-warning");
+  wb.innerHTML = "⚠ Lunch moved after last check-in — check-ins take priority over efficiency.";
 }
 
 /* ── SETTERS ── */

@@ -23,10 +23,9 @@
       <span>⚠️</span> Before acting on these results, read this
     </div>
     <ul class="space-y-1.5 text-amber-800 text-xs list-none pl-1">
-      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Owner Next status is pulled from Streamline reservations via the Breezeway API.</strong> The flag shown here reflects what Breezeway has synced from Streamline at the time of this scan — it is not live data from Streamline directly.</span></li>
-      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>There may be a lag between Streamline and Breezeway.</strong> A reservation added or modified in Streamline may not appear here immediately. When in doubt, verify directly in Streamline.</span></li>
-      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>This does not reflect tasks in the system.</strong> A property appearing here as "needs tag" or "vacancy PRI" does not mean a task has been created — that step must still be done manually in Breezeway.</span></li>
-      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Workflow failure can still occur.</strong> This tool identifies properties that need action — it does not confirm the action was completed. Always verify PRI tasks are created and assigned.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Owner Next status is pulled from the Breezeway API.</strong> The tag lives on the owner reservation that arrives after the PRI — not on the departing guest reservation.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>This reflects what Breezeway has synced from Streamline at scan time — not live Streamline data.</strong> There may be a lag: a reservation added or modified in Streamline may not appear here immediately.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>This report pulls reservation data, not tasks.</strong> Breezeway's task workflow occasionally fails, so the existence of a PRI task in the system is not guaranteed even if the tag is present.</span></li>
     </ul>
   </div>
 
@@ -62,6 +61,34 @@
 
 <script>
 let _days = 30;
+
+/* ── Vacancy dismissal (persists in localStorage) ── */
+const DISMISS_KEY = "pri_vacancy_dismissed";
+
+function _dismissed() {
+  try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function _vacancyKey(p) { return `${p.property}::${p.checkout_date}`; }
+
+function dismissVacancy(key, cardEl) {
+  const d = _dismissed();
+  d[key]  = Date.now();
+  localStorage.setItem(DISMISS_KEY, JSON.stringify(d));
+  cardEl.style.transition = "opacity 0.25s";
+  cardEl.style.opacity    = "0";
+  setTimeout(() => cardEl.remove(), 260);
+  // Update the hidden count badge
+  const badge = document.getElementById("vacancyDismissedBadge");
+  if (badge) badge.textContent = Object.keys(_dismissed()).length + " dismissed";
+}
+
+function clearAllDismissed() {
+  localStorage.removeItem(DISMISS_KEY);
+  load();
+}
+
 
 function setMode(d) {
   _days = d;
@@ -121,15 +148,28 @@ function redCard(p) {
 }
 
 function orangeCard(p) {
-  const co = _fmtDate(p.checkout_date);
+  const co  = _fmtDate(p.checkout_date);
+  const key = _vacancyKey(p);
   const vacLine = p.vacancy_days
     ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">${p.vacancy_days}+-day vacancy (no booking in 60-day window)</div>` : "";
-  return _card("#fff7ed", "#fed7aa", `
-    <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
-    <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
-    ${vacLine}
-    <div style="font-size:0.75rem;font-weight:500;color:#ea580c;margin-top:4px;">Create vacancy PRI manually</div>
+  const card = _card("#fff7ed", "#fed7aa", `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <div style="min-width:0;">
+        <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
+        <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
+        ${vacLine}
+        <div style="font-size:0.75rem;font-weight:500;color:#ea580c;margin-top:4px;">Create vacancy PRI manually</div>
+      </div>
+      <button class="dismiss-btn" data-key="${key}"
+              style="flex-shrink:0;font-size:0.7rem;font-weight:600;color:#92400e;
+                     background:#fde68a;border:1px solid #f59e0b;border-radius:6px;
+                     padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
+        ✓ Done
+      </button>
+    </div>
   `);
+  card.querySelector(".dismiss-btn").addEventListener("click", () => dismissVacancy(key, card));
+  return card;
 }
 
 function greenCard(p) {
@@ -164,8 +204,14 @@ async function load() {
 
     const needs  = data.needs_tag      || [];
     const done   = data.already_tagged || [];
-    const vacant = data.no_booking     || [];
-    const total  = needs.length + done.length + vacant.length;
+    const allVacant = data.no_booking  || [];
+
+    // Filter dismissed vacancy items
+    const dismissed = _dismissed();
+    const vacant    = allVacant.filter(p => !dismissed[_vacancyKey(p)]);
+    const hiddenCt  = allVacant.length - vacant.length;
+
+    const total = needs.length + done.length + allVacant.length;
 
     document.getElementById("subtitle").textContent =
       `Through ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
@@ -181,7 +227,29 @@ async function load() {
       const s2 = buildSection("🟠 Create vacancy PRI",   "#f97316", vacant, orangeCard);
       const s3 = buildSection("🟢 Already tagged",       "#059669", done, greenCard);
       if (s1) resultsEl.appendChild(s1);
-      if (s2) resultsEl.appendChild(s2);
+      if (s2) {
+        resultsEl.appendChild(s2);
+        if (hiddenCt > 0) {
+          const note = document.createElement("div");
+          note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-top:-2px;margin-bottom:14px;";
+          note.innerHTML = `<span id="vacancyDismissedBadge">${hiddenCt} dismissed</span> ·
+            <button onclick="clearAllDismissed()"
+                    style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
+              Show all
+            </button>`;
+          resultsEl.appendChild(note);
+        }
+      } else if (hiddenCt > 0) {
+        // All vacancies dismissed — show a note even with no section header
+        const note = document.createElement("div");
+        note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-bottom:14px;";
+        note.innerHTML = `${hiddenCt} vacancy PRI${hiddenCt === 1 ? "" : "s"} dismissed ·
+          <button onclick="clearAllDismissed()"
+                  style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
+            Show all
+          </button>`;
+        resultsEl.appendChild(note);
+      }
       if (s3) resultsEl.appendChild(s3);
     }
 
