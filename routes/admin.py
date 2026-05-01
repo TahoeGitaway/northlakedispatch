@@ -51,7 +51,9 @@ def admin_users():
     )
     invites = cur.fetchall()
     cur.close(); conn.close()
-    return render_template("admin.html", users=users, invites=invites)
+    primary_admin_email = os.environ.get("PRIMARY_ADMIN_EMAIL", "operations@tahoegetaways.com")
+    is_primary = current_user.email.lower() == primary_admin_email.lower()
+    return render_template("admin.html", users=users, invites=invites, is_primary_admin=is_primary)
 
 
 @admin_bp.route("/admin/users/add", methods=["POST"])
@@ -129,6 +131,30 @@ def admin_reset_password(user_id):
     conn.commit()
     cur.close(); conn.close()
     flash("Password updated.", "success")
+    return redirect(url_for("admin.admin_users"))
+
+
+@admin_bp.route("/admin/users/<int:user_id>/role", methods=["POST"])
+@login_required
+@admin_required
+def admin_change_role(user_id):
+    primary_admin_email = os.environ.get("PRIMARY_ADMIN_EMAIL", "operations@tahoegetaways.com")
+    if current_user.email.lower() != primary_admin_email.lower():
+        flash("Only the primary admin can change user roles.", "error")
+        return redirect(url_for("admin.admin_users"))
+    if user_id == current_user.id:
+        flash("You cannot change your own role.", "error")
+        return redirect(url_for("admin.admin_users"))
+    new_role = request.form.get("role")
+    if new_role not in ("admin", "user"):
+        flash("Invalid role.", "error")
+        return redirect(url_for("admin.admin_users"))
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("UPDATE users SET role=%s WHERE id=%s", (new_role, user_id))
+    conn.commit()
+    cur.close(); conn.close()
+    flash(f"Role updated to '{new_role}'.", "success")
     return redirect(url_for("admin.admin_users"))
 
 
@@ -751,7 +777,6 @@ def knowledge_delete(entry_id):
 
 @admin_bp.route("/admin/chatbot")
 @login_required
-@admin_required
 def chatbot_page():
     return render_template("admin_chatbot.html")
 
@@ -765,7 +790,6 @@ def pri_check_page():
 
 @admin_bp.route("/admin/chatbot/chat", methods=["POST"])
 @login_required
-@admin_required
 def chatbot_chat():
     import anthropic
     from routes.briefing import (
@@ -939,44 +963,31 @@ def chatbot_chat():
         knowledge_section = ""
 
     system_prompt = (
-        knowledge_section +
-        "You are an AI operations assistant for Tahoe Getaways, a vacation rental company "
-        "in Lake Tahoe. You help the operations team understand their schedule, guest "
-        "arrivals and departures, and flag any issues.\n\n"
-        "Classification key used in the data below:\n"
-        "  GUEST  = paying guest stay\n"
-        "  OWNER  = owner stay or owner-booked reservation\n"
-        "  LEASE  = paying guest stay that is 30+ days (a long-term rental, still a paying guest — not an owner).\n"
-        "          Each reservation line includes checkin date, checkout date, and night count so you can\n"
-        "          identify leases yourself: any GUEST reservation with 30+ nights is a lease departure/arrival.\n"
-        "  BLOCK  = maintenance block, hold, or owner block — no guests, property unavailable\n\n"
-        "POST RENTAL INSPECTION (PRI)\n"
-        "A PRI is a 1-hour damage inspection required when a short-term GUEST stay (<30 days) "
-        "is followed by a non-guest reservation at the same property.\n\n"
-        "PRI is required when:\n"
-        "  - A short-term GUEST checks out AND the very next reservation at that property "
-        "is an OWNER stay or BLOCK (maintenance/hold)\n"
-        "  - OR there is no upcoming reservation at that property in the next 60 days "
-        "(vacancy PRI — created manually by ops)\n\n"
-        "How it is flagged in Breezeway:\n"
-        "  - The 'owner next' tag is added to the upcoming OWNER or BLOCK booking\n"
-        "  - This tag is added manually by operations once the need is identified\n"
-        "  - If no upcoming reservation exists, ops creates the inspection manually\n\n"
-        "When asked to find PRIs, look for GUEST departures in the loaded data where "
-        "the SAME property has an upcoming OWNER or BLOCK arrival. Report three groups:\n"
-        "  🔴 Needs tagging: next booking is OWNER/BLOCK but does NOT have [tags: owner next]\n"
-        "  🟢 Already tagged: next booking is OWNER/BLOCK and already has [tags: owner next]\n"
-        "  🟠 Vacancy PRI: guest checked out, no upcoming reservation visible in the loaded data\n"
-        "Note: you can only assess this within the dates loaded. If the upcoming OWNER/BLOCK "
-        "arrival falls outside the selected date range, you cannot confirm its tag status.\n\n"
-        "In the data below, each date section lists Arrivals (guests checking IN that day) "
-        "and Departures (guests checking OUT that day). The checkout date on each departure line "
-        "will match the section date.\n"
-        "Always address every date you were given, even if it has no routes, arrivals, or departures — "
-        "say so explicitly rather than skipping it.\n\n"
-        "Data loaded for the selected date(s):\n"
+        f"You are the TG Operations Bot for Tahoe Getaways. Staff: {current_user.name}.\n\n"
+        "RULES — follow exactly, no exceptions:\n"
+        "1. Answer ONLY from the context provided below (SOPs, policies, Breezeway data).\n"
+        "2. If you cannot answer from the provided context, respond: "
+        "\"I don't have that information. Please refer to [name the relevant source] or check with your manager.\"\n"
+        "3. Never guess, assume, or use general knowledge not present in this context.\n"
+        "4. Be as brief as possible. Use bullet points for multi-part answers.\n"
+        "5. Do not offer opinions, suggestions, or unrequested information.\n"
+        "6. When staff asks you to take a write action (save note, flag property, mark complete), "
+        "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
+        "Do not consider the action done until the staff member confirms.\n\n"
+        + knowledge_section
+        + "RESERVATION TYPES:\n"
+        "  GUEST = paying guest stay\n"
+        "  OWNER = owner stay or owner-booked reservation\n"
+        "  LEASE = paying guest stay of 30+ days (long-term rental — still a paying guest, not an owner)\n"
+        "  BLOCK = maintenance hold or owner block — no guests, property unavailable\n\n"
+        "POST RENTAL INSPECTION (PRI):\n"
+        "Required when a short-term GUEST (<30 days) checks out AND the next reservation at that "
+        "property is OWNER or BLOCK. Also required if no upcoming reservation within 60 days (vacancy PRI).\n"
+        "Flagged in Breezeway by adding 'owner next' tag to the incoming OWNER/BLOCK booking.\n"
+        "Groups: 🔴 Needs tagging · 🟢 Already tagged · 🟠 Vacancy PRI (no upcoming booking found).\n\n"
+        "LOADED DATA (routes + arrivals + departures for selected dates):\n"
         + "\n".join(context_blocks)
-        + "\n\nIf asked about something not in this data, say so clearly."
+        + "\n\nIf asked about anything outside this context, say you don't have that information."
     )
 
     key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -993,12 +1004,77 @@ def chatbot_chat():
             system     = system_prompt,
             messages   = trimmed,
         )
+        reply_text = resp.content[0].text
+        # Log the interaction (best-effort — never block the response)
+        try:
+            user_msg = messages[-1]["content"] if messages else ""
+            conn_log = get_db()
+            cur_log  = get_cursor(conn_log)
+            cur_log.execute(
+                "INSERT INTO bot_interactions "
+                "(user_id, session_id, query, response, dates_loaded, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (current_user.id, data.get("session_id", ""),
+                 user_msg, reply_text, json.dumps(dates),
+                 datetime.utcnow().isoformat()),
+            )
+            conn_log.commit()
+            cur_log.close(); conn_log.close()
+        except Exception:
+            pass
         return jsonify({
-            "reply":           resp.content[0].text,
+            "reply":           reply_text,
             "context_summary": context_summary,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/admin/chatbot/save-flag", methods=["POST"])
+@login_required
+def chatbot_save_flag():
+    """Save a bot-suggested action as a note on the given date's briefing."""
+    data        = request.get_json(force=True)
+    description = (data.get("description") or "").strip()
+    date_str    = (data.get("date") or "").strip()
+    if not description or not date_str:
+        return jsonify({"error": "description and date required"}), 400
+
+    note_line = f"[Bot flag — {current_user.name}: {description}]"
+    now       = datetime.utcnow().isoformat()
+    conn      = get_db()
+    cur       = get_cursor(conn)
+    cur.execute("SELECT note_text FROM briefing_notes WHERE note_date = %s", (date_str,))
+    row = cur.fetchone()
+    if row:
+        new_text = (row["note_text"] or "").rstrip() + "\n" + note_line
+        cur.execute(
+            "UPDATE briefing_notes SET note_text=%s, updated_by=%s, updated_at=%s WHERE note_date=%s",
+            (new_text, current_user.id, now, date_str),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO briefing_notes (note_date, note_text, updated_by, updated_at) VALUES (%s,%s,%s,%s)",
+            (date_str, note_line, current_user.id, now),
+        )
+    conn.commit()
+    cur.close(); conn.close()
+
+    # Log the action against the most recent interaction from this user
+    try:
+        conn_log = get_db()
+        cur_log  = get_cursor(conn_log)
+        cur_log.execute(
+            "UPDATE bot_interactions SET action_taken=%s "
+            "WHERE id = (SELECT id FROM bot_interactions WHERE user_id=%s ORDER BY id DESC LIMIT 1)",
+            (f"Saved flag: {description}", current_user.id),
+        )
+        conn_log.commit()
+        cur_log.close(); conn_log.close()
+    except Exception:
+        pass
+
+    return jsonify({"success": True})
 
 
 # ── Security overview page ────────────────────────────────────────

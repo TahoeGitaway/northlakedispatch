@@ -1,11 +1,13 @@
 {% extends "base.html" %}
-{% block title %}AI Operations Chat — North Lake Dispatch{% endblock %}
+{% block title %}Operations Bot — North Lake Dispatch{% endblock %}
 {% block content %}
 <div class="max-w-4xl mx-auto px-4 py-6">
 
   <div class="flex items-center gap-3 mb-5">
-    <h2 class="text-2xl font-bold text-gray-800">AI Operations Chat</h2>
-    <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">Admin Only</span>
+    <h2 class="text-2xl font-bold text-gray-800">Operations Bot</h2>
+    <span class="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-medium border border-indigo-200">
+      TG Staff Tool
+    </span>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -13,36 +15,12 @@
     <!-- LEFT: Date picker + context panel -->
     <div class="lg:col-span-1 space-y-4">
 
-      <!-- PRI Check -->
-      <div class="bg-white rounded-xl shadow-sm border border-amber-100 p-4">
-        <div class="text-xs font-bold text-amber-600 uppercase tracking-wide mb-1">PRI Check</div>
-        <p class="text-xs text-gray-400 mb-3 leading-relaxed">
-          Scans 60 days of guest checkouts from the selected date.
-          Flags properties where the next short-term or owner booking
-          is 30+ days away — those need an <em>Owner Next</em> tag in Breezeway.
-          Properties with no upcoming booking at all need a <em>Vacancy PRI</em> created.
-        </p>
-        <div class="flex gap-2 mb-1">
-          <input type="date" id="priStartDate"
-                 class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs
-                        focus:outline-none focus:ring-2 focus:ring-amber-300">
-          <button onclick="runPriCheck()"
-                  class="bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium
-                         px-3 py-1.5 rounded-lg transition-colors shrink-0">
-            Check
-          </button>
-        </div>
-        <!-- Results -->
-        <div id="priCheckResults" class="hidden mt-3 space-y-2 text-xs"></div>
-        <div id="priCheckLoading" class="hidden text-xs text-gray-400 mt-2 flex items-center gap-1.5">
-          <div class="w-3 h-3 border-2 border-amber-300 border-t-amber-500 rounded-full animate-spin"></div>
-          Checking…
-        </div>
-      </div>
-
       <!-- Date selector -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Dates to Assess</div>
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Dates to Load</div>
+        <p class="text-xs text-gray-400 mb-3 leading-relaxed">
+          Select dates to give the bot access to that day's arrivals, departures, and routes from Breezeway.
+        </p>
         <div id="selectedDates" class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]"></div>
         <div class="flex gap-2">
           <input type="date" id="datePicker"
@@ -62,22 +40,21 @@
 
       <!-- What the bot can see -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">What the Bot Can See</div>
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">Context Loaded</div>
         <div id="contextPanel" class="space-y-2 text-sm text-gray-500">
-          <p class="text-xs italic">Add dates and send a message to load data.</p>
+          <p class="text-xs italic text-gray-400">Add dates and send a message.</p>
         </div>
       </div>
 
-      <!-- System prompt toggle -->
-      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <button onclick="togglePrompt()"
-                class="text-xs font-bold text-gray-400 uppercase tracking-wide w-full text-left flex justify-between">
-          <span>System Prompt</span>
-          <span id="promptToggleIcon">▼ Show</span>
-        </button>
-        <pre id="systemPromptBox"
-             class="hidden mt-2 text-xs text-gray-600 whitespace-pre-wrap bg-gray-50
-                    border border-gray-100 rounded-lg p-3 overflow-y-auto max-h-64"></pre>
+      <!-- Bot info -->
+      <div class="bg-amber-50 rounded-xl border border-amber-100 p-4">
+        <div class="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2">How this bot works</div>
+        <ul class="text-xs text-amber-700 space-y-1.5 leading-relaxed">
+          <li>• Answers only from SOPs, policies, and loaded Breezeway data</li>
+          <li>• If it doesn't know, it says so — it never guesses</li>
+          <li>• Conversation resets when you leave this page</li>
+          <li>• All interactions are logged for ops review</li>
+        </ul>
       </div>
 
     </div>
@@ -88,15 +65,19 @@
       <div id="chatMessages"
            class="bg-white rounded-xl shadow-sm border border-gray-100 p-4
                   flex flex-col gap-3 overflow-y-auto"
-           style="min-height: 420px; max-height: 600px;">
-        <div class="text-center text-gray-400 text-sm py-10" id="emptyState">
-          Add dates and ask a question — I'll pull the route data and Breezeway arrivals/departures for those days.
+           style="min-height: 480px; max-height: 640px;">
+        <div class="text-center text-gray-400 text-sm py-12" id="emptyState">
+          <div class="text-3xl mb-3">🤖</div>
+          <div class="font-medium text-gray-500 mb-1">TG Operations Bot</div>
+          <div class="text-xs text-gray-400 max-w-xs mx-auto">
+            Add dates, then ask about arrivals, departures, PRIs, or company SOPs and policies.
+          </div>
         </div>
       </div>
 
       <div class="flex gap-2">
         <textarea id="chatInput" rows="2"
-                  placeholder="Ask about routes, arrivals, departures, PRIs…"
+                  placeholder="Ask about today's schedule, a property status, a policy, or a PRI…"
                   onkeydown="handleKey(event)"
                   class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm resize-none
                          focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
@@ -106,20 +87,22 @@
           Send
         </button>
       </div>
-      <p class="text-xs text-gray-400 -mt-1">Shift+Enter for new line · Enter to send</p>
+      <p class="text-xs text-gray-400 -mt-1">Shift+Enter for new line · Enter to send · Interactions are logged</p>
     </div>
 
   </div>
 </div>
 
 <script>
-const today = new Date().toISOString().slice(0, 10);
+const today      = new Date().toISOString().slice(0, 10);
+const SESSION_ID = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+
 document.getElementById("datePicker").value = today;
 
-let selectedDates = [];
+let selectedDates       = [];
 let conversationHistory = [];
-let lastSystemPrompt = "";
 
+/* ── Date management ── */
 function addDate() {
   const val = document.getElementById("datePicker").value;
   if (!val || selectedDates.includes(val)) return;
@@ -127,17 +110,14 @@ function addDate() {
   selectedDates.sort();
   renderDates();
 }
-
 function addToday() {
   document.getElementById("datePicker").value = today;
   addDate();
 }
-
 function removeDate(d) {
   selectedDates = selectedDates.filter(x => x !== d);
   renderDates();
 }
-
 function renderDates() {
   const el = document.getElementById("selectedDates");
   if (!selectedDates.length) {
@@ -153,33 +133,97 @@ function renderDates() {
   `).join("");
 }
 
+/* ── Chat input ── */
 function handleKey(e) {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 }
 
+/* ── Message rendering ── */
 function appendMessage(role, text) {
   document.getElementById("emptyState")?.remove();
   const box = document.getElementById("chatMessages");
+
+  // Check for CONFIRM_ACTION pattern in bot replies
+  const actionMatch = role === "assistant" && text.match(/CONFIRM_ACTION:\s*(.+)/i);
+  const actionDesc  = actionMatch ? actionMatch[1].trim() : null;
+  // Strip the CONFIRM_ACTION line from visible text
+  const displayText = actionDesc
+    ? text.replace(/CONFIRM_ACTION:\s*.+/i, "").trim()
+    : text;
+
   const div = document.createElement("div");
   div.className = role === "user"
     ? "self-end bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap"
     : "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
-  div.textContent = text;
+  div.textContent = displayText;
   box.appendChild(div);
+
+  // Confirmation UI for bot-suggested actions
+  if (actionDesc) {
+    const confirmDiv = document.createElement("div");
+    confirmDiv.className = "self-start flex items-center gap-2 mt-1";
+    confirmDiv.innerHTML = `
+      <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200
+                   rounded-xl px-3 py-1.5 leading-snug">
+        ⚠ <strong>Proposed action:</strong> ${escHtml(actionDesc)}
+      </span>
+      <button onclick="confirmAction(this, ${JSON.stringify(actionDesc)})"
+              class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-medium
+                     px-3 py-1.5 rounded-lg transition-colors">
+        ✓ Confirm
+      </button>
+      <button onclick="this.parentElement.remove()"
+              class="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1.5
+                     transition-colors">
+        ✗ Cancel
+      </button>`;
+    box.appendChild(confirmDiv);
+  }
+
   box.scrollTop = box.scrollHeight;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
 function appendThinking() {
   document.getElementById("emptyState")?.remove();
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
-  div.id = "thinking";
+  div.id        = "thinking";
   div.className = "self-start bg-gray-100 text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm italic";
   div.textContent = "Thinking…";
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
 
+/* ── Confirm action ── */
+async function confirmAction(btn, description) {
+  const container = btn.closest("div");
+  btn.disabled    = true;
+  btn.textContent = "Saving…";
+
+  const date = selectedDates[0] || today;
+  try {
+    const res  = await fetch("/admin/chatbot/save-flag", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ description, date }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      container.innerHTML = `<span class="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200
+        rounded-xl px-3 py-1.5">✓ Saved to notes for ${date}</span>`;
+    } else {
+      container.innerHTML = `<span class="text-xs text-red-500">Error: ${data.error}</span>`;
+    }
+  } catch (e) {
+    container.innerHTML = `<span class="text-xs text-red-500">Error: ${e.message}</span>`;
+  }
+}
+
+/* ── Context panel ── */
 function updateContextPanel(summary) {
   const el = document.getElementById("contextPanel");
   if (!summary || !summary.length) return;
@@ -190,28 +234,20 @@ function updateContextPanel(summary) {
         <div class="font-medium text-gray-700 text-xs mb-1">${s.date}</div>
         <div class="text-xs space-y-0.5 text-gray-500">
           <div>📋 ${s.routes} route${s.routes !== 1 ? "s" : ""}</div>
-          <div>✈ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
-          <div>🚪 ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
+          <div>↓ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
+          <div>↑ ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
         </div>
       </div>`;
   }).join("");
 }
 
-function togglePrompt() {
-  const box  = document.getElementById("systemPromptBox");
-  const icon = document.getElementById("promptToggleIcon");
-  const shown = !box.classList.contains("hidden");
-  box.classList.toggle("hidden", shown);
-  icon.textContent = shown ? "▼ Show" : "▲ Hide";
-  if (!shown && lastSystemPrompt) box.textContent = lastSystemPrompt;
-}
-
+/* ── Send message ── */
 async function sendMessage() {
   const input = document.getElementById("chatInput");
   const text  = input.value.trim();
   if (!text) return;
   if (!selectedDates.length) {
-    alert("Please add at least one date before chatting.");
+    alert("Please add at least one date so the bot can load Breezeway data.");
     return;
   }
 
@@ -224,7 +260,11 @@ async function sendMessage() {
     const res  = await fetch("/admin/chatbot/chat", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ messages: conversationHistory, dates: selectedDates }),
+      body:    JSON.stringify({
+        messages:   conversationHistory,
+        dates:      selectedDates,
+        session_id: SESSION_ID,
+      }),
     });
     const data = await res.json();
     document.getElementById("thinking")?.remove();
@@ -238,11 +278,6 @@ async function sendMessage() {
     appendMessage("assistant", data.reply);
     conversationHistory.push({ role: "assistant", content: data.reply });
     updateContextPanel(data.context_summary);
-
-    if (data.system_prompt) {
-      lastSystemPrompt = data.system_prompt;
-      document.getElementById("systemPromptBox").textContent = lastSystemPrompt;
-    }
   } catch (e) {
     document.getElementById("thinking")?.remove();
     appendMessage("assistant", "Network error: " + e.message);
@@ -250,102 +285,7 @@ async function sendMessage() {
   }
 }
 
-// Pre-select today
+// Auto-select today
 addToday();
-
-// Pre-fill PRI date to today
-document.getElementById("priStartDate").value = today;
-
-async function runPriCheck() {
-  const startDate = document.getElementById("priStartDate").value || today;
-  const resultsEl = document.getElementById("priCheckResults");
-  const loadingEl = document.getElementById("priCheckLoading");
-
-  resultsEl.classList.add("hidden");
-  loadingEl.classList.remove("hidden");
-
-  try {
-    const res  = await fetch(`/briefing/pri-check?start_date=${startDate}`);
-    const data = await res.json();
-    loadingEl.classList.add("hidden");
-
-    if (data.error) {
-      resultsEl.innerHTML = `<div class="text-red-500">${data.error}</div>`;
-      resultsEl.classList.remove("hidden");
-      return;
-    }
-
-    const needs  = data.needs_tag      || [];
-    const done   = data.already_tagged || [];
-    const vacant = data.no_booking     || [];
-    const through = data.scanned_through || "";
-    const total  = needs.length + done.length + vacant.length;
-
-    let html = `<div class="text-gray-400 mb-2">Through ${through}</div>`;
-
-    if (!total) {
-      html += `<div class="text-gray-400 italic">No PRIs flagged in this window.</div>`;
-    }
-
-    if (needs.length) {
-      html += `<div class="font-bold text-red-500 mb-1">🔴 Needs Owner Next tag (${needs.length})</div>`;
-      needs.forEach(p => {
-        const co = _fmtDate(p.checkout_date);
-        const ci = _fmtDate(p.next_checkin);
-        const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
-        const vacLine = p.vacancy_days ? `<div class="text-gray-400" style="font-size:0.7rem;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
-        html += `<div class="rounded-lg bg-red-50 border border-red-100 px-3 py-2 mb-1">
-          <div class="font-medium text-gray-800 truncate" title="${p.property}">${p.property}</div>
-          <div class="text-gray-400">Guest out ${co} → ${typeLabel} in ${ci}</div>
-          ${vacLine}
-          <div class="text-red-500 font-medium mt-0.5">Add "owner next" tag in Breezeway on the incoming reservation</div>
-        </div>`;
-      });
-    }
-
-    if (vacant.length) {
-      html += `<div class="font-bold text-orange-500 mb-1 mt-2">🟠 Create vacancy PRI (${vacant.length})</div>`;
-      vacant.forEach(p => {
-        const co = _fmtDate(p.checkout_date);
-        const vacLine = p.vacancy_days ? `<div class="text-gray-400" style="font-size:0.7rem;">${p.vacancy_days}+-day vacancy (no booking in 60-day window)</div>` : "";
-        html += `<div class="rounded-lg bg-orange-50 border border-orange-100 px-3 py-2 mb-1">
-          <div class="font-medium text-gray-800 truncate" title="${p.property}">${p.property}</div>
-          <div class="text-gray-400">Guest out ${co} · no upcoming booking found</div>
-          ${vacLine}
-          <div class="text-orange-500 font-medium mt-0.5">Create vacancy PRI manually</div>
-        </div>`;
-      });
-    }
-
-    if (done.length) {
-      html += `<div class="font-bold text-emerald-600 mb-1 mt-2">🟢 Already tagged (${done.length})</div>`;
-      done.forEach(p => {
-        const co = _fmtDate(p.checkout_date);
-        const ci = _fmtDate(p.next_checkin);
-        const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
-        const vacLine = p.vacancy_days ? `<div class="text-gray-400" style="font-size:0.7rem;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
-        html += `<div class="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2 mb-1">
-          <div class="font-medium text-gray-700 truncate" title="${p.property}">${p.property}</div>
-          <div class="text-gray-400">Guest out ${co} → ${typeLabel} in ${ci}</div>
-          ${vacLine}
-          <div class="text-emerald-600 font-medium mt-0.5">✓ Owner Next tagged in Breezeway</div>
-        </div>`;
-      });
-    }
-
-    resultsEl.innerHTML = html;
-    resultsEl.classList.remove("hidden");
-  } catch (e) {
-    loadingEl.classList.add("hidden");
-    resultsEl.innerHTML = `<div class="text-red-500">Error: ${e.message}</div>`;
-    resultsEl.classList.remove("hidden");
-  }
-}
-
-function _fmtDate(ds) {
-  if (!ds) return "—";
-  const d = new Date(ds + "T00:00:00");
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
 </script>
 {% endblock %}

@@ -43,12 +43,14 @@ CACHE_TTL          = 15 * 60   # 15 minutes for briefing
 CALENDAR_CACHE_TTL = 30 * 60   # 30 minutes for calendar activity
 
 # ── In-memory caches ──────────────────────────────────────────────
-_briefing_cache:    dict  = {}   # {cache_key: (timestamp, payload)}
-_calendar_cache:    dict  = {}   # {(year, month): (timestamp, activity_dict)}
-_day_summary_cache: dict  = {}   # {date_str: (timestamp, payload)}
-_bw_token:          dict  = {"value": None, "expires_at": 0}
-_property_cache:    dict  = {}   # {property_id: name}
-_property_cache_ts: float = 0
+_briefing_cache:      dict  = {}   # {cache_key: (timestamp, payload)}
+_calendar_cache:      dict  = {}   # {(year, month): (timestamp, activity_dict)}
+_day_summary_cache:   dict  = {}   # {date_str: (timestamp, payload)}
+_prop_status_cache:   dict  = {}   # {property_id: (timestamp, payload)}
+_PROP_STATUS_TTL            = 20 * 60   # 20 minutes per property
+_bw_token:            dict  = {"value": None, "expires_at": 0}
+_property_cache:      dict  = {}   # {property_id: name}
+_property_cache_ts:   float = 0
 
 
 # ── Breezeway auth ────────────────────────────────────────────────
@@ -778,6 +780,108 @@ def pri_check():
         "scanned_through": report_end_str,
         "report_days":     report_days,
     })
+
+
+@briefing_bp.route("/briefing/property-status")
+@login_required
+def property_status():
+    """Return current occupancy status + upcoming bookings for one property (by name).
+    Results cached 20 minutes per property — zero cost on repeat clicks.
+    """
+    prop_name = (request.args.get("name") or "").strip()
+    if not prop_name:
+        return jsonify({"error": "name required"}), 400
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured"}), 500
+
+    # Reverse-lookup: name → property_id using the existing property cache
+    _ensure_property_cache()
+    pid = next((k for k, v in _property_cache.items()
+                if v.lower() == prop_name.lower()), None)
+    if not pid:
+        return jsonify({"error": f"Property not found in Breezeway: {prop_name}"}), 404
+
+    # Serve from cache if fresh
+    cached = _prop_status_cache.get(pid)
+    if cached and time.time() - cached[0] < _PROP_STATUS_TTL:
+        return jsonify(cached[1])
+
+    today     = date_cls.today()
+    today_str = today.isoformat()
+    end_str   = (today + timedelta(days=90)).isoformat()
+
+    raw = _fetch_bw_reservations(token, {
+        "checkin_date_ge":  today_str,
+        "checkin_date_le":  end_str,
+    }) + _fetch_bw_reservations(token, {
+        "checkout_date_ge": today_str,
+        "checkout_date_le": end_str,
+    })
+
+    # Deduplicate by reservation id and filter to this property
+    seen = set()
+    prop_res = []
+    for r in raw:
+        rid = r.get("id")
+        if r.get("property_id") == pid and rid not in seen:
+            seen.add(rid)
+            prop_res.append(r)
+    prop_res.sort(key=lambda r: (r.get("checkin_date") or ""))
+
+    # Determine current status
+    status      = "vacant"
+    status_kind = None
+    checkout_today = None
+    checkin_today  = None
+
+    for r in prop_res:
+        ci = (r.get("checkin_date")  or "")[:10]
+        co = (r.get("checkout_date") or "")[:10]
+        kind = _classify_reservation(r)
+        if ci <= today_str <= co:
+            status      = "occupied"
+            status_kind = kind
+        if co == today_str:
+            checkout_today = kind
+        if ci == today_str:
+            checkin_today = kind
+
+    # Build upcoming list (next 5 bookings starting from today or later)
+    upcoming = []
+    for r in prop_res:
+        ci = (r.get("checkin_date")  or "")[:10]
+        co = (r.get("checkout_date") or "")[:10]
+        if co < today_str:
+            continue
+        upcoming.append({
+            "type":     _classify_reservation(r),
+            "checkin":  ci,
+            "checkout": co,
+        })
+        if len(upcoming) >= 5:
+            break
+
+    # Days until next booking (if currently vacant)
+    days_until_next = None
+    if status == "vacant" and upcoming:
+        try:
+            days_until_next = (date_cls.fromisoformat(upcoming[0]["checkin"]) - today).days
+        except Exception:
+            pass
+
+    payload = {
+        "property":       prop_name,
+        "status":         status,        # "occupied" | "vacant"
+        "status_kind":    status_kind,   # "guest" | "owner" | "lease" | None
+        "checkout_today": checkout_today,
+        "checkin_today":  checkin_today,
+        "days_until_next": days_until_next,
+        "upcoming":       upcoming,
+    }
+    _prop_status_cache[pid] = (time.time(), payload)
+    return jsonify(payload)
 
 
 @briefing_bp.route("/briefing/debug-reservations")

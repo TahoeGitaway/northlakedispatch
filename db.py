@@ -165,6 +165,17 @@ def init_db():
         updated_at TEXT
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS bot_interactions (
+        id           SERIAL PRIMARY KEY,
+        user_id      INTEGER REFERENCES users(id),
+        session_id   TEXT DEFAULT '',
+        query        TEXT NOT NULL,
+        response     TEXT NOT NULL,
+        action_taken TEXT DEFAULT '',
+        dates_loaded TEXT DEFAULT '',
+        created_at   TEXT
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")

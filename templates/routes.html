@@ -679,10 +679,9 @@ function selectDay(ds) {
   document.getElementById("dayDetailCount").textContent =
     routes.length + " route" + (routes.length !== 1 ? "s" : "");
 
-  // Reset arrivals/departures — only load when user explicitly requests it
-  document.getElementById("daySummaryPanel").classList.add("hidden");
-  document.getElementById("daySummaryLoading").classList.add("hidden");
-  document.getElementById("daySummaryPrompt").classList.remove("hidden");
+  // Auto-load arrivals/departures on day click
+  document.getElementById("daySummaryPrompt").classList.add("hidden");
+  loadDaySummary(ds);
 
   const container = document.getElementById("dayDetailRoutes");
   container.innerHTML = "";

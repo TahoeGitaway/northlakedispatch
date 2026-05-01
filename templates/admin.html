@@ -231,6 +231,21 @@
               </div>
             </details>
 
+            {% if user.id != current_user.id and is_primary_admin %}
+            <form method="POST"
+                  action="{{ url_for('admin.admin_change_role', user_id=user.id) }}"
+                  onsubmit="return confirm('Change {{ user.name|e }} to {{ \'user\' if user.role == \'admin\' else \'admin\' }}?')">
+              <input type="hidden" name="role"
+                     value="{{ 'user' if user.role == 'admin' else 'admin' }}">
+              <button type="submit"
+                      class="text-xs px-2 py-1 rounded border transition-colors
+                             {% if user.role == 'admin' %}border-amber-200 text-amber-600 hover:bg-amber-50
+                             {% else %}border-indigo-200 text-indigo-600 hover:bg-indigo-50{% endif %}">
+                {{ 'Revoke Admin' if user.role == 'admin' else 'Make Admin' }}
+              </button>
+            </form>
+            {% endif %}
+
             {% if user.id != current_user.id %}
             <form method="POST"
                   action="{{ url_for('admin.admin_delete_user', user_id=user.id) }}"

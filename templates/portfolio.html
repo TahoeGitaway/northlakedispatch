@@ -82,6 +82,14 @@
       {% endfor %}
     </div>
 
+    <!-- Property status panel (shown on click) -->
+    <div id="propStatus" class="hidden border-t border-gray-100 bg-gray-50 p-3 text-xs shrink-0"
+         style="max-height:260px; overflow-y:auto;">
+      <div id="propStatusLoading" class="text-gray-400 py-2 text-center">Loading…</div>
+      <div id="propStatusContent" class="hidden space-y-2"></div>
+      <div id="propStatusError" class="hidden text-red-500 py-2"></div>
+    </div>
+
   </div>
 
   <!-- ── MAP ── -->
@@ -93,6 +101,7 @@
 const properties = {{ properties|tojson }};
 let activeMarker = null;
 let markers      = {};
+const _statusCache = {};  // name → payload, client-side so repeat clicks are instant
 
 // Init map
 const map = L.map('map').setView([39.3279, -120.1833], 11);
@@ -106,20 +115,116 @@ properties.forEach(p => {
   markers[p.name] = m;
 });
 
-// Click a sidebar item → pan + open popup + highlight row
+// Click a sidebar item → pan + open popup + highlight row + load status
 function focusProp(lat, lng, name, address) {
   map.flyTo([lat, lng], 15, { duration: 0.8 });
-  if (markers[name]) {
-    markers[name].openPopup();
-  }
-  // Highlight active row
+  if (markers[name]) markers[name].openPopup();
+
   document.querySelectorAll('.prop-item').forEach(el => el.classList.remove('active'));
   const row = [...document.querySelectorAll('.prop-item')]
     .find(el => el.dataset.name === name.toLowerCase());
-  if (row) {
-    row.classList.add('active');
-    row.scrollIntoView({ block: 'nearest' });
+  if (row) { row.classList.add('active'); row.scrollIntoView({ block: 'nearest' }); }
+
+  loadPropStatus(name);
+}
+
+async function loadPropStatus(name) {
+  const panel   = document.getElementById("propStatus");
+  const loading = document.getElementById("propStatusLoading");
+  const content = document.getElementById("propStatusContent");
+  const errEl   = document.getElementById("propStatusError");
+
+  panel.classList.remove("hidden");
+  content.classList.add("hidden");
+  errEl.classList.add("hidden");
+  loading.classList.remove("hidden");
+
+  // Client-side cache hit
+  if (_statusCache[name]) {
+    loading.classList.add("hidden");
+    renderPropStatus(_statusCache[name], content);
+    return;
   }
+
+  try {
+    const res  = await fetch("/briefing/property-status?name=" + encodeURIComponent(name));
+    const data = await res.json();
+    loading.classList.add("hidden");
+    if (data.error) {
+      errEl.textContent = data.error;
+      errEl.classList.remove("hidden");
+      return;
+    }
+    _statusCache[name] = data;
+    renderPropStatus(data, content);
+  } catch (e) {
+    loading.classList.add("hidden");
+    errEl.textContent = "Could not load status: " + e.message;
+    errEl.classList.remove("hidden");
+  }
+}
+
+function renderPropStatus(d, content) {
+  const TYPE_LABEL = { guest: "Guest", owner: "Owner", lease: "Lease", block: "Block" };
+  const TYPE_COLOR = { guest: "#3b82f6", owner: "#f59e0b", lease: "#8b5cf6", block: "#6b7280" };
+
+  function badge(kind, text) {
+    const c = TYPE_COLOR[kind] || "#6b7280";
+    return `<span style="display:inline-block;padding:1px 7px;border-radius:999px;
+      font-size:0.7rem;font-weight:700;background:${c}22;color:${c};">${text}</span>`;
+  }
+
+  function fmtDate(ds) {
+    if (!ds) return "—";
+    return new Date(ds + "T00:00:00").toLocaleDateString("en-US",
+      { month:"short", day:"numeric", year:"numeric" });
+  }
+
+  let html = "";
+
+  // Current status
+  if (d.status === "occupied") {
+    const lbl = TYPE_LABEL[d.status_kind] || d.status_kind;
+    html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;flex-shrink:0;"></span>
+      <span style="font-weight:600;color:#065f46;">Currently occupied</span>
+      ${badge(d.status_kind, lbl)}
+    </div>`;
+  } else {
+    html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:#d1d5db;display:inline-block;flex-shrink:0;"></span>
+      <span style="font-weight:600;color:#6b7280;">Currently vacant</span>
+      ${d.days_until_next != null
+        ? `<span style="color:#9ca3af;">${d.days_until_next === 0 ? "· check-in today" : `· ${d.days_until_next}d until next booking`}</span>`
+        : ""}
+    </div>`;
+  }
+
+  // Today events
+  if (d.checkout_today) {
+    html += `<div style="color:#ef4444;margin-bottom:3px;">↑ Checkout today (${TYPE_LABEL[d.checkout_today] || d.checkout_today})</div>`;
+  }
+  if (d.checkin_today) {
+    html += `<div style="color:#10b981;margin-bottom:3px;">↓ Check-in today (${TYPE_LABEL[d.checkin_today] || d.checkin_today})</div>`;
+  }
+
+  // Upcoming bookings
+  if (d.upcoming && d.upcoming.length) {
+    html += `<div style="font-weight:600;color:#374151;margin:8px 0 4px;">Upcoming</div>`;
+    d.upcoming.forEach(u => {
+      const lbl = TYPE_LABEL[u.type] || u.type;
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;
+        padding:4px 0;border-top:1px solid #f3f4f6;">
+        <span>${badge(u.type, lbl)}</span>
+        <span style="color:#6b7280;">${fmtDate(u.checkin)} → ${fmtDate(u.checkout)}</span>
+      </div>`;
+    });
+  } else {
+    html += `<div style="color:#9ca3af;margin-top:6px;font-style:italic;">No upcoming bookings in 90 days</div>`;
+  }
+
+  content.innerHTML = html;
+  content.classList.remove("hidden");
 }
 
 // Filter sidebar list
