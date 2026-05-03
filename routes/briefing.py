@@ -444,15 +444,17 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
                 "quote or paraphrase the key point directly. Do not bury notes at the end.\n"
                 "2. CHARACTER OF THE DAY: Describe what makes today notable — unusual mix of "
                 "work types, lease departures, owner stays, priority check-ins, anything operationally "
-                "meaningful. Avoid just listing stop counts.\n"
+                "meaningful. Avoid listing stop counts or individual route details.\n"
                 "3. ARRIVALS/DEPARTURES: Mention guest, owner, or lease arrivals/departures only "
                 "if they add context. Call out [LEASE] or [OWNER] if present.\n\n"
                 "Rules:\n"
                 "- Never rename or reclassify a reservation. [OWNER] = owner stay, "
                 "[LEASE] = long-term paying guest (30+ days), [GUEST] = regular guest.\n"
-                "- Do not name individual properties or technicians.\n"
+                "- Do not name individual properties, technicians, or routes — those are listed separately.\n"
                 "- Use the actual day name (e.g. 'Thursday') — never 'today'.\n"
-                "- Do not start with a greeting. Be direct."
+                "- Do not start with a greeting. Be direct.\n"
+                "- Never use the word 'heavy'. Keep the tone matter-of-fact and confident — "
+                "don't dramatize the workload."
             ),
             messages   = [{"role": "user", "content": prompt}],
         )
@@ -556,15 +558,41 @@ def daily_briefing():
     date_str      = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     team_id       = request.args.get("team_id") or None
     force_refresh = request.args.get("refresh") == "1"
+    peek_only     = request.args.get("peek") == "1"   # return saved blurb only, no generation
     now           = time.time()
 
     try:
         cache_key = f"{date_str}:{team_id or ''}"
+
+        # 1. In-memory cache (fast path)
         if not force_refresh and cache_key in _briefing_cache:
             ts, payload = _briefing_cache[cache_key]
             if now - ts < CACHE_TTL:
                 return jsonify({**payload, "cached": True, "cached_at": _fmt_pacific(ts)})
 
+        # 2. DB-persisted blurb (survives server restarts)
+        if not force_refresh:
+            conn = get_db()
+            cur  = get_cursor(conn)
+            cur.execute(
+                "SELECT blurb, blurb_generated_at FROM briefing_notes "
+                "WHERE note_date = %s AND blurb IS NOT NULL AND blurb != ''",
+                (date_str,)
+            )
+            row = cur.fetchone()
+            cur.close(); conn.close()
+            if row and row["blurb"]:
+                routes  = _fetch_todays_routes(date_str, team_id=team_id)
+                payload = {"blurb": row["blurb"], "routes": _summarise_routes(routes)}
+                _briefing_cache[cache_key] = (now, payload)
+                return jsonify({**payload, "cached": True,
+                                "cached_at": row["blurb_generated_at"] or ""})
+
+        # 3. Peek mode — only return what's saved, never generate
+        if peek_only:
+            return jsonify({"blurb": None, "peek": True})
+
+        # 4. Generate fresh
         routes    = _fetch_todays_routes(date_str, team_id=team_id)
         checkins  = _fetch_breezeway_checkins(date_str)
         checkouts = _fetch_breezeway_checkouts(date_str)
@@ -572,9 +600,26 @@ def daily_briefing():
         blurb, err_msg = _generate_briefing(date_str, routes, checkins, checkouts, notes)
 
         if blurb:
+            generated_at = _fmt_pacific(now)
+            # Auto-save to DB so it persists across server restarts
+            try:
+                conn = get_db()
+                cur  = get_cursor(conn)
+                cur.execute(
+                    """INSERT INTO briefing_notes (note_date, note_text, blurb, blurb_generated_at, updated_at)
+                       VALUES (%s, '', %s, %s, %s)
+                       ON CONFLICT (note_date) DO UPDATE
+                       SET blurb = EXCLUDED.blurb,
+                           blurb_generated_at = EXCLUDED.blurb_generated_at""",
+                    (date_str, blurb, generated_at, datetime.utcnow().isoformat())
+                )
+                conn.commit()
+                cur.close(); conn.close()
+            except Exception:
+                pass
             payload = {"blurb": blurb, "routes": _summarise_routes(routes)}
             _briefing_cache[cache_key] = (now, payload)
-            return jsonify({**payload, "cached": False, "cached_at": _fmt_pacific(now)})
+            return jsonify({**payload, "cached": False, "cached_at": generated_at})
 
         return jsonify({"blurb": None, "error": err_msg or "Unknown error generating briefing."})
 
