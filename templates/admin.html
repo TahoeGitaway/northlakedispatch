@@ -234,7 +234,7 @@
             {% if user.id != current_user.id and is_primary_admin %}
             <form method="POST"
                   action="{{ url_for('admin.admin_change_role', user_id=user.id) }}"
-                  onsubmit="return confirm('Change {{ user.name|e }} to {{ \'user\' if user.role == \'admin\' else \'admin\' }}?')">
+                  onsubmit="return confirm('Change {{ user.name|e }} to ' + this.querySelector('[name=role]').value + '?')">
               <input type="hidden" name="role"
                      value="{{ 'user' if user.role == 'admin' else 'admin' }}">
               <button type="submit"
