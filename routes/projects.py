@@ -508,6 +508,68 @@ def delete_property(project_id, prop_id):
     return jsonify({"success": True})
 
 
+# ── Occupancy Check ──────────────────────────────────────────────
+
+@projects_bp.route("/<int:project_id>/occupancy-check")
+@login_required
+def occupancy_check(project_id):
+    from routes.briefing import (
+        _get_breezeway_token, _fetch_bw_reservations,
+        _get_property_name, _ensure_property_cache, _property_cache,
+    )
+
+    date_str = (request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")).strip()
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway is not configured."}), 500
+
+    try:
+        # Reservations where guest has already checked in and not yet checked out
+        reservations = _fetch_bw_reservations(token, {
+            "checkin_date_le": date_str,
+            "checkout_date_ge": date_str,
+        })
+    except Exception as e:
+        return jsonify({"error": f"Breezeway API error: {e}"}), 500
+
+    # Build set of occupied Breezeway property names (lower-cased)
+    _ensure_property_cache()
+    occupied_bw = {}  # lower_name → display_name
+    for r in reservations:
+        name = _get_property_name(r.get("property_id"))
+        if name and not name.startswith("Property "):
+            occupied_bw[name.lower().strip()] = name
+
+    # Fetch the project's property names
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "SELECT property_name FROM project_properties WHERE project_id = %s",
+        (project_id,)
+    )
+    project_names = [r["property_name"] for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    bw_names_list = list(occupied_bw.keys())
+    occupied = []
+    for pname in project_names:
+        pname_lower = pname.lower().strip()
+        if pname_lower in occupied_bw:
+            occupied.append(pname)
+            continue
+        # Fuzzy fallback — only confident matches
+        close = difflib.get_close_matches(pname_lower, bw_names_list, n=1, cutoff=0.80)
+        if close:
+            occupied.append(pname)
+
+    return jsonify({
+        "occupied":      occupied,
+        "total_active":  len(reservations),
+        "date":          date_str,
+    })
+
+
 # ── CSV Report ────────────────────────────────────────────────────
 
 @projects_bp.route("/<int:project_id>/report.csv")

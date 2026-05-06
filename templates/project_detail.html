@@ -28,6 +28,11 @@
                 px-4 py-2 rounded-lg transition-colors">
         + Add Properties
       </a>
+      <button onclick="toggleOccupancyPanel()" id="occupancyBtn"
+              class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
+                     px-4 py-2 rounded-lg transition-colors">
+        👁 Occupancy
+      </button>
       <button onclick="copyTaskLink()"
               class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
                      px-4 py-2 rounded-lg transition-colors">
@@ -43,6 +48,26 @@
                      rounded-lg hover:bg-red-50 transition-colors">
         Delete Project
       </button>
+    </div>
+  </div>
+
+  <!-- Occupancy check panel -->
+  <div id="occupancyPanel" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-5">
+    <div class="flex items-center gap-3 flex-wrap">
+      <span class="text-sm font-semibold text-gray-600">Check occupancy for</span>
+      <input type="date" id="occupancyDate"
+             class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      <button onclick="runOccupancyCheck()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-4 py-1.5 rounded-lg transition-colors">
+        Check
+      </button>
+      <button onclick="clearOccupancy()"
+              class="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+        Clear
+      </button>
+      <span id="occupancyStatus" class="text-sm text-gray-400 ml-1"></span>
     </div>
   </div>
 
@@ -397,12 +422,18 @@ function renderList() {
 
 function pendingRow(p) {
   const chk = selectedIds.has(p.id) ? "checked" : "";
+  const occupiedBadge = p.occupied
+    ? `<span class="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">Occupied</span>`
+    : (occupancyChecked && !p.occupied
+        ? `<span class="text-xs bg-green-50 text-green-600 px-2 py-0.5 rounded-full">Vacant</span>`
+        : "");
   return `<div class="prop-row px-4 py-3 flex items-start gap-3 ${selectedIds.has(p.id)?"selected-row":""}" data-id="${p.id}">
     <input type="checkbox" ${chk} onchange="toggleSelect(${p.id}, this.checked)"
            class="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 cursor-pointer flex-shrink-0">
     <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-1 flex-wrap">
+      <div class="flex items-center gap-2 flex-wrap">
         <span class="text-sm font-medium text-gray-800">${p.property_name}</span>
+        ${occupiedBadge}
         ${p.address ? `<span class="text-xs text-gray-400 truncate">· ${p.address}</span>` : ""}
       </div>
       <div id="commentBox-${p.id}" class="hidden mt-2 flex gap-2">
@@ -555,6 +586,59 @@ function copyTaskLink() {
     btn.textContent = "✓ Copied!";
     setTimeout(() => btn.textContent = orig, 2000);
   });
+}
+
+/* ── Occupancy Check ── */
+let occupancyChecked = false;
+
+// Default date picker to today
+document.getElementById("occupancyDate").value = new Date().toISOString().slice(0, 10);
+
+function toggleOccupancyPanel() {
+  const panel = document.getElementById("occupancyPanel");
+  panel.classList.toggle("hidden");
+}
+
+async function runOccupancyCheck() {
+  const date     = document.getElementById("occupancyDate").value;
+  const statusEl = document.getElementById("occupancyStatus");
+  if (!date) return;
+
+  statusEl.textContent = "Checking Breezeway…";
+  const btn = document.querySelector("#occupancyPanel button");
+
+  try {
+    const resp = await fetch(`/projects/${PROJECT_ID}/occupancy-check?date=${date}`);
+    const data = await resp.json();
+
+    if (data.error) {
+      statusEl.textContent = "Error: " + data.error;
+      return;
+    }
+
+    // Reset and apply
+    const occupiedSet = new Set((data.occupied || []).map(n => n.toLowerCase().trim()));
+    allProps.forEach(p => { p.occupied = occupiedSet.has(p.property_name.toLowerCase().trim()); });
+    occupancyChecked = true;
+
+    const n = data.occupied ? data.occupied.length : 0;
+    statusEl.textContent = n > 0
+      ? `${n} occupied on ${date}`
+      : `All clear — no occupied properties on ${date}`;
+    statusEl.className = "text-sm ml-1 " + (n > 0 ? "text-red-500 font-medium" : "text-green-600");
+
+    renderList();
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+function clearOccupancy() {
+  allProps.forEach(p => { p.occupied = false; });
+  occupancyChecked = false;
+  document.getElementById("occupancyStatus").textContent = "";
+  document.getElementById("occupancyStatus").className = "text-sm text-gray-400 ml-1";
+  renderList();
 }
 
 renderList();
