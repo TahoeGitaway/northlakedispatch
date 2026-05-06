@@ -777,6 +777,7 @@ def knowledge_delete(entry_id):
 
 @admin_bp.route("/admin/chatbot")
 @login_required
+@admin_required
 def chatbot_page():
     return render_template("admin_chatbot.html")
 
@@ -790,6 +791,7 @@ def pri_check_page():
 
 @admin_bp.route("/admin/chatbot/chat", methods=["POST"])
 @login_required
+@admin_required
 def chatbot_chat():
     import anthropic
     from routes.briefing import (
@@ -1032,6 +1034,7 @@ def chatbot_chat():
 
 @admin_bp.route("/admin/chatbot/save-flag", methods=["POST"])
 @login_required
+@admin_required
 def chatbot_save_flag():
     """Save a bot-suggested action as a note on the given date's briefing."""
     data        = request.get_json(force=True)

@@ -41,11 +41,13 @@
                           {% if request.endpoint and request.endpoint.startswith('projects.') %}text-indigo-600{% endif %}">
                     Miscellaneous
                 </a>
+                {% if current_user.is_admin %}
                 <a href="{{ url_for('admin.chatbot_page') }}"
                    class="text-gray-600 hover:text-indigo-600 font-medium
                           {% if request.endpoint == 'admin.chatbot_page' %}text-indigo-600{% endif %}">
                     Ops Bot
                 </a>
+                {% endif %}
                 {% if current_user.is_admin %}
                 <a href="{{ url_for('admin.admin_properties') }}"
                    class="text-gray-600 hover:text-indigo-600 font-medium
