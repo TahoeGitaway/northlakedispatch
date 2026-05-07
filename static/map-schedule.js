@@ -26,6 +26,14 @@ function updateStatsDisplay() {
   document.getElementById("totalTime").textContent   = (totalSec   / 3600).toFixed(2) + " hrs";
   document.getElementById("drivingTime").textContent = (drivingSec / 3600).toFixed(2) + " hrs";
   document.getElementById("serviceTime").textContent = (serviceSec / 3600).toFixed(2) + " hrs";
+
+  // Keep lastStats current so every save reflects the actual route state, not a stale optimizer run
+  lastStats = {
+    total_duration:   totalSec,
+    driving_duration: drivingSec,
+    service_duration: serviceSec,
+    distance:         lastStats.distance,
+  };
 }
 
 /* ── TIME RECALCULATION ── */
