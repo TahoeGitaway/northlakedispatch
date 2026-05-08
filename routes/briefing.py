@@ -233,8 +233,9 @@ def _load_property_cache() -> str:
             items = (data.get("results", data.get("data", data if isinstance(data, list) else [])) or [])
             for p in items:
                 pid  = p.get("id")
-                name = (p.get("name") or p.get("property_name") or
-                        p.get("title") or p.get("display_name") or str(pid))
+                raw_name = (p.get("name") or p.get("property_name") or
+                            p.get("title") or p.get("display_name") or pid)
+                name = raw_name if isinstance(raw_name, str) else str(pid)
                 # Capture external reference ID for the task API (reference_property_id)
                 ref_id = (p.get("reference_property_id") or p.get("reference_id") or
                           p.get("external_id") or p.get("external_property_id") or "")

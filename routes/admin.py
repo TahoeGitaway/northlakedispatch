@@ -1239,7 +1239,7 @@ def chatbot_chat():
 
         _ensure_property_cache()
         name_lower = property_name_filter.lower()
-        rev = {v.lower(): k for k, v in _property_cache.items()}
+        rev = {v.lower(): k for k, v in _property_cache.items() if isinstance(v, str)}
         if name_lower in rev:
             pid = rev[name_lower]
             matched_prop_name = property_name_filter
