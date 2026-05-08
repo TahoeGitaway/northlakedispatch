@@ -174,8 +174,10 @@ def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None)
 
         # 422 means this path exists but our params are wrong — try date_param_sets
         if status == 422:
+            first_422_body = err  # preserve the raw Breezeway error from the probe call
             non_date = {k: v for k, v in base_params.items()
                         if not any(x in k for x in ("date", "start", "end"))}
+            last_422_body = first_422_body
             for dp in date_param_sets:
                 merged = {**non_date, **dp}
                 res2, err2, st2 = _fetch_bw_endpoint(token, path, merged)
@@ -183,10 +185,14 @@ def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None)
                     return res2, ""
                 if st2 == 403:
                     return [], ("Task data requires elevated API access on your Breezeway plan.")
+                if st2 == 422:
+                    last_422_body = err2 or last_422_body
                 last_err = err2 or f"HTTP {st2} on {path} with {dp}"
-            # Fell through all param sets on this path
-            last_err = f"Task endpoint found ({path}) but all parameter formats rejected (422). " \
-                       f"Breezeway may use non-standard field names for this account."
+            # Fell through all param sets — surface the raw Breezeway error body
+            last_err = (
+                f"422 on {path} — all date-param formats rejected. "
+                f"Last Breezeway error body: {last_422_body}"
+            )
             break  # stop path-hunting — we found the real path, params are just wrong
 
         if err:
