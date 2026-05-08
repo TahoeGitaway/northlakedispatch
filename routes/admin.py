@@ -842,7 +842,7 @@ def pri_check_page():
 def chatbot_chat():
     import anthropic
     from routes.briefing import (
-        _fetch_todays_routes, _fetch_bw_reservations, _fetch_bw_tasks,
+        _fetch_todays_routes, _fetch_bw_reservations,
         _fetch_bw_endpoint, _get_breezeway_token, _classify_reservation,
         _get_property_name, _get_property_address, _extract_str,
         _property_cache, _ensure_property_cache,
@@ -1001,7 +1001,7 @@ def chatbot_chat():
         WHERE is_active = 1 ORDER BY category, title
     """)
     knowledge_rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); conn.rollback(); conn.close()
 
     if knowledge_rows:
         kb_lines = ["=== COMPANY KNOWLEDGE BASE ===",
@@ -1187,96 +1187,59 @@ def chatbot_chat():
         if not tok:
             return "Breezeway not configured."
 
-        # Resolve optional property name filter to a property_id
-        prop_id_filter = None
+        # Breezeway task API: GET /public/inventory/v1/task/
+        # Date: scheduled_date=YYYY-MM-DD,YYYY-MM-DD  (comma-separated single param)
+        # Property: home_id (Breezeway integer ID)
+        # Category: type_department (housekeeping/maintenance/inspection/safety)
+        params = {"scheduled_date": f"{start_str},{end_str}"}
+
+        matched_prop_name = None
         if property_name_filter:
             _ensure_property_cache()
             name_lower = property_name_filter.lower()
-            # Build reverse map: display_name → id
             rev = {v.lower(): k for k, v in _property_cache.items()}
-            # Exact match first, then fuzzy
             if name_lower in rev:
-                prop_id_filter = rev[name_lower]
+                pid = rev[name_lower]
+                matched_prop_name = property_name_filter
             else:
                 matches = difflib.get_close_matches(name_lower, rev.keys(), n=1, cutoff=0.6)
-                if matches:
-                    prop_id_filter = rev[matches[0]]
+                pid = rev[matches[0]] if matches else None
+                matched_prop_name = _property_cache.get(pid, property_name_filter) if pid else None
+            if pid:
+                params["home_id"] = pid
 
-        date_param_sets = [
-            {"due_date_ge": start_str,       "due_date_le": end_str},
-            {"scheduled_date_ge": start_str, "scheduled_date_le": end_str},
-            {"start_date": start_str,        "end_date": end_str},
-            {"date_ge": start_str,           "date_le": end_str},
-            {"from": start_str,              "to": end_str},
-        ]
+        # type_department filter for category-based queries
+        dept_map = {"housekeeping": "housekeeping", "cleaning": "housekeeping",
+                    "maintenance": "maintenance", "inspection": "inspection", "safety": "safety"}
+        dept_filter = dept_map.get((status_filter or "").lower())
+        if dept_filter:
+            params["type_department"] = dept_filter
 
-        # Try with server-side property filter first (multiple param name conventions)
-        # The task endpoint may use reference_property_id or property_id; try both.
-        tasks, error = [], "not tried"
-        property_filter_worked = False
-        if prop_id_filter:
-            for pid_key in ("property_id", "reference_property_id", "property"):
-                base = {pid_key: prop_id_filter}
-                if status_filter:
-                    base["status"] = status_filter
-                tasks, error = _fetch_bw_tasks(tok, base, date_param_sets)
-                if "plan" in error or "access" in error:
-                    return error
-                if tasks or not error:
-                    property_filter_worked = True
-                    break
-                # "Property not found" means wrong ID format — try next param name
-                if "not found" not in error.lower() and "422" not in error:
-                    break  # a different error (auth, network) — don't keep trying
-            # Fallback: fetch all tasks and filter client-side by property name
-            if not tasks and property_name_filter:
-                base_all = {}
-                if status_filter:
-                    base_all["status"] = status_filter
-                all_tasks, error = _fetch_bw_tasks(tok, base_all, date_param_sets)
-                if "plan" in error or "access" in error:
-                    return error
-                # Client-side filter by property name
-                name_lower = property_name_filter.lower()
-                tasks = [
-                    t for t in all_tasks
-                    if name_lower in (t.get("property_name") or t.get("property") or
-                                      t.get("unit_name") or "").lower()
-                ]
-                if not tasks and all_tasks:
-                    import difflib as _dl
-                    prop_names = list({
-                        (t.get("property_name") or t.get("property") or t.get("unit_name") or "").lower()
-                        for t in all_tasks if (t.get("property_name") or t.get("property") or t.get("unit_name"))
-                    })
-                    close = _dl.get_close_matches(name_lower, prop_names, n=1, cutoff=0.5)
-                    if close:
-                        tasks = [t for t in all_tasks
-                                 if (t.get("property_name") or t.get("property") or
-                                     t.get("unit_name") or "").lower() == close[0]]
-        else:
-            base_params = {}
-            if status_filter:
-                base_params["status"] = status_filter
-            tasks, error = _fetch_bw_tasks(tok, base_params, date_param_sets)
-            if "plan" in error or "access" in error:
-                return error
+        tasks, error, _ = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", params)
+
+        if "403" in error or "access" in error.lower():
+            return ("Task data requires elevated API access on your Breezeway plan. "
+                    "Contact Breezeway support to request task API access.")
 
         if error and not tasks:
             return f"Could not fetch tasks: {error}"
 
+        # Client-side completion status filter (pending/complete/in_progress) if not a dept keyword
+        if status_filter and not dept_filter:
+            status_lower = status_filter.lower()
+            tasks = [t for t in tasks
+                     if (t.get("status") or t.get("state") or "").lower() == status_lower]
+
         if not tasks:
-            prop_label = f" at {property_name_filter}" if property_name_filter else ""
-            status_label = f" with status '{status_filter}'" if status_filter else ""
+            prop_label   = f" at {matched_prop_name or property_name_filter}" if property_name_filter else ""
+            status_label = f" ({status_filter})" if status_filter else ""
             return f"No tasks found{prop_label}{status_label} between {start_str} and {end_str}."
 
-        # Format results
         lines = [f"Tasks for {start_str} through {end_str}"]
-        if property_name_filter:
-            lines[0] += f" — {property_name_filter}"
+        if matched_prop_name or property_name_filter:
+            lines[0] += f" — {matched_prop_name or property_name_filter}"
         lines.append(f"({len(tasks)} task{'s' if len(tasks) != 1 else ''} found)\n")
 
-        # Group by status for readability
         by_status = {}
         for t in tasks:
             st = (t.get("status") or t.get("state") or "unknown").lower()
@@ -1289,21 +1252,25 @@ def chatbot_chat():
                 continue
             lines.append(f"── {st.upper()} ({len(group)}) ──")
             for t in group:
-                # Extract fields with fallbacks for unknown API shape
-                title     = t.get("title") or t.get("name") or t.get("task_type") or "Untitled task"
-                prop_id   = t.get("property_id") or t.get("property", {}).get("id") if isinstance(t.get("property"), dict) else t.get("property")
-                prop_name = _get_property_name(prop_id) if prop_id else (t.get("property_name") or "")
-                assignee  = (t.get("assignee") or t.get("assigned_to") or t.get("assignee_name") or "")
+                title    = t.get("title") or t.get("name") or t.get("type_department") or "Untitled"
+                dept     = t.get("type_department") or ""
+                home_id  = t.get("home_id") or t.get("property_id")
+                prop_name = _get_property_name(home_id) if home_id else (t.get("property_name") or "")
+                assignee = t.get("assignee") or ""
                 if isinstance(assignee, dict):
                     assignee = assignee.get("name") or assignee.get("full_name") or ""
-                due       = (t.get("due_date") or t.get("scheduled_date") or t.get("date") or "")[:10]
-                completed = (t.get("completed_at") or t.get("completed_date") or "")[:10]
-                notes     = (t.get("notes") or t.get("description") or "")[:120]
+                elif isinstance(assignee, list) and assignee:
+                    first = assignee[0]
+                    assignee = first.get("name") or "" if isinstance(first, dict) else str(first)
+                sched    = (t.get("scheduled_date") or "")[:10]
+                finished = (t.get("finished_at") or t.get("completed_at") or "")[:10]
+                notes    = (t.get("notes") or t.get("description") or "")[:120]
 
                 line = f"  • {title}"
+                if dept:       line += f" [{dept}]"
                 if prop_name:  line += f" — {prop_name}"
-                if due:        line += f" | due {due}"
-                if completed:  line += f" | done {completed}"
+                if sched:      line += f" | scheduled {sched}"
+                if finished:   line += f" | done {finished}"
                 if assignee:   line += f" | {assignee}"
                 if notes:      line += f"\n    {notes}"
                 lines.append(line)

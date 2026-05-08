@@ -383,7 +383,7 @@ def _fetch_briefing_notes(date_str: str) -> str:
     cur  = get_cursor(conn)
     cur.execute("SELECT note_text FROM briefing_notes WHERE note_date = %s", (date_str,))
     row = cur.fetchone()
-    cur.close(); conn.close()
+    cur.close(); conn.rollback(); conn.close()
     return (row["note_text"] or "").strip() if row else ""
 
 
@@ -407,7 +407,7 @@ def _fetch_todays_routes(date_str: str, team_id=None) -> list:
             (date_str,),
         )
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close(); conn.rollback(); conn.close()
     return rows
 
 
