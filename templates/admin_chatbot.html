@@ -1,97 +1,109 @@
 {% extends "base.html" %}
 {% block title %}Operations Bot — North Lake Dispatch{% endblock %}
 {% block content %}
-<div class="max-w-4xl mx-auto px-4 py-6">
+<div class="max-w-5xl mx-auto px-4 py-6">
 
-  <div class="flex items-center gap-3 mb-5">
-    <h2 class="text-2xl font-bold text-gray-800">Operations Bot</h2>
-    <span class="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-medium border border-indigo-200">
-      TG Staff Tool
-    </span>
+  <div class="flex items-center justify-between mb-5">
+    <div class="flex items-center gap-3">
+      <h2 class="text-2xl font-bold text-gray-800">Operations Bot</h2>
+      <span class="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-medium border border-indigo-200">
+        Beta — Admin Only
+      </span>
+    </div>
+    <button onclick="toggleSidebar()"
+            class="text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 transition-colors">
+      ⚙ Context
+    </button>
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+  <div class="flex gap-5 items-start">
 
-    <!-- LEFT: Date picker + context panel -->
-    <div class="lg:col-span-1 space-y-4">
+    <!-- SIDEBAR: hidden by default, shown via toggle -->
+    <div id="botSidebar" class="hidden lg:w-64 shrink-0 space-y-3">
 
-      <!-- Date selector -->
+      <!-- Optional date pre-load -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Dates to Load</div>
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Pre-load Dates</div>
         <p class="text-xs text-gray-400 mb-3 leading-relaxed">
-          Select dates to give the bot access to that day's arrivals, departures, and routes from Breezeway.
+          Optional — the bot fetches any date on demand. Add dates here to front-load context.
         </p>
-        <div id="selectedDates" class="flex flex-wrap gap-1.5 mb-2 min-h-[28px]"></div>
+        <div id="selectedDates" class="flex flex-wrap gap-1.5 mb-2 min-h-[24px]"></div>
         <div class="flex gap-2">
           <input type="date" id="datePicker"
-                 class="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm
+                 class="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs
                         focus:outline-none focus:ring-2 focus:ring-indigo-400">
           <button onclick="addDate()"
-                  class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-3 py-1.5
+                  class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-2.5 py-1.5
                          rounded-lg font-medium transition-colors">
             Add
           </button>
         </div>
         <button onclick="addToday()"
-                class="mt-2 w-full text-xs text-indigo-600 hover:text-indigo-800 font-medium py-1">
+                class="mt-1.5 w-full text-xs text-indigo-500 hover:text-indigo-700 font-medium py-1">
           + Today
         </button>
       </div>
 
-      <!-- What the bot can see -->
+      <!-- Live context status -->
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">Context Loaded</div>
-        <div id="contextPanel" class="space-y-2 text-sm text-gray-500">
-          <p class="text-xs italic text-gray-400">Send a message to load today's data.</p>
+        <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Live Context</div>
+        <div id="contextPanel" class="space-y-1.5 text-xs text-gray-500">
+          <p class="italic text-gray-400">Populated on first message.</p>
         </div>
         <div id="kbStatus" class="hidden mt-2 pt-2 border-t border-gray-100 text-xs text-gray-400"></div>
       </div>
 
-      <!-- Bot info -->
-      <div class="bg-amber-50 rounded-xl border border-amber-100 p-4">
-        <div class="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2">How this bot works</div>
-        <ul class="text-xs text-amber-700 space-y-1.5 leading-relaxed">
-          <li>• Loads today's Breezeway data automatically — add dates for other days</li>
-          <li>• Knows your company SOPs from the Knowledge Base</li>
-          <li>• Uses its own knowledge for general operations questions</li>
-          <li>• Conversation resets when you leave this page</li>
-          <li>• All interactions are logged for ops review</li>
-        </ul>
-      </div>
-
     </div>
 
-    <!-- RIGHT: Chat area -->
-    <div class="lg:col-span-2 flex flex-col gap-3">
+    <!-- MAIN: Chat -->
+    <div class="flex-1 flex flex-col gap-3 min-w-0">
 
-      <div id="chatMessages"
-           class="bg-white rounded-xl shadow-sm border border-gray-100 p-4
-                  flex flex-col gap-3 overflow-y-auto"
-           style="min-height: 480px; max-height: 640px;">
-        <div class="text-center text-gray-400 text-sm py-12" id="emptyState">
-          <div class="text-3xl mb-3">🤖</div>
-          <div class="font-medium text-gray-500 mb-1">TG Operations Bot</div>
-          <div class="text-xs text-gray-400 max-w-xs mx-auto">
-            Ask about today's schedule, a property, a policy, PRIs, or anything operations-related.
-          </div>
-        </div>
+      <!-- Starter prompts — hidden once conversation starts -->
+      <div id="starterPrompts" class="grid grid-cols-2 gap-2">
+        <button onclick="usePrompt(this)" data-prompt="What does the rest of this week look like — arrivals, departures, and any routes?"
+                class="starter-btn text-left bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-700 hover:border-indigo-300 hover:bg-indigo-50 transition-colors shadow-sm">
+          <div class="font-medium text-gray-800 mb-0.5">This week's schedule</div>
+          <div class="text-xs text-gray-400">Arrivals, departures, routes</div>
+        </button>
+        <button onclick="usePrompt(this)" data-prompt="Show me all tasks that are pending or incomplete across our properties over the last 7 days."
+                class="starter-btn text-left bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-700 hover:border-indigo-300 hover:bg-indigo-50 transition-colors shadow-sm">
+          <div class="font-medium text-gray-800 mb-0.5">Pending tasks</div>
+          <div class="text-xs text-gray-400">What hasn't been completed</div>
+        </button>
+        <button onclick="usePrompt(this)" data-prompt="Are there any PRI situations I should know about — guest checkouts where an owner or block is coming next and we haven't tagged it yet?"
+                class="starter-btn text-left bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-700 hover:border-indigo-300 hover:bg-indigo-50 transition-colors shadow-sm">
+          <div class="font-medium text-gray-800 mb-0.5">PRI status</div>
+          <div class="text-xs text-gray-400">Owner-next tagging gaps</div>
+        </button>
+        <button onclick="usePrompt(this)" data-prompt="What's happening next weekend? Give me a summary of arrivals, departures, and any routes we have saved."
+                class="starter-btn text-left bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-700 hover:border-indigo-300 hover:bg-indigo-50 transition-colors shadow-sm">
+          <div class="font-medium text-gray-800 mb-0.5">Next weekend</div>
+          <div class="text-xs text-gray-400">Arrivals & routes preview</div>
+        </button>
       </div>
 
+      <!-- Chat messages -->
+      <div id="chatMessages"
+           class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3 overflow-y-auto"
+           style="min-height: 460px; max-height: 620px; display: none;">
+      </div>
+
+      <!-- Input -->
       <div class="flex gap-2">
         <textarea id="chatInput" rows="2"
-                  placeholder="Ask about today's schedule, a property status, a policy, or a PRI…"
+                  placeholder="Ask anything — next week's schedule, task status at a property, PRI gaps, policies…"
                   onkeydown="handleKey(event)"
-                  class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm resize-none
+                  class="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm resize-none
                          focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
         <button onclick="sendMessage()"
-                class="self-end bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5
-                       rounded-xl font-medium text-sm transition-colors">
+                class="self-end bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5
+                       rounded-xl font-semibold text-sm transition-colors">
           Send
         </button>
       </div>
-      <p class="text-xs text-gray-400 -mt-1">Shift+Enter for new line · Enter to send · Interactions are logged</p>
-    </div>
+      <p class="text-xs text-gray-400 -mt-1">Enter to send · Shift+Enter for new line · The bot fetches live Breezeway data as needed · Interactions logged</p>
 
+    </div>
   </div>
 </div>
 
@@ -103,6 +115,25 @@ document.getElementById("datePicker").value = today;
 
 let selectedDates       = [];
 let conversationHistory = [];
+let chatStarted         = false;
+
+/* ── Sidebar toggle ── */
+function toggleSidebar() {
+  document.getElementById("botSidebar").classList.toggle("hidden");
+}
+
+/* ── Starter prompts ── */
+function usePrompt(btn) {
+  document.getElementById("chatInput").value = btn.dataset.prompt;
+  sendMessage();
+}
+
+function hideStar() {
+  if (chatStarted) return;
+  chatStarted = true;
+  document.getElementById("starterPrompts").style.display = "none";
+  document.getElementById("chatMessages").style.display   = "flex";
+}
 
 /* ── Date management ── */
 function addDate() {
@@ -123,7 +154,7 @@ function removeDate(d) {
 function renderDates() {
   const el = document.getElementById("selectedDates");
   if (!selectedDates.length) {
-    el.innerHTML = '<span class="text-xs text-gray-400 italic">No dates selected</span>';
+    el.innerHTML = '<span class="text-xs text-gray-400 italic">None</span>';
     return;
   }
   el.innerHTML = selectedDates.map(d => `
@@ -142,16 +173,12 @@ function handleKey(e) {
 
 /* ── Message rendering ── */
 function appendMessage(role, text) {
-  document.getElementById("emptyState")?.remove();
+  hideStar();
   const box = document.getElementById("chatMessages");
 
-  // Check for CONFIRM_ACTION pattern in bot replies
   const actionMatch = role === "assistant" && text.match(/CONFIRM_ACTION:\s*(.+)/i);
   const actionDesc  = actionMatch ? actionMatch[1].trim() : null;
-  // Strip the CONFIRM_ACTION line from visible text
-  const displayText = actionDesc
-    ? text.replace(/CONFIRM_ACTION:\s*.+/i, "").trim()
-    : text;
+  const displayText = actionDesc ? text.replace(/CONFIRM_ACTION:\s*.+/i, "").trim() : text;
 
   const div = document.createElement("div");
   div.className = role === "user"
@@ -160,7 +187,6 @@ function appendMessage(role, text) {
   div.textContent = displayText;
   box.appendChild(div);
 
-  // Confirmation UI for bot-suggested actions
   if (actionDesc) {
     const confirmDiv = document.createElement("div");
     confirmDiv.className = "self-start flex items-center gap-2 mt-1";
@@ -175,8 +201,7 @@ function appendMessage(role, text) {
         ✓ Confirm
       </button>
       <button onclick="this.parentElement.remove()"
-              class="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1.5
-                     transition-colors">
+              class="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1.5 transition-colors">
         ✗ Cancel
       </button>`;
     box.appendChild(confirmDiv);
@@ -190,7 +215,7 @@ function escHtml(s) {
 }
 
 function appendThinking(msg) {
-  document.getElementById("emptyState")?.remove();
+  hideStar();
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
   div.id        = "thinking";
@@ -205,21 +230,16 @@ async function confirmAction(btn, description) {
   const container = btn.closest("div");
   btn.disabled    = true;
   btn.textContent = "Saving…";
-
   const date = selectedDates[0] || today;
   try {
     const res  = await fetch("/admin/chatbot/save-flag", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ description, date }),
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body:   JSON.stringify({ description, date }),
     });
     const data = await res.json();
-    if (data.success) {
-      container.innerHTML = `<span class="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200
-        rounded-xl px-3 py-1.5">✓ Saved to notes for ${date}</span>`;
-    } else {
-      container.innerHTML = `<span class="text-xs text-red-500">Error: ${data.error}</span>`;
-    }
+    container.innerHTML = data.success
+      ? `<span class="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-1.5">✓ Saved to notes for ${date}</span>`
+      : `<span class="text-xs text-red-500">Error: ${data.error}</span>`;
   } catch (e) {
     container.innerHTML = `<span class="text-xs text-red-500">Error: ${e.message}</span>`;
   }
@@ -230,16 +250,15 @@ function updateContextPanel(summary, kbCount) {
   const el = document.getElementById("contextPanel");
   if (summary && summary.length) {
     el.innerHTML = summary.map(s => {
-      if (s.error) return `<div class="text-red-500 text-xs">${s.date}: error loading</div>`;
-      return `
-        <div class="border border-gray-100 rounded-lg p-2">
-          <div class="font-medium text-gray-700 text-xs mb-1">${s.date}</div>
-          <div class="text-xs space-y-0.5 text-gray-500">
-            <div>📋 ${s.routes} route${s.routes !== 1 ? "s" : ""}</div>
-            <div>↓ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
-            <div>↑ ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
-          </div>
-        </div>`;
+      if (s.error) return `<div class="text-red-500">${s.date}: error</div>`;
+      return `<div class="border border-gray-100 rounded-lg p-2">
+        <div class="font-medium text-gray-700 mb-0.5">${s.date}</div>
+        <div class="space-y-0.5 text-gray-500">
+          <div>📋 ${s.routes} route${s.routes !== 1 ? "s" : ""}</div>
+          <div>↓ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
+          <div>↑ ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
+        </div>
+      </div>`;
     }).join("");
   }
   if (kbCount !== undefined) {
@@ -264,11 +283,7 @@ async function sendMessage() {
     const res  = await fetch("/admin/chatbot/chat", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({
-        messages:   conversationHistory,
-        dates:      selectedDates,
-        session_id: SESSION_ID,
-      }),
+      body:    JSON.stringify({ messages: conversationHistory, dates: selectedDates, session_id: SESSION_ID }),
     });
     const data = await res.json();
     document.getElementById("thinking")?.remove();
@@ -280,7 +295,6 @@ async function sendMessage() {
     }
 
     appendMessage("assistant", data.reply);
-    // Store any intermediate tool-call turns so Claude has full context next message
     for (const msg of (data.history_additions || [])) {
       conversationHistory.push(msg);
     }
@@ -292,8 +306,5 @@ async function sendMessage() {
     conversationHistory.pop();
   }
 }
-
-// Auto-select today
-addToday();
 </script>
 {% endblock %}
