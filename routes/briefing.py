@@ -104,6 +104,66 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
     return all_results
 
 
+def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
+    """Generic paginated GET for any Breezeway endpoint.
+    Returns (results_list, error_string, http_status).
+    Tries the path exactly as given — caller decides what to do with 404/403.
+    """
+    all_results = []
+    page, limit = 1, 100
+    last_status = None
+    try:
+        while True:
+            resp = requests.get(
+                f"https://api.breezeway.io{path}",
+                headers={"Authorization": f"JWT {token}"},
+                params={**params, "limit": limit, "page": page},
+                timeout=15,
+            )
+            last_status = resp.status_code
+            if not resp.ok:
+                try:
+                    detail = resp.json()
+                except Exception:
+                    detail = resp.text[:300]
+                return [], f"HTTP {resp.status_code}: {detail}", last_status
+            data = resp.json()
+            page_results = (data.get("results", data.get("data", data.get("tasks", []))) or []) \
+                           if isinstance(data, dict) else (data or [])
+            all_results.extend(page_results)
+            if len(page_results) < limit:
+                break
+            page += 1
+    except Exception as ex:
+        return [], str(ex), last_status
+    return all_results, "", last_status
+
+
+def _fetch_bw_tasks(token: str, params: dict) -> tuple:
+    """Fetch Breezeway tasks for a date/property filter.
+    Tries known task endpoint paths and returns (results, error_message).
+    """
+    candidate_paths = [
+        "/public/work/v1/task",
+        "/public/work/v2/task",
+        "/public/inventory/v1/task",
+        "/public/v1/task",
+    ]
+    last_err = "No task endpoint responded — task API may not be enabled on this Breezeway plan."
+    for path in candidate_paths:
+        results, err, status = _fetch_bw_endpoint(token, path, params)
+        if status == 404:
+            continue  # wrong path, try next
+        if status == 403:
+            return [], ("Task data requires elevated API access on your Breezeway plan. "
+                        "Contact Breezeway support to request task API access.")
+        if err:
+            last_err = err
+            continue
+        return results, ""  # success
+    return [], last_err
+
+
 _property_cache_error: str  = ""   # last error from property fetch, for diagnostics
 _property_addr_cache:  dict = {}   # {property_id: address_string}
 

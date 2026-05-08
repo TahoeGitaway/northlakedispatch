@@ -842,9 +842,10 @@ def pri_check_page():
 def chatbot_chat():
     import anthropic
     from routes.briefing import (
-        _fetch_todays_routes, _fetch_bw_reservations,
-        _get_breezeway_token, _classify_reservation,
+        _fetch_todays_routes, _fetch_bw_reservations, _fetch_bw_tasks,
+        _fetch_bw_endpoint, _get_breezeway_token, _classify_reservation,
         _get_property_name, _get_property_address, _extract_str,
+        _property_cache, _ensure_property_cache,
     )
 
     data     = request.get_json(force=True)
@@ -1049,24 +1050,48 @@ def chatbot_chat():
     if not key:
         return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
 
-    tools = [{
-        "name": "fetch_reservation_data",
-        "description": (
-            "Fetch Breezeway reservation data (arrivals, departures, routes) for a date range. "
-            "Use this whenever the user asks about dates not already in the loaded context — "
-            "e.g. 'next week', 'this Friday', 'next month', 'June', 'this summer'. "
-            "Resolve relative references using today's date before calling. "
-            "Maximum range is 30 days per call."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "start_date": {"type": "string", "description": "Start date YYYY-MM-DD"},
-                "end_date":   {"type": "string", "description": "End date YYYY-MM-DD (inclusive, max 30 days after start)"},
+    tools = [
+        {
+            "name": "fetch_reservation_data",
+            "description": (
+                "Fetch Breezeway reservation data (arrivals, departures, routes) for a date range. "
+                "Use this whenever the user asks about dates not already in the loaded context — "
+                "e.g. 'next week', 'this Friday', 'next month', 'June', 'this summer'. "
+                "Resolve relative references using today's date before calling. "
+                "Maximum range is 30 days per call."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                    "end_date":   {"type": "string", "description": "End date YYYY-MM-DD (inclusive, max 30 days after start)"},
+                },
+                "required": ["start_date", "end_date"],
             },
-            "required": ["start_date", "end_date"],
         },
-    }]
+        {
+            "name": "fetch_task_data",
+            "description": (
+                "Fetch Breezeway task data (cleaning jobs, inspections, maintenance, any work orders) "
+                "for a date range and optionally a specific property. "
+                "Use this when the user asks about: what tasks were done or not done, "
+                "task completion status, who completed work, pending or overdue tasks, "
+                "cleaning history, or to compare what work was expected vs. actually completed. "
+                "You can filter by property name or fetch all properties. "
+                "Maximum date range is 30 days per call."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date":    {"type": "string", "description": "Start date YYYY-MM-DD"},
+                    "end_date":      {"type": "string", "description": "End date YYYY-MM-DD (max 30 days after start)"},
+                    "property_name": {"type": "string", "description": "Optional: filter to a specific property by name (partial match ok). Omit for all properties."},
+                    "status":        {"type": "string", "description": "Optional: filter by status — 'complete', 'pending', 'in_progress', 'cancelled', or omit for all."},
+                },
+                "required": ["start_date", "end_date"],
+            },
+        },
+    ]
 
     def _execute_fetch(start_str, end_str):
         from datetime import date as _date2
@@ -1146,6 +1171,110 @@ def chatbot_chat():
                 lines.append(f"  DEPARTURE [{kind.upper()}] {prop} (in since {ci_d}{nights})")
         return "\n".join(lines)
 
+    def _execute_fetch_tasks(start_str, end_str, property_name_filter=None, status_filter=None):
+        from datetime import date as _date2
+        import difflib
+        try:
+            s = _date2.fromisoformat(start_str)
+            e = _date2.fromisoformat(end_str)
+        except ValueError:
+            return "Error: invalid date format. Use YYYY-MM-DD."
+        if (e - s).days > 30:
+            e = s + timedelta(days=30)
+            end_str = e.isoformat()
+
+        tok = _get_breezeway_token()
+        if not tok:
+            return "Breezeway not configured."
+
+        # Resolve optional property name filter to a property_id
+        prop_id_filter = None
+        if property_name_filter:
+            _ensure_property_cache()
+            name_lower = property_name_filter.lower()
+            # Build reverse map: display_name → id
+            rev = {v.lower(): k for k, v in _property_cache.items()}
+            # Exact match first, then fuzzy
+            if name_lower in rev:
+                prop_id_filter = rev[name_lower]
+            else:
+                matches = difflib.get_close_matches(name_lower, rev.keys(), n=1, cutoff=0.6)
+                if matches:
+                    prop_id_filter = rev[matches[0]]
+
+        # Build query params — try several param name conventions since API shape is unknown
+        params = {}
+        if prop_id_filter:
+            params["property_id"] = prop_id_filter
+        if status_filter:
+            params["status"] = status_filter
+
+        # Try date filter param names in order of likelihood
+        date_param_sets = [
+            {"due_date_ge": start_str, "due_date_le": end_str},
+            {"scheduled_date_ge": start_str, "scheduled_date_le": end_str},
+            {"start_date": start_str, "end_date": end_str},
+            {"date_ge": start_str, "date_le": end_str},
+        ]
+
+        tasks, error = [], "No task endpoint found."
+        for date_params in date_param_sets:
+            merged = {**params, **date_params}
+            tasks, error = _fetch_bw_tasks(tok, merged)
+            if tasks or (not error):
+                break
+            if "plan" in error or "access" in error:
+                return error  # hard stop — plan issue, no point retrying
+
+        if error and not tasks:
+            return f"Could not fetch tasks: {error}"
+
+        if not tasks:
+            prop_label = f" at {property_name_filter}" if property_name_filter else ""
+            status_label = f" with status '{status_filter}'" if status_filter else ""
+            return f"No tasks found{prop_label}{status_label} between {start_str} and {end_str}."
+
+        # Format results
+        lines = [f"Tasks for {start_str} through {end_str}"]
+        if property_name_filter:
+            lines[0] += f" — {property_name_filter}"
+        lines.append(f"({len(tasks)} task{'s' if len(tasks) != 1 else ''} found)\n")
+
+        # Group by status for readability
+        by_status = {}
+        for t in tasks:
+            st = (t.get("status") or t.get("state") or "unknown").lower()
+            by_status.setdefault(st, []).append(t)
+
+        status_order = ["complete", "in_progress", "pending", "blocked", "cancelled", "unknown"]
+        for st in status_order + [k for k in by_status if k not in status_order]:
+            group = by_status.get(st)
+            if not group:
+                continue
+            lines.append(f"── {st.upper()} ({len(group)}) ──")
+            for t in group:
+                # Extract fields with fallbacks for unknown API shape
+                title     = t.get("title") or t.get("name") or t.get("task_type") or "Untitled task"
+                prop_id   = t.get("property_id") or t.get("property", {}).get("id") if isinstance(t.get("property"), dict) else t.get("property")
+                prop_name = _get_property_name(prop_id) if prop_id else (t.get("property_name") or "")
+                assignee  = (t.get("assignee") or t.get("assigned_to") or t.get("assignee_name") or "")
+                if isinstance(assignee, dict):
+                    assignee = assignee.get("name") or assignee.get("full_name") or ""
+                due       = (t.get("due_date") or t.get("scheduled_date") or t.get("date") or "")[:10]
+                completed = (t.get("completed_at") or t.get("completed_date") or "")[:10]
+                notes     = (t.get("notes") or t.get("description") or "")[:120]
+
+                line = f"  • {title}"
+                if prop_name:  line += f" — {prop_name}"
+                if due:        line += f" | due {due}"
+                if completed:  line += f" | done {completed}"
+                if assignee:   line += f" | {assignee}"
+                if notes:      line += f"\n    {notes}"
+                lines.append(line)
+            lines.append("")
+
+        return "\n".join(lines)
+
     try:
         ai_client    = anthropic.Anthropic(api_key=key)
         trimmed      = list(messages[-30:]) if len(messages) > 30 else list(messages)
@@ -1169,10 +1298,20 @@ def chatbot_chat():
                 tool_results = []
                 for block in resp.content:
                     if block.type == "tool_use":
-                        result = _execute_fetch(
-                            block.input.get("start_date", ""),
-                            block.input.get("end_date",   ""),
-                        ) if block.name == "fetch_reservation_data" else f"Unknown tool: {block.name}"
+                        if block.name == "fetch_reservation_data":
+                            result = _execute_fetch(
+                                block.input.get("start_date", ""),
+                                block.input.get("end_date",   ""),
+                            )
+                        elif block.name == "fetch_task_data":
+                            result = _execute_fetch_tasks(
+                                block.input.get("start_date", ""),
+                                block.input.get("end_date",   ""),
+                                block.input.get("property_name"),
+                                block.input.get("status"),
+                            )
+                        else:
+                            result = f"Unknown tool: {block.name}"
                         tool_results.append({
                             "type":        "tool_result",
                             "tool_use_id": block.id,

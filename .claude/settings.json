@@ -26,7 +26,10 @@
       "Read(//c/Users/madel/chatbotclub/**)",
       "Bash(python -c \"from routes.admin import admin_bp; print\\('OK'\\)\")",
       "Bash(pip list *)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(python -c \"from routes.briefing import _fetch_bw_tasks, _fetch_bw_endpoint, _ensure_property_cache, _property_cache; print\\('briefing OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"from routes.briefing import _fetch_bw_tasks, _fetch_bw_endpoint, _ensure_property_cache, _property_cache; print\\('briefing OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"from routes.admin import admin_bp; print\\('admin OK'\\)\")"
     ]
   }
 }
