@@ -186,6 +186,16 @@ def init_db():
         saved_at    TEXT NOT NULL
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS chatbot_sessions (
+        id            SERIAL PRIMARY KEY,
+        user_id       INTEGER REFERENCES users(id),
+        session_id    TEXT NOT NULL UNIQUE,
+        title         TEXT DEFAULT '',
+        messages_json TEXT NOT NULL DEFAULT '[]',
+        created_at    TEXT,
+        updated_at    TEXT
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")

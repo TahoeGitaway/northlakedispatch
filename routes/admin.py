@@ -1517,6 +1517,121 @@ def chatbot_chat():
     )
 
 
+@admin_bp.route("/admin/chatbot/session/save", methods=["POST"])
+@login_required
+@admin_required
+def chatbot_session_save():
+    data       = request.get_json(force=True)
+    session_id = (data.get("session_id") or "").strip()
+    messages   = data.get("messages", [])
+    if not session_id or not messages:
+        return jsonify({"error": "session_id and messages required"}), 400
+
+    # Strip base64 image data before saving — keep structure but replace data with placeholder
+    def _strip_images(msgs):
+        out = []
+        for m in msgs:
+            content = m.get("content")
+            if isinstance(content, list):
+                stripped = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "image":
+                        stripped.append({"type": "image", "source": {"type": "placeholder"}})
+                    else:
+                        stripped.append(block)
+                out.append({**m, "content": stripped})
+            else:
+                out.append(m)
+        return out
+
+    safe_messages = _strip_images(messages)
+    # Title = first user text message, truncated
+    title = ""
+    for m in safe_messages:
+        if m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, str):
+                title = c[:80]
+            elif isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        title = (b.get("text") or "")[:80]
+                        break
+            if title:
+                break
+
+    now = datetime.utcnow().isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("""
+            INSERT INTO chatbot_sessions (user_id, session_id, title, messages_json, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (session_id) DO UPDATE
+              SET messages_json = EXCLUDED.messages_json,
+                  title         = EXCLUDED.title,
+                  updated_at    = EXCLUDED.updated_at
+        """, (current_user.id, session_id, title, json.dumps(safe_messages), now, now))
+        conn.commit()
+    finally:
+        conn.rollback(); cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
+@admin_bp.route("/admin/chatbot/sessions", methods=["GET"])
+@login_required
+@admin_required
+def chatbot_sessions_list():
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("""
+            SELECT session_id, title, updated_at
+            FROM chatbot_sessions
+            WHERE user_id = %s
+            ORDER BY updated_at DESC
+            LIMIT 30
+        """, (current_user.id,))
+        rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.rollback(); cur.close(); conn.close()
+    return jsonify({"sessions": rows})
+
+
+@admin_bp.route("/admin/chatbot/session/<session_id>", methods=["GET"])
+@login_required
+@admin_required
+def chatbot_session_load(session_id):
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("""
+            SELECT messages_json FROM chatbot_sessions
+            WHERE session_id = %s AND user_id = %s
+        """, (session_id, current_user.id))
+        row = cur.fetchone()
+    finally:
+        conn.rollback(); cur.close(); conn.close()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    try:
+        messages = json.loads(row["messages_json"])
+    except Exception:
+        messages = []
+    return jsonify({"messages": messages})
+
+
+@admin_bp.route("/admin/chatbot/session/<session_id>", methods=["DELETE"])
+@login_required
+@admin_required
+def chatbot_session_delete(session_id):
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("DELETE FROM chatbot_sessions WHERE session_id = %s AND user_id = %s",
+                    (session_id, current_user.id))
+        conn.commit()
+    finally:
+        conn.rollback(); cur.close(); conn.close()
+    return jsonify({"success": True})
+
+
 @admin_bp.route("/admin/chatbot/save-flag", methods=["POST"])
 @login_required
 @admin_required
