@@ -55,7 +55,7 @@ function clearRouteStale() {
   const gBtn = document.getElementById("googleOptimizeBtn");
   btn._stale  = false;
   gBtn._stale = false;
-  btn.textContent = "Optimize Route";
+  btn.textContent = "Optimize Route with Haversene";
   btn.classList.remove("bg-amber-500","hover:bg-amber-600");
   btn.classList.add("bg-indigo-600","hover:bg-indigo-700");
   const gSpan = gBtn.querySelector("span:first-child");
@@ -162,6 +162,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
     document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("addMoreBtn").classList.remove("hidden");
     document.getElementById("changeStartBtn").classList.remove("hidden");
+    document.getElementById("recalcTimesBtn").classList.remove("hidden");
     if (currentRouteId) {
       document.getElementById("saveRouteBtn").classList.add("hidden");
       document.getElementById("updateRouteBtn").classList.remove("hidden");
@@ -388,12 +389,15 @@ async function submitUpdateRoute() {
 
     isOptimized = true;
 
-    // Use saved eta_minutes of first stop as a starting approximation
+    // Derive true depot start from the first stop's arrival minus its drive time
     if (optimizedSchedule.length > 0 && optimizedSchedule[0].eta_minutes != null) {
-      startMinutes = optimizedSchedule[0].eta_minutes;
+      const firstStop = optimizedSchedule[0];
+      const driveToFirstMin = (firstStop.drive_seconds != null) ? firstStop.drive_seconds / 60 : 0;
+      startMinutes = Math.round(firstStop.eta_minutes - driveToFirstMin);
     } else {
       startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
     }
+    document.getElementById("startTime").value = minutesToHHMM(startMinutes);
 
     // Build drive-time matrix directly from saved eta_minutes — no API call needed.
     // These values were computed from the Google Maps matrix when the route was first
@@ -430,6 +434,7 @@ async function submitUpdateRoute() {
     document.getElementById("workInSection").classList.remove("hidden");
     document.getElementById("addMoreBtn").classList.remove("hidden");
     document.getElementById("changeStartBtn").classList.remove("hidden");
+    document.getElementById("recalcTimesBtn").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.add("hidden");
     document.getElementById("updateRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value   = data.name;
@@ -466,6 +471,56 @@ async function submitUpdateRoute() {
 document.getElementById("saveModal").addEventListener("click", function(e) {
   if (e.target === this) closeSaveModal();
 });
+
+/* ── RECALCULATE DRIVE TIMES (Google Maps, no re-optimize) ── */
+async function recalcDriveTimes() {
+  if (!isOptimized) return;
+  const real = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
+  if (!real.length) return;
+
+  const btn = document.getElementById("recalcTimesBtn");
+  btn.disabled = true;
+  btn.textContent = "Fetching…";
+  document.getElementById("loadingOverlay").classList.add("active");
+  document.getElementById("loadingOverlay").querySelector(".lo-label").textContent = "Fetching real drive times…";
+
+  try {
+    const res = await fetch("/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stops:             real.map(s => ({ name:s.name, lat:s.lat, lng:s.lng, arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes })),
+        start:             startLocation,
+        end:               endLocation,
+        startTime:         minutesToHHMM(startMinutes),
+        use_google_matrix: true,
+        preserve_order:    true,
+      })
+    });
+    const data = await guardResponse(res);
+    document.getElementById("loadingOverlay").classList.remove("active");
+    btn.disabled = false;
+    btn.textContent = "🗺 Recalc Drive Times";
+    if (data.error) { alert(data.error); return; }
+
+    durationMatrix = data.duration_matrix || durationMatrix;
+    recalculateTimes();
+    renderSchedule();
+
+    if (data.distance) {
+      lastStats.distance = data.distance;
+      document.getElementById("distance").textContent = (data.distance / 1609).toFixed(1) + " miles";
+    }
+    if (data.route_polyline) await redrawRouteOnMap(data.route_polyline);
+    showToast("✓ Drive times updated with Google Maps");
+  } catch(err) {
+    document.getElementById("loadingOverlay").classList.remove("active");
+    btn.disabled = false;
+    btn.textContent = "🗺 Recalc Drive Times";
+    if (err === "session_expired") return;
+    alert("Could not fetch drive times: " + (err.message || err));
+  }
+}
 
 /* ── GOOGLE MAPS EXPORT ── */
 function exportToGoogleMaps() {

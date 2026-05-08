@@ -377,6 +377,7 @@ function restartRoute() {
   document.getElementById("updateRouteBtn").classList.add("hidden");
   document.getElementById("addMoreBtn").classList.add("hidden");
   document.getElementById("changeStartBtn").classList.add("hidden");
+  document.getElementById("recalcTimesBtn").classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   document.getElementById("workInBox").value = "";
   document.getElementById("saveRouteName").value  = "";

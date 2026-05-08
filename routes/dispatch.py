@@ -544,13 +544,16 @@ def optimize():
     if not cleaned_stops:
         return jsonify({"error": "None of the submitted stops had valid coordinates (lat/lng). This usually means the property list is out of sync — try refreshing the page and re-adding your stops."}), 400
 
-    # Pre-sort so priority check-ins become low-numbered nodes (1, 2, 3…).
-    # LOCAL_CHEAPEST_INSERTION processes nodes in order, so earlier nodes get
-    # inserted first and tend to land earlier in the final route — which is
-    # exactly what we need for stops that must finish before noon.
-    cleaned_stops.sort(key=lambda s: (
-        0 if s.get("priority_checkin") else (1 if s.get("arrival") else 2)
-    ))
+    preserve_order = bool(data.get("preserve_order", False))
+
+    if not preserve_order:
+        # Pre-sort so priority check-ins become low-numbered nodes (1, 2, 3…).
+        # LOCAL_CHEAPEST_INSERTION processes nodes in order, so earlier nodes get
+        # inserted first and tend to land earlier in the final route — which is
+        # exactly what we need for stops that must finish before noon.
+        cleaned_stops.sort(key=lambda s: (
+            0 if s.get("priority_checkin") else (1 if s.get("arrival") else 2)
+        ))
 
     # Build location list. When end differs from start, append it as the
     # final node so OR-Tools can route to it instead of looping back.
@@ -572,7 +575,18 @@ def optimize():
     else:
         duration_matrix = _haversine_matrix(all_locations)
 
-    if drive_only:
+    if preserve_order:
+        # Skip OR-Tools — keep stops in the order provided and compute arrivals
+        # by summing sequential drive legs: depot→1→2→…→N.
+        t = 0
+        node_arrival_sec = {0: 0}
+        for i in range(1, len(all_locations)):
+            t += float(duration_matrix[i - 1][i]) if duration_matrix[i - 1][i] else 0.0
+            node_arrival_sec[i] = t
+        ordered_nodes             = list(range(len(all_locations)))
+        used_deadline_constraints = False
+        used_soft_penalties       = False
+    elif drive_only:
         service_times_sec = [0] * len(all_locations)
         checkin_flags     = [False] * len(all_locations)
         priority_flags    = [False] * len(all_locations)
@@ -646,10 +660,11 @@ def optimize():
             if ordered_nodes is None:
                 return jsonify({"error": "The route optimizer failed on all three passes (hard constraints, soft penalties, and unconstrained). This is unexpected — check that OR-Tools is installed correctly and that the stop coordinates are in a reachable area."}), 500
 
-    node_arrival_sec   = {}
-    for pos, node in enumerate(ordered_nodes):
-        if node not in node_arrival_sec:
-            node_arrival_sec[node] = arrival_times_sec[pos]
+    if not preserve_order:
+        node_arrival_sec = {}
+        for pos, node in enumerate(ordered_nodes):
+            if node not in node_arrival_sec:
+                node_arrival_sec[node] = arrival_times_sec[pos]
 
     ordered_stop_nodes = [n for n in ordered_nodes[1:] if n != 0 and n != end_node]
     ordered_stops      = [all_locations[n] for n in ordered_stop_nodes]

@@ -685,13 +685,15 @@ def day_summary():
 @briefing_bp.route("/briefing/pri-check")
 @login_required
 def pri_check():
-    """Scan next 60 days of short-term guest checkouts for PRI needs.
+    """Scan short-term guest checkouts from 30 days ago through the forward window for PRI needs.
 
     PRI required when a short-term guest (<30 days) checks out AND:
       - The immediately next reservation at that property is OWNER or BLOCK
         → needs "owner next" tag in Breezeway (or already tagged = done)
       - OR there is no upcoming reservation within 60 days
         → vacancy PRI must be created manually by ops
+
+    Looks back 30 days so owner stays added late to Streamline are still caught.
     """
     start_param = request.args.get("start_date")
     try:
@@ -706,39 +708,41 @@ def pri_check():
         report_days = 60
     report_days = max(1, min(report_days, 60))
 
-    scan_end = today + timedelta(days=60)          # always scan 60 days for vacancy calc
-    report_end = today + timedelta(days=report_days)  # display cutoff
-    far_end  = today + timedelta(days=150)  # look further ahead to find what follows late checkouts
+    lookback_start = today - timedelta(days=30)    # scan back 30 days for late-added owner stays
+    scan_end       = today + timedelta(days=60)    # always scan 60 days forward for vacancy calc
+    report_end     = today + timedelta(days=report_days)  # display cutoff
+    far_end        = today + timedelta(days=150)   # look further ahead to find what follows late checkouts
 
     token = _get_breezeway_token()
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 500
 
+    lookback_str   = lookback_start.isoformat()
     today_str      = today.isoformat()
     scan_end_str   = scan_end.isoformat()
     report_end_str = report_end.isoformat()
     far_end_str    = far_end.isoformat()
 
-    # Short-term guest checkouts in next 60 days (always full window for vacancy calc)
+    # Checkouts from 30 days ago through the forward window (catches last-minute owner additions)
     raw_checkouts = _fetch_bw_reservations(token, {
-        "checkout_date_ge": today_str,
+        "checkout_date_ge": lookback_str,
         "checkout_date_le": scan_end_str,
     })
-    # All upcoming reservations in next 150 days (to find what follows each checkout)
+    # Reservations starting from 30 days ago through 150 days out — needed so we can find
+    # owner/block stays that may have already checked in after a recent guest checkout.
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkin_date_ge": today_str,
+        "checkin_date_ge": lookback_str,
         "checkin_date_le": far_end_str,
     })
 
-    # Validate dates server-side — Breezeway may not filter precisely for range queries
-    # Filter to report_end (30 or 60 days) for display, but scan_end used for vacancy calc
+    # Filter checkouts to the display window (lookback through report_end)
     checkouts = [
         r for r in raw_checkouts
-        if today_str <= (r.get("checkout_date") or "")[:10] <= report_end_str
+        if lookback_str <= (r.get("checkout_date") or "")[:10] <= report_end_str
     ]
     upcoming = [
         r for r in raw_upcoming
-        if (r.get("checkin_date") or "")[:10] >= today_str
+        if (r.get("checkin_date") or "")[:10] >= lookback_str
     ]
 
     # Group upcoming by property, sorted ascending by checkin date
