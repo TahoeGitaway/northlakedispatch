@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import psycopg2.extras
 import requests
 from flask import (Blueprint, render_template, request, redirect,
-                   url_for, flash, current_app, jsonify)
+                   url_for, flash, current_app, jsonify, Response, stream_with_context)
 from flask_login import login_required, current_user
 from werkzeug.security import generate_password_hash
 
@@ -1202,15 +1202,6 @@ def chatbot_chat():
                 if matches:
                     prop_id_filter = rev[matches[0]]
 
-        # Non-date params (property, status)
-        base_params = {}
-        if prop_id_filter:
-            base_params["property_id"] = prop_id_filter
-        if status_filter:
-            base_params["status"] = status_filter
-
-        # Date filter conventions — passed to _fetch_bw_tasks which handles
-        # 422 responses by trying each one on the first path that actually exists
         date_param_sets = [
             {"due_date_ge": start_str,       "due_date_le": end_str},
             {"scheduled_date_ge": start_str, "scheduled_date_le": end_str},
@@ -1219,9 +1210,57 @@ def chatbot_chat():
             {"from": start_str,              "to": end_str},
         ]
 
-        tasks, error = _fetch_bw_tasks(tok, base_params, date_param_sets)
-        if "plan" in error or "access" in error:
-            return error
+        # Try with server-side property filter first (multiple param name conventions)
+        # The task endpoint may use reference_property_id or property_id; try both.
+        tasks, error = [], "not tried"
+        property_filter_worked = False
+        if prop_id_filter:
+            for pid_key in ("property_id", "reference_property_id", "property"):
+                base = {pid_key: prop_id_filter}
+                if status_filter:
+                    base["status"] = status_filter
+                tasks, error = _fetch_bw_tasks(tok, base, date_param_sets)
+                if "plan" in error or "access" in error:
+                    return error
+                if tasks or not error:
+                    property_filter_worked = True
+                    break
+                # "Property not found" means wrong ID format — try next param name
+                if "not found" not in error.lower() and "422" not in error:
+                    break  # a different error (auth, network) — don't keep trying
+            # Fallback: fetch all tasks and filter client-side by property name
+            if not tasks and property_name_filter:
+                base_all = {}
+                if status_filter:
+                    base_all["status"] = status_filter
+                all_tasks, error = _fetch_bw_tasks(tok, base_all, date_param_sets)
+                if "plan" in error or "access" in error:
+                    return error
+                # Client-side filter by property name
+                name_lower = property_name_filter.lower()
+                tasks = [
+                    t for t in all_tasks
+                    if name_lower in (t.get("property_name") or t.get("property") or
+                                      t.get("unit_name") or "").lower()
+                ]
+                if not tasks and all_tasks:
+                    import difflib as _dl
+                    prop_names = list({
+                        (t.get("property_name") or t.get("property") or t.get("unit_name") or "").lower()
+                        for t in all_tasks if (t.get("property_name") or t.get("property") or t.get("unit_name"))
+                    })
+                    close = _dl.get_close_matches(name_lower, prop_names, n=1, cutoff=0.5)
+                    if close:
+                        tasks = [t for t in all_tasks
+                                 if (t.get("property_name") or t.get("property") or
+                                     t.get("unit_name") or "").lower() == close[0]]
+        else:
+            base_params = {}
+            if status_filter:
+                base_params["status"] = status_filter
+            tasks, error = _fetch_bw_tasks(tok, base_params, date_param_sets)
+            if "plan" in error or "access" in error:
+                return error
 
         if error and not tasks:
             return f"Could not fetch tasks: {error}"
@@ -1272,88 +1311,107 @@ def chatbot_chat():
 
         return "\n".join(lines)
 
-    try:
-        ai_client    = anthropic.Anthropic(api_key=key)
-        trimmed      = list(messages[-30:]) if len(messages) > 30 else list(messages)
+    def generate():
+        def sse(obj):
+            return f"data: {json.dumps(obj)}\n\n"
+
+        ai_client         = anthropic.Anthropic(api_key=key)
+        trimmed           = list(messages[-30:]) if len(messages) > 30 else list(messages)
         history_additions = []
-        reply_text   = "Sorry, I couldn't complete that request. Please try again."
+        reply_text        = ""
 
-        for _turn in range(6):
-            resp = ai_client.messages.create(
-                model      = "claude-sonnet-4-6",
-                max_tokens = 2000,
-                system     = system_prompt,
-                messages   = trimmed,
-                tools      = tools,
-            )
-
-            if resp.stop_reason == "tool_use":
-                asst_content = []
-                for b in resp.content:
-                    if b.type == "tool_use":
-                        asst_content.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
-                    elif b.type == "text":
-                        asst_content.append({"type": "text", "text": b.text})
-                    else:
-                        asst_content.append({"type": b.type})
-                trimmed.append({"role": "assistant", "content": asst_content})
-                history_additions.append({"role": "assistant", "content": asst_content})
-
-                tool_results = []
-                for block in resp.content:
-                    if block.type == "tool_use":
-                        if block.name == "fetch_reservation_data":
-                            result = _execute_fetch(
-                                block.input.get("start_date", ""),
-                                block.input.get("end_date",   ""),
-                            )
-                        elif block.name == "fetch_task_data":
-                            result = _execute_fetch_tasks(
-                                block.input.get("start_date", ""),
-                                block.input.get("end_date",   ""),
-                                block.input.get("property_name"),
-                                block.input.get("status"),
-                            )
-                        else:
-                            result = f"Unknown tool: {block.name}"
-                        tool_results.append({
-                            "type":        "tool_result",
-                            "tool_use_id": block.id,
-                            "content":     result,
-                        })
-                tool_msg = {"role": "user", "content": tool_results}
-                trimmed.append(tool_msg)
-                history_additions.append(tool_msg)
-            else:
-                reply_text = next((b.text for b in resp.content if hasattr(b, "text")), reply_text)
-                break
-
-        # Log (best-effort)
         try:
-            user_msg = messages[-1]["content"] if messages else ""
-            conn_log = get_db()
-            cur_log  = get_cursor(conn_log)
-            cur_log.execute(
-                "INSERT INTO bot_interactions "
-                "(user_id, session_id, query, response, dates_loaded, created_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (current_user.id, data.get("session_id", ""),
-                 user_msg, reply_text, json.dumps(dates),
-                 datetime.utcnow().isoformat()),
-            )
-            conn_log.commit()
-            cur_log.close(); conn_log.close()
-        except Exception:
-            pass
+            for _turn in range(6):
+                turn_text    = ""
+                asst_content = []
 
-        return jsonify({
-            "reply":             reply_text,
-            "context_summary":   context_summary,
-            "kb_count":          len(knowledge_rows),
-            "history_additions": history_additions,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+                with ai_client.messages.stream(
+                    model      = "claude-sonnet-4-6",
+                    max_tokens = 2000,
+                    system     = system_prompt,
+                    messages   = trimmed,
+                    tools      = tools,
+                ) as stream:
+                    for chunk in stream.text_stream:
+                        turn_text  += chunk
+                        reply_text += chunk
+                        yield sse({"type": "delta", "text": chunk})
+
+                    final_msg = stream.get_final_message()
+
+                if final_msg.stop_reason == "tool_use":
+                    for b in final_msg.content:
+                        if b.type == "tool_use":
+                            asst_content.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
+                        elif b.type == "text":
+                            asst_content.append({"type": "text", "text": b.text})
+                        else:
+                            asst_content.append({"type": b.type})
+                    trimmed.append({"role": "assistant", "content": asst_content})
+                    history_additions.append({"role": "assistant", "content": asst_content})
+
+                    tool_results = []
+                    for block in final_msg.content:
+                        if block.type == "tool_use":
+                            label = "reservation data" if block.name == "fetch_reservation_data" else "task data"
+                            yield sse({"type": "status", "text": f"Fetching {label}…"})
+                            if block.name == "fetch_reservation_data":
+                                result = _execute_fetch(
+                                    block.input.get("start_date", ""),
+                                    block.input.get("end_date",   ""),
+                                )
+                            elif block.name == "fetch_task_data":
+                                result = _execute_fetch_tasks(
+                                    block.input.get("start_date", ""),
+                                    block.input.get("end_date",   ""),
+                                    block.input.get("property_name"),
+                                    block.input.get("status"),
+                                )
+                            else:
+                                result = f"Unknown tool: {block.name}"
+                            tool_results.append({
+                                "type":        "tool_result",
+                                "tool_use_id": block.id,
+                                "content":     result,
+                            })
+                    tool_msg = {"role": "user", "content": tool_results}
+                    trimmed.append(tool_msg)
+                    history_additions.append(tool_msg)
+                else:
+                    break
+
+            # Log (best-effort)
+            try:
+                user_msg = messages[-1]["content"] if messages else ""
+                conn_log = get_db()
+                cur_log  = get_cursor(conn_log)
+                cur_log.execute(
+                    "INSERT INTO bot_interactions "
+                    "(user_id, session_id, query, response, dates_loaded, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (current_user.id, data.get("session_id", ""),
+                     user_msg, reply_text, json.dumps(dates),
+                     datetime.utcnow().isoformat()),
+                )
+                conn_log.commit()
+                cur_log.close(); conn_log.close()
+            except Exception:
+                pass
+
+            yield sse({
+                "type":              "done",
+                "history_additions": history_additions,
+                "context_summary":   context_summary,
+                "kb_count":          len(knowledge_rows),
+            })
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype = "text/event-stream",
+        headers  = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @admin_bp.route("/admin/chatbot/save-flag", methods=["POST"])

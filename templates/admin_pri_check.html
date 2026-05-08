@@ -63,29 +63,45 @@
 let _days = 30;
 
 /* ── Vacancy dismissal (persists in localStorage) ── */
-const DISMISS_KEY = "pri_vacancy_dismissed";
+const DISMISS_KEY        = "pri_vacancy_dismissed";
+const OWNER_NEXT_DISMISS = "pri_owner_next_dismissed";
 
-function _dismissed() {
+function _dismissed()    {
   try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); }
   catch { return {}; }
 }
+function _ownerNextDismissed() {
+  try { return JSON.parse(localStorage.getItem(OWNER_NEXT_DISMISS) || "{}"); }
+  catch { return {}; }
+}
 
-function _vacancyKey(p) { return `${p.property}::${p.checkout_date}`; }
+function _vacancyKey(p)    { return `${p.property}::${p.checkout_date}`; }
+function _ownerNextKey(p)  { return `${p.property}::${p.checkout_date}::on`; }
 
-function dismissVacancy(key, cardEl) {
-  const d = _dismissed();
+function _dismissCard(storageKey, key, cardEl, badgeId) {
+  const d = JSON.parse(localStorage.getItem(storageKey) || "{}");
   d[key]  = Date.now();
-  localStorage.setItem(DISMISS_KEY, JSON.stringify(d));
+  localStorage.setItem(storageKey, JSON.stringify(d));
   cardEl.style.transition = "opacity 0.25s";
   cardEl.style.opacity    = "0";
   setTimeout(() => cardEl.remove(), 260);
-  // Update the hidden count badge
-  const badge = document.getElementById("vacancyDismissedBadge");
-  if (badge) badge.textContent = Object.keys(_dismissed()).length + " dismissed";
+  const badge = document.getElementById(badgeId);
+  if (badge) badge.textContent = Object.keys(JSON.parse(localStorage.getItem(storageKey) || "{}")).length + " dismissed";
+}
+
+function dismissVacancy(key, cardEl) {
+  _dismissCard(DISMISS_KEY, key, cardEl, "vacancyDismissedBadge");
+}
+function dismissOwnerNext(key, cardEl) {
+  _dismissCard(OWNER_NEXT_DISMISS, key, cardEl, "ownerNextDismissedBadge");
 }
 
 function clearAllDismissed() {
   localStorage.removeItem(DISMISS_KEY);
+  load();
+}
+function clearAllOwnerNextDismissed() {
+  localStorage.removeItem(OWNER_NEXT_DISMISS);
   load();
 }
 
@@ -136,15 +152,28 @@ function buildSection(title, color, items, cardFn) {
 
 function redCard(p) {
   const typeLabel = p.next_type === "block" ? "Block" : "Owner stay";
-  const co = _fmtDate(p.checkout_date), ci = _fmtDate(p.next_checkin);
+  const co  = _fmtDate(p.checkout_date), ci = _fmtDate(p.next_checkin);
+  const key = _ownerNextKey(p);
   const vacLine = p.vacancy_days
     ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">${p.vacancy_days}-day vacancy before arrival</div>` : "";
-  return _card("#fef2f2", "#fecaca", `
-    <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
-    <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> → ${typeLabel} in <strong>${ci}</strong></div>
-    ${vacLine}
-    <div style="font-size:0.75rem;font-weight:500;color:#ef4444;margin-top:4px;">Add "owner next" tag in Breezeway on the incoming reservation</div>
+  const card = _card("#fef2f2", "#fecaca", `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <div style="min-width:0;">
+        <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
+        <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> → ${typeLabel} in <strong>${ci}</strong></div>
+        ${vacLine}
+        <div style="font-size:0.75rem;font-weight:500;color:#ef4444;margin-top:4px;">Add "owner next" tag in Breezeway on the incoming reservation</div>
+      </div>
+      <button class="dismiss-btn" data-key="${key}"
+              style="flex-shrink:0;font-size:0.7rem;font-weight:600;color:#991b1b;
+                     background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;
+                     padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
+        ✓ Done
+      </button>
+    </div>
   `);
+  card.querySelector(".dismiss-btn").addEventListener("click", () => dismissOwnerNext(key, card));
+  return card;
 }
 
 function orangeCard(p) {
@@ -202,16 +231,19 @@ async function load() {
       return;
     }
 
-    const needs  = data.needs_tag      || [];
-    const done   = data.already_tagged || [];
-    const allVacant = data.no_booking  || [];
+    const allNeeds  = data.needs_tag      || [];
+    const done      = data.already_tagged || [];
+    const allVacant = data.no_booking     || [];
 
-    // Filter dismissed vacancy items
-    const dismissed = _dismissed();
-    const vacant    = allVacant.filter(p => !dismissed[_vacancyKey(p)]);
-    const hiddenCt  = allVacant.length - vacant.length;
+    // Filter dismissed items
+    const dismissed    = _dismissed();
+    const onDismissed  = _ownerNextDismissed();
+    const needs        = allNeeds.filter(p => !onDismissed[_ownerNextKey(p)]);
+    const vacant       = allVacant.filter(p => !dismissed[_vacancyKey(p)]);
+    const hiddenCt     = allVacant.length - vacant.length;
+    const hiddenOnCt   = allNeeds.length  - needs.length;
 
-    const total = needs.length + done.length + allVacant.length;
+    const total = allNeeds.length + done.length + allVacant.length;
 
     document.getElementById("subtitle").textContent =
       `Through ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
@@ -227,6 +259,16 @@ async function load() {
       const s2 = buildSection("🟠 Create vacancy PRI",   "#f97316", vacant, orangeCard);
       const s3 = buildSection("🟢 Already tagged",       "#059669", done, greenCard);
       if (s1) resultsEl.appendChild(s1);
+      if (hiddenOnCt > 0) {
+        const note = document.createElement("div");
+        note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-top:-2px;margin-bottom:14px;";
+        note.innerHTML = `<span id="ownerNextDismissedBadge">${hiddenOnCt} dismissed</span> ·
+          <button onclick="clearAllOwnerNextDismissed()"
+                  style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
+            Show all
+          </button>`;
+        resultsEl.appendChild(note);
+      }
       if (s2) {
         resultsEl.appendChild(s2);
         if (hiddenCt > 0) {

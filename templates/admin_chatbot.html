@@ -279,30 +279,123 @@ async function sendMessage() {
   conversationHistory.push({ role: "user", content: text });
   appendThinking();
 
+  let botBubble  = null;
+  let replyText  = "";
+  let statusLine = null;
+
+  function getOrCreateBubble() {
+    if (botBubble) return botBubble;
+    document.getElementById("thinking")?.remove();
+    if (statusLine) { statusLine.remove(); statusLine = null; }
+    hideStar();
+    const box = document.getElementById("chatMessages");
+    botBubble = document.createElement("div");
+    botBubble.className = "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
+    box.appendChild(botBubble);
+    return botBubble;
+  }
+
+  function showStatus(msg) {
+    const thinking = document.getElementById("thinking");
+    if (thinking) { thinking.textContent = msg; return; }
+    if (!statusLine) {
+      const box = document.getElementById("chatMessages");
+      statusLine = document.createElement("div");
+      statusLine.className = "self-start text-xs text-gray-400 italic px-2 py-1";
+      box.appendChild(statusLine);
+    }
+    statusLine.textContent = msg;
+    document.getElementById("chatMessages").scrollTop = document.getElementById("chatMessages").scrollHeight;
+  }
+
   try {
-    const res  = await fetch("/admin/chatbot/chat", {
+    const res = await fetch("/admin/chatbot/chat", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ messages: conversationHistory, dates: selectedDates, session_id: SESSION_ID }),
     });
-    const data = await res.json();
-    document.getElementById("thinking")?.remove();
 
-    if (data.error) {
-      appendMessage("assistant", "Error: " + data.error);
+    if (!res.ok) {
+      document.getElementById("thinking")?.remove();
+      appendMessage("assistant", "Server error: " + res.status);
       conversationHistory.pop();
       return;
     }
 
-    appendMessage("assistant", data.reply);
-    for (const msg of (data.history_additions || [])) {
-      conversationHistory.push(msg);
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf     = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      const lines = buf.split("\n");
+      buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (!raw) continue;
+        let evt;
+        try { evt = JSON.parse(raw); } catch { continue; }
+
+        if (evt.type === "status") {
+          showStatus(evt.text);
+        } else if (evt.type === "delta") {
+          if (statusLine) { statusLine.remove(); statusLine = null; }
+          const bubble = getOrCreateBubble();
+          replyText += evt.text;
+          bubble.textContent = replyText;
+          document.getElementById("chatMessages").scrollTop = document.getElementById("chatMessages").scrollHeight;
+        } else if (evt.type === "done") {
+          document.getElementById("thinking")?.remove();
+          if (statusLine) { statusLine.remove(); statusLine = null; }
+
+          // Handle CONFIRM_ACTION if present
+          const actionMatch = replyText.match(/CONFIRM_ACTION:\s*(.+)/i);
+          if (actionMatch && botBubble) {
+            const actionDesc  = actionMatch[1].trim();
+            const displayText = replyText.replace(/CONFIRM_ACTION:\s*.+/i, "").trim();
+            botBubble.textContent = displayText;
+            const confirmDiv = document.createElement("div");
+            confirmDiv.className = "self-start flex items-center gap-2 mt-1";
+            confirmDiv.innerHTML = `
+              <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200
+                           rounded-xl px-3 py-1.5 leading-snug">
+                ⚠ <strong>Proposed action:</strong> ${escHtml(actionDesc)}
+              </span>
+              <button onclick="confirmAction(this, ${JSON.stringify(actionDesc)})"
+                      class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-medium
+                             px-3 py-1.5 rounded-lg transition-colors">
+                ✓ Confirm
+              </button>
+              <button onclick="this.parentElement.remove()"
+                      class="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1.5 transition-colors">
+                ✗ Cancel
+              </button>`;
+            document.getElementById("chatMessages").appendChild(confirmDiv);
+          }
+
+          for (const msg of (evt.history_additions || [])) {
+            conversationHistory.push(msg);
+          }
+          conversationHistory.push({ role: "assistant", content: replyText });
+          updateContextPanel(evt.context_summary, evt.kb_count);
+        } else if (evt.type === "error") {
+          document.getElementById("thinking")?.remove();
+          if (statusLine) { statusLine.remove(); statusLine = null; }
+          if (!botBubble) appendMessage("assistant", "Error: " + evt.text);
+          else botBubble.textContent = (replyText ? replyText + "\n\n" : "") + "Error: " + evt.text;
+          conversationHistory.pop();
+        }
+      }
     }
-    conversationHistory.push({ role: "assistant", content: data.reply });
-    updateContextPanel(data.context_summary, data.kb_count);
   } catch (e) {
     document.getElementById("thinking")?.remove();
-    appendMessage("assistant", "Network error: " + e.message);
+    if (statusLine) { statusLine.remove(); statusLine = null; }
+    if (!botBubble) appendMessage("assistant", "Network error: " + e.message);
     conversationHistory.pop();
   }
 }
