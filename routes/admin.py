@@ -1215,13 +1215,23 @@ def chatbot_chat():
             pid = rev[name_lower]
             matched_prop_name = property_name_filter
         else:
-            matches = difflib.get_close_matches(name_lower, rev.keys(), n=1, cutoff=0.6)
+            # Try progressively looser matching so partial names still resolve
+            matches = (difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.6) or
+                       difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.4))
+            # Also accept any key that contains the filter as a substring (or vice versa)
+            if not matches:
+                matches = [k for k in rev if name_lower in k or k in name_lower]
             pid = rev[matches[0]] if matches else None
             matched_prop_name = _property_cache.get(pid, property_name_filter) if pid else None
 
         if not pid:
-            return (f"Could not find a property matching '{property_name_filter}' in Breezeway. "
-                    f"Check the property name and try again.")
+            # Surface near candidates so the bot can retry with the exact Breezeway name
+            candidates = difflib.get_close_matches(name_lower, rev.keys(), n=5, cutoff=0.3)
+            candidate_str = (", ".join(f'"{_property_cache[rev[c]]}"' for c in candidates)
+                             if candidates else "none found")
+            return (f"Could not find a property matching '{property_name_filter}' in the local "
+                    f"property cache. Closest names in Breezeway: {candidate_str}. "
+                    f"Retry using one of those exact names.")
 
         matched_prop_name = matched_prop_name or property_name_filter
 
