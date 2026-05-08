@@ -851,9 +851,38 @@ def chatbot_chat():
     data     = request.get_json(force=True)
     messages = data.get("messages", [])
     dates    = data.get("dates", [])
+    images   = data.get("images", [])  # [{data, media_type}] attached to latest message
 
     if not messages:
         return jsonify({"error": "No message provided."}), 400
+
+    # If images were attached, rewrite the last user message as a multimodal content list.
+    # The history entry the frontend already built has image blocks, so we just ensure
+    # the server-side copy also has them (frontend sends the full history including images).
+    # Validate and sanitise: only allow known image MIME types, cap payload size.
+    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+    if images:
+        safe_images = [
+            img for img in images
+            if isinstance(img, dict)
+            and img.get("media_type") in ALLOWED_IMAGE_TYPES
+            and isinstance(img.get("data"), str)
+            and len(img["data"]) < 20 * 1024 * 1024  # 20 MB base64 cap per image
+        ]
+        if safe_images and messages and messages[-1].get("role") == "user":
+            last = messages[-1]
+            existing_content = last.get("content", "")
+            if isinstance(existing_content, str):
+                content_blocks = [{"type": "text", "text": existing_content}] if existing_content else []
+            else:
+                content_blocks = list(existing_content)
+            image_blocks = [
+                {"type": "image", "source": {"type": "base64",
+                                             "media_type": img["media_type"],
+                                             "data": img["data"]}}
+                for img in safe_images
+            ]
+            messages[-1] = {"role": "user", "content": image_blocks + content_blocks}
 
     # Default to today if no dates selected so knowledge-only questions always work
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
