@@ -845,7 +845,7 @@ def chatbot_chat():
         _fetch_todays_routes, _fetch_bw_reservations,
         _fetch_bw_endpoint, _get_breezeway_token, _classify_reservation,
         _get_property_name, _get_property_address, _extract_str,
-        _property_cache, _property_ref_cache, _ensure_property_cache,
+        _get_live_property_cache, _get_live_ref_cache,
     )
 
     data     = request.get_json(force=True)
@@ -1237,7 +1237,7 @@ def chatbot_chat():
                     "the Breezeway task API does not support global queries. "
                     "Please ask the user which property they want to check.")
 
-        _ensure_property_cache()
+        _property_cache = _get_live_property_cache()
         name_lower = property_name_filter.lower()
         rev = {v.lower(): k for k, v in _property_cache.items() if isinstance(v, str)}
         if name_lower in rev:
@@ -1283,7 +1283,7 @@ def chatbot_chat():
         # Try multiple property param name conventions — stop on first 200 response.
         # 'property_id' was the working name pre-deployment; also try 'home_id' and
         # 'reference_property_id' (external string ID from cache) as fallbacks.
-        ref_id = _property_ref_cache.get(pid)
+        ref_id = _get_live_ref_cache().get(pid)
         prop_params_to_try = []
         if ref_id:
             prop_params_to_try.append(("reference_property_id", ref_id))

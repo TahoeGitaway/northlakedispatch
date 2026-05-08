@@ -274,6 +274,20 @@ def _ensure_property_cache():
         _load_property_cache()
 
 
+def _get_live_property_cache() -> dict:
+    """Return the current _property_cache, refreshing if stale.
+    Use this instead of importing _property_cache directly — a direct import
+    captures the reference at import time and misses subsequent reassignments."""
+    _ensure_property_cache()
+    return _property_cache
+
+
+def _get_live_ref_cache() -> dict:
+    """Return the current _property_ref_cache, refreshing if stale."""
+    _ensure_property_cache()
+    return _property_ref_cache
+
+
 def _get_property_name(property_id) -> str:
     """Return a property's display name by Breezeway property_id, cached 1 hour."""
     if not property_id:
