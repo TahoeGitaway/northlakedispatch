@@ -203,11 +203,13 @@ def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None)
 
 _property_cache_error: str  = ""   # last error from property fetch, for diagnostics
 _property_addr_cache:  dict = {}   # {property_id: address_string}
+_property_ref_cache:   dict = {}   # {property_id: reference_property_id string} for task API
 
 
 def _load_property_cache() -> str:
     """Fetch all Breezeway properties into _property_cache. Returns error string or ''."""
     global _property_cache, _property_addr_cache, _property_cache_ts, _property_cache_error
+    global _property_ref_cache
     token = _get_breezeway_token()
     if not token:
         _property_cache_error = "No Breezeway token"
@@ -216,6 +218,7 @@ def _load_property_cache() -> str:
         page, limit = 1, 200
         fetched      = {}
         fetched_addr = {}
+        fetched_ref  = {}
         while True:
             resp = requests.get(
                 "https://api.breezeway.io/public/inventory/v1/property",
@@ -232,6 +235,9 @@ def _load_property_cache() -> str:
                 pid  = p.get("id")
                 name = (p.get("name") or p.get("property_name") or
                         p.get("title") or p.get("display_name") or str(pid))
+                # Capture external reference ID for the task API (reference_property_id)
+                ref_id = (p.get("reference_property_id") or p.get("reference_id") or
+                          p.get("external_id") or p.get("external_property_id") or "")
                 # Try several common address field names Breezeway might use
                 addr = (p.get("address") or p.get("full_address") or
                         p.get("street_address") or p.get("location") or "")
@@ -246,11 +252,14 @@ def _load_property_cache() -> str:
                 if pid:
                     fetched[pid]      = name
                     fetched_addr[pid] = str(addr).strip()
+                    if ref_id:
+                        fetched_ref[pid] = str(ref_id)
             if len(items) < limit:
                 break
             page += 1
         _property_cache      = fetched
         _property_addr_cache = fetched_addr
+        _property_ref_cache  = fetched_ref
         _property_cache_ts   = time.time()
         _property_cache_error = ""
         return ""

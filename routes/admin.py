@@ -845,7 +845,7 @@ def chatbot_chat():
         _fetch_todays_routes, _fetch_bw_reservations,
         _fetch_bw_endpoint, _get_breezeway_token, _classify_reservation,
         _get_property_name, _get_property_address, _extract_str,
-        _property_cache, _ensure_property_cache,
+        _property_cache, _property_ref_cache, _ensure_property_cache,
     )
 
     data     = request.get_json(force=True)
@@ -1073,22 +1073,24 @@ def chatbot_chat():
             "name": "fetch_task_data",
             "description": (
                 "Fetch Breezeway task data (cleaning jobs, inspections, maintenance, any work orders) "
-                "for a date range and optionally a specific property. "
+                "for a date range at a specific property. "
+                "IMPORTANT: property_name is required — the Breezeway API does not support global task queries. "
                 "Use this when the user asks about: what tasks were done or not done, "
                 "task completion status, who completed work, pending or overdue tasks, "
                 "cleaning history, or to compare what work was expected vs. actually completed. "
-                "You can filter by property name or fetch all properties. "
-                "Maximum date range is 30 days per call."
+                "If the user asks about tasks without specifying a property, ask them which property before calling. "
+                "Maximum date range is 30 days per call. "
+                "Use status='housekeeping' for cleaning tasks, 'maintenance' for maintenance, 'inspection' for inspections."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "start_date":    {"type": "string", "description": "Start date YYYY-MM-DD"},
                     "end_date":      {"type": "string", "description": "End date YYYY-MM-DD (max 30 days after start)"},
-                    "property_name": {"type": "string", "description": "Optional: filter to a specific property by name (partial match ok). Omit for all properties."},
-                    "status":        {"type": "string", "description": "Optional: filter by status — 'complete', 'pending', 'in_progress', 'cancelled', or omit for all."},
+                    "property_name": {"type": "string", "description": "Required: property name (partial match ok, e.g. 'Beaver Lake View')."},
+                    "status":        {"type": "string", "description": "Optional: 'housekeeping', 'maintenance', 'inspection', 'safety', 'complete', 'pending', or 'in_progress'."},
                 },
-                "required": ["start_date", "end_date"],
+                "required": ["start_date", "end_date", "property_name"],
             },
         },
     ]
@@ -1193,20 +1195,34 @@ def chatbot_chat():
         # Category: type_department (housekeeping/maintenance/inspection/safety)
         params = {"scheduled_date": f"{start_str},{end_str}"}
 
-        matched_prop_name = None
-        if property_name_filter:
-            _ensure_property_cache()
-            name_lower = property_name_filter.lower()
-            rev = {v.lower(): k for k, v in _property_cache.items()}
-            if name_lower in rev:
-                pid = rev[name_lower]
-                matched_prop_name = property_name_filter
-            else:
-                matches = difflib.get_close_matches(name_lower, rev.keys(), n=1, cutoff=0.6)
-                pid = rev[matches[0]] if matches else None
-                matched_prop_name = _property_cache.get(pid, property_name_filter) if pid else None
-            if pid:
-                params["home_id"] = pid
+        if not property_name_filter:
+            return ("A property name is required to fetch task data — "
+                    "the Breezeway task API does not support global queries. "
+                    "Please ask the user which property they want to check.")
+
+        _ensure_property_cache()
+        name_lower = property_name_filter.lower()
+        rev = {v.lower(): k for k, v in _property_cache.items()}
+        if name_lower in rev:
+            pid = rev[name_lower]
+            matched_prop_name = property_name_filter
+        else:
+            matches = difflib.get_close_matches(name_lower, rev.keys(), n=1, cutoff=0.6)
+            pid = rev[matches[0]] if matches else None
+            matched_prop_name = _property_cache.get(pid, property_name_filter) if pid else None
+
+        if not pid:
+            return (f"Could not find a property matching '{property_name_filter}' in Breezeway. "
+                    f"Check the property name and try again.")
+
+        matched_prop_name = matched_prop_name or property_name_filter
+        # Prefer reference_property_id (external string ID) — the task API validates
+        # against this field. Fall back to home_id (internal integer) if no ref available.
+        ref_id = _property_ref_cache.get(pid)
+        if ref_id:
+            params["reference_property_id"] = ref_id
+        else:
+            params["home_id"] = pid
 
         # type_department filter for category-based queries
         dept_map = {"housekeeping": "housekeeping", "cleaning": "housekeeping",
