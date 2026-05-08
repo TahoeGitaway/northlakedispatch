@@ -1028,7 +1028,12 @@ def chatbot_chat():
         "- Be concise and direct. Use bullet points for multi-part answers.\n"
         "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
         "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
-        "Do not consider the action done until confirmed.\n\n"
+        "Do not consider the action done until confirmed.\n"
+        "- TOOL ACCURACY: The fetch_task_data tool returns ALL tasks from Breezeway for the given property "
+        "and date range — it does NOT filter by task title or keyword. If tasks are missing, the cause is "
+        "an API error (e.g. property ID not found) — say that plainly, not 'title matching limitations'. "
+        "Tasks may have prefixes like 'Dept' or date stamps added by Breezeway — report them exactly as returned. "
+        "Always report the full task title, assignee, scheduled date, and status for every task returned.\n\n"
         + knowledge_section
         + "RESERVATION TYPES:\n"
         "  GUEST = paying guest stay\n"
@@ -1272,14 +1277,47 @@ def chatbot_chat():
                 dept     = t.get("type_department") or ""
                 home_id  = t.get("home_id") or t.get("property_id")
                 prop_name = _get_property_name(home_id) if home_id else (t.get("property_name") or "")
-                assignee = t.get("assignee") or ""
-                if isinstance(assignee, dict):
-                    assignee = assignee.get("name") or assignee.get("full_name") or ""
-                elif isinstance(assignee, list) and assignee:
-                    first = assignee[0]
-                    assignee = first.get("name") or "" if isinstance(first, dict) else str(first)
-                sched    = (t.get("scheduled_date") or "")[:10]
-                finished = (t.get("finished_at") or t.get("completed_at") or "")[:10]
+                # Assignee: check every field name Breezeway might use
+                raw_asgn = (t.get("assignee") or t.get("assignees") or
+                            t.get("assigned_to") or t.get("worker") or
+                            t.get("staff") or t.get("user") or "")
+                if isinstance(raw_asgn, list):
+                    names = []
+                    for a in raw_asgn:
+                        if isinstance(a, dict):
+                            names.append(a.get("name") or a.get("full_name") or
+                                         a.get("first_name", "") + " " + a.get("last_name", ""))
+                        else:
+                            names.append(str(a))
+                    assignee = ", ".join(n.strip() for n in names if n.strip())
+                elif isinstance(raw_asgn, dict):
+                    assignee = (raw_asgn.get("name") or raw_asgn.get("full_name") or
+                                (raw_asgn.get("first_name", "") + " " + raw_asgn.get("last_name", "")).strip() or "")
+                else:
+                    assignee = str(raw_asgn).strip()
+                def _fmt_dt(raw):
+                    """Return date + time string from an ISO datetime or date-only string."""
+                    if not raw:
+                        return ""
+                    s = str(raw)
+                    date_part = s[:10]
+                    time_part = ""
+                    if len(s) > 10:
+                        t_raw = s[11:16]  # HH:MM
+                        if t_raw:
+                            try:
+                                h, m = int(t_raw[:2]), int(t_raw[3:5])
+                                suffix = "AM" if h < 12 else "PM"
+                                h12 = h % 12 or 12
+                                time_part = f" {h12}:{m:02d} {suffix}"
+                            except Exception:
+                                time_part = f" {t_raw}"
+                    return date_part + time_part
+
+                sched_raw = (t.get("scheduled_date") or t.get("start_time") or
+                             t.get("scheduled_start") or "")
+                sched    = _fmt_dt(sched_raw)
+                finished = _fmt_dt(t.get("finished_at") or t.get("completed_at") or "")
                 notes    = (t.get("notes") or t.get("description") or "")[:120]
 
                 line = f"  • {title}"
@@ -1287,7 +1325,7 @@ def chatbot_chat():
                 if prop_name:  line += f" — {prop_name}"
                 if sched:      line += f" | scheduled {sched}"
                 if finished:   line += f" | done {finished}"
-                if assignee:   line += f" | {assignee}"
+                if assignee:   line += f" | assigned: {assignee}"
                 if notes:      line += f"\n    {notes}"
                 lines.append(line)
             lines.append("")
