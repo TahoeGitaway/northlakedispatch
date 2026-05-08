@@ -1307,11 +1307,24 @@ def chatbot_chat():
         if error and not tasks:
             return f"Could not fetch tasks: {error}"
 
+        def _task_status(t):
+            """Extract task status as a plain lowercase string — fields may be dicts."""
+            for key in ("type_task_status", "status", "state"):
+                v = t.get(key)
+                if v is None:
+                    continue
+                if isinstance(v, str):
+                    return v.lower()
+                if isinstance(v, dict):
+                    s = v.get("value") or v.get("name") or v.get("label") or ""
+                    if s:
+                        return str(s).lower()
+            return "unknown"
+
         # Client-side status filter (pending/complete/in_progress) if not a dept keyword
         if status_filter and not dept_filter:
             status_lower = status_filter.lower()
-            tasks = [t for t in tasks
-                     if (t.get("type_task_status") or t.get("status") or t.get("state") or "").lower() == status_lower]
+            tasks = [t for t in tasks if _task_status(t) == status_lower]
 
         if not tasks:
             prop_label   = f" at {matched_prop_name or property_name_filter}" if property_name_filter else ""
@@ -1325,7 +1338,7 @@ def chatbot_chat():
 
         by_status = {}
         for t in tasks:
-            st = (t.get("type_task_status") or t.get("status") or t.get("state") or "unknown").lower()
+            st = _task_status(t)
             by_status.setdefault(st, []).append(t)
 
         status_order = ["complete", "in_progress", "pending", "blocked", "cancelled", "unknown"]
@@ -1335,8 +1348,13 @@ def chatbot_chat():
                 continue
             lines.append(f"── {st.upper()} ({len(group)}) ──")
             for t in group:
-                title    = t.get("title") or t.get("name") or t.get("type_department") or "Untitled"
-                dept     = t.get("type_department") or ""
+                def _sf(v):  # safe string extraction from potentially nested field
+                    if isinstance(v, str): return v
+                    if isinstance(v, dict): return v.get("value") or v.get("name") or v.get("label") or ""
+                    return ""
+                title = (_sf(t.get("title")) or _sf(t.get("name")) or
+                         _sf(t.get("type_department")) or "Untitled")
+                dept  = _sf(t.get("type_department"))
                 home_id  = t.get("home_id") or t.get("property_id")
                 prop_name = _get_property_name(home_id) if home_id else (t.get("property_name") or "")
                 # Assignee: use 'assignments' list — each entry is a dict with 'name' and 'status'
