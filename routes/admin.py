@@ -1202,29 +1202,26 @@ def chatbot_chat():
                 if matches:
                     prop_id_filter = rev[matches[0]]
 
-        # Build query params — try several param name conventions since API shape is unknown
-        params = {}
+        # Non-date params (property, status)
+        base_params = {}
         if prop_id_filter:
-            params["property_id"] = prop_id_filter
+            base_params["property_id"] = prop_id_filter
         if status_filter:
-            params["status"] = status_filter
+            base_params["status"] = status_filter
 
-        # Try date filter param names in order of likelihood
+        # Date filter conventions — passed to _fetch_bw_tasks which handles
+        # 422 responses by trying each one on the first path that actually exists
         date_param_sets = [
-            {"due_date_ge": start_str, "due_date_le": end_str},
+            {"due_date_ge": start_str,       "due_date_le": end_str},
             {"scheduled_date_ge": start_str, "scheduled_date_le": end_str},
-            {"start_date": start_str, "end_date": end_str},
-            {"date_ge": start_str, "date_le": end_str},
+            {"start_date": start_str,        "end_date": end_str},
+            {"date_ge": start_str,           "date_le": end_str},
+            {"from": start_str,              "to": end_str},
         ]
 
-        tasks, error = [], "No task endpoint found."
-        for date_params in date_param_sets:
-            merged = {**params, **date_params}
-            tasks, error = _fetch_bw_tasks(tok, merged)
-            if tasks or (not error):
-                break
-            if "plan" in error or "access" in error:
-                return error  # hard stop — plan issue, no point retrying
+        tasks, error = _fetch_bw_tasks(tok, base_params, date_param_sets)
+        if "plan" in error or "access" in error:
+            return error
 
         if error and not tasks:
             return f"Could not fetch tasks: {error}"
@@ -1291,7 +1288,14 @@ def chatbot_chat():
             )
 
             if resp.stop_reason == "tool_use":
-                asst_content = [b.model_dump() for b in resp.content]
+                asst_content = []
+                for b in resp.content:
+                    if b.type == "tool_use":
+                        asst_content.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
+                    elif b.type == "text":
+                        asst_content.append({"type": "text", "text": b.text})
+                    else:
+                        asst_content.append({"type": b.type})
                 trimmed.append({"role": "assistant", "content": asst_content})
                 history_additions.append({"role": "assistant", "content": asst_content})
 

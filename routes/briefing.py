@@ -139,9 +139,10 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     return all_results, "", last_status
 
 
-def _fetch_bw_tasks(token: str, params: dict) -> tuple:
+def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None) -> tuple:
     """Fetch Breezeway tasks for a date/property filter.
-    Tries known task endpoint paths and returns (results, error_message).
+    Tries known task endpoint paths, then multiple date-param conventions.
+    Returns (results, error_message).
     """
     candidate_paths = [
         "/public/work/v1/task",
@@ -149,18 +150,48 @@ def _fetch_bw_tasks(token: str, params: dict) -> tuple:
         "/public/inventory/v1/task",
         "/public/v1/task",
     ]
+    # Date filter conventions to try in order
+    if date_param_sets is None:
+        date_param_sets = [{}]  # caller already merged date params into base_params
+
     last_err = "No task endpoint responded — task API may not be enabled on this Breezeway plan."
+
     for path in candidate_paths:
-        results, err, status = _fetch_bw_endpoint(token, path, params)
+        # Quick probe: try base_params first
+        results, err, status = _fetch_bw_endpoint(token, path, base_params)
+
         if status == 404:
-            continue  # wrong path, try next
+            continue  # wrong path entirely, try next
         if status == 403:
             return [], ("Task data requires elevated API access on your Breezeway plan. "
                         "Contact Breezeway support to request task API access.")
+        if status and status not in (200, 422):
+            last_err = err or f"HTTP {status}"
+            continue
+
+        if status == 200:
+            return results, ""  # success with base params
+
+        # 422 means this path exists but our params are wrong — try date_param_sets
+        if status == 422:
+            non_date = {k: v for k, v in base_params.items()
+                        if not any(x in k for x in ("date", "start", "end"))}
+            for dp in date_param_sets:
+                merged = {**non_date, **dp}
+                res2, err2, st2 = _fetch_bw_endpoint(token, path, merged)
+                if st2 == 200:
+                    return res2, ""
+                if st2 == 403:
+                    return [], ("Task data requires elevated API access on your Breezeway plan.")
+                last_err = err2 or f"HTTP {st2} on {path} with {dp}"
+            # Fell through all param sets on this path
+            last_err = f"Task endpoint found ({path}) but all parameter formats rejected (422). " \
+                       f"Breezeway may use non-standard field names for this account."
+            break  # stop path-hunting — we found the real path, params are just wrong
+
         if err:
             last_err = err
-            continue
-        return results, ""  # success
+
     return [], last_err
 
 
