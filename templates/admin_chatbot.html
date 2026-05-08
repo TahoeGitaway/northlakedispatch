@@ -126,6 +126,14 @@ async function confirmAction(btn, description) {
   }
 }
 
+/* ── Smart scroll: only auto-scroll if already at the bottom ── */
+function scrollIfAtBottom() {
+  const box = document.getElementById("chatMessages");
+  if (box.scrollHeight - box.scrollTop - box.clientHeight < 80) {
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
 /* ── Send message ── */
 async function sendMessage() {
   const input = document.getElementById("chatInput");
@@ -162,7 +170,7 @@ async function sendMessage() {
       box.appendChild(statusLine);
     }
     statusLine.textContent = msg;
-    document.getElementById("chatMessages").scrollTop = document.getElementById("chatMessages").scrollHeight;
+    scrollIfAtBottom();
   }
 
   try {
@@ -205,7 +213,7 @@ async function sendMessage() {
           const bubble = getOrCreateBubble();
           replyText += evt.text;
           bubble.textContent = replyText;
-          document.getElementById("chatMessages").scrollTop = document.getElementById("chatMessages").scrollHeight;
+          scrollIfAtBottom();
         } else if (evt.type === "done") {
           document.getElementById("thinking")?.remove();
           if (statusLine) { statusLine.remove(); statusLine = null; }

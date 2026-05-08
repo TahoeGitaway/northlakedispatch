@@ -740,19 +740,44 @@ def daily_briefing():
 def day_summary():
     """Return arrivals and departures grouped by type for a given date.
 
-    Results are cached per-date until explicitly refreshed via ?refresh=1.
+    Priority: 1) saved DB snapshot  2) in-memory cache  3) live Breezeway fetch
+    Pass ?refresh=1 to force a live re-fetch (overwrites neither DB nor cache automatically).
     """
     date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     force    = request.args.get("refresh") == "1"
 
+    # 1) Check DB snapshot first (unless force-refresh requested)
+    if not force:
+        try:
+            conn = get_db()
+            cur  = get_cursor(conn)
+            cur.execute(
+                "SELECT arrivals, departures, saved_at FROM saved_day_summaries WHERE route_date = %s",
+                (date_str,)
+            )
+            row = cur.fetchone()
+            cur.close(); conn.rollback(); conn.close()
+            if row:
+                return jsonify({
+                    "date":       date_str,
+                    "arrivals":   json.loads(row["arrivals"]),
+                    "departures": json.loads(row["departures"]),
+                    "cached_at":  row["saved_at"],
+                    "source":     "saved",
+                })
+        except Exception:
+            pass
+
+    # 2) In-memory cache
     cached = _day_summary_cache.get(date_str)
     if cached and not force:
         ts, payload = cached
-        return jsonify({**payload, "cached_at": _fmt_pacific(ts)})
+        return jsonify({**payload, "cached_at": _fmt_pacific(ts), "source": "live"})
 
+    # 3) Live Breezeway fetch
     token = _get_breezeway_token()
     if not token:
-        return jsonify({"arrivals": {}, "departures": {}, "cached_at": None})
+        return jsonify({"arrivals": {}, "departures": {}, "cached_at": None, "source": "live"})
 
     checkins  = _fetch_bw_reservations(token, {
         "checkin_date_ge": date_str, "checkin_date_le": date_str,
@@ -783,9 +808,43 @@ def day_summary():
     payload = {"date": date_str, "arrivals": arrivals, "departures": departures}
     ts      = time.time()
     _day_summary_cache[date_str] = (ts, payload)
-    cached_at = _fmt_pacific(ts)
 
-    return jsonify({**payload, "cached_at": cached_at})
+    return jsonify({**payload, "cached_at": _fmt_pacific(ts), "source": "live"})
+
+
+@briefing_bp.route("/briefing/save-day-summary", methods=["POST"])
+@login_required
+def save_day_summary():
+    """Persist the current day's arrivals/departures snapshot to the DB."""
+    data       = request.get_json(force=True)
+    date_str   = (data.get("date") or "").strip()
+    arrivals   = data.get("arrivals")
+    departures = data.get("departures")
+
+    if not date_str or arrivals is None or departures is None:
+        return jsonify({"success": False, "error": "date, arrivals, and departures required"}), 400
+
+    saved_at = _fmt_pacific(time.time())
+    try:
+        conn = get_db()
+        cur  = get_cursor(conn)
+        cur.execute("""
+            INSERT INTO saved_day_summaries (route_date, arrivals, departures, saved_by, saved_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (route_date) DO UPDATE
+              SET arrivals   = EXCLUDED.arrivals,
+                  departures = EXCLUDED.departures,
+                  saved_by   = EXCLUDED.saved_by,
+                  saved_at   = EXCLUDED.saved_at
+        """, (date_str, json.dumps(arrivals), json.dumps(departures),
+              current_user.id, saved_at))
+        conn.commit()
+        cur.close(); conn.close()
+        # Bust in-memory cache so next load comes from DB
+        _day_summary_cache.pop(date_str, None)
+        return jsonify({"success": True, "saved_at": saved_at})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @briefing_bp.route("/briefing/pri-check")

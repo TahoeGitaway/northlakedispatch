@@ -179,10 +179,17 @@
           <div id="daySummaryPanel" class="hidden">
             <div class="flex items-center justify-between mb-2 px-1">
               <span id="daySummaryCachedAt" class="text-xs text-gray-400"></span>
-              <button onclick="loadDaySummary(currentSummaryDate, true)"
-                      class="text-xs text-indigo-400 hover:text-indigo-600 font-medium transition-colors">
-                ↺ Refresh
-              </button>
+              <div class="flex items-center gap-2">
+                <button id="saveSummaryBtn" onclick="saveDaySummary()"
+                        class="text-xs text-emerald-600 hover:text-emerald-800 font-medium
+                               border border-emerald-200 rounded-lg px-2.5 py-1 transition-colors hidden">
+                  💾 Save
+                </button>
+                <button onclick="loadDaySummary(currentSummaryDate, true)"
+                        class="text-xs text-indigo-400 hover:text-indigo-600 font-medium transition-colors">
+                  ↺ Refresh
+                </button>
+              </div>
             </div>
             <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div style="display:grid; grid-template-columns:1fr 1fr; border-bottom:0;">
@@ -394,7 +401,20 @@ async function loadDaySummary(ds, force = false) {
     loading.classList.add("hidden");
 
     if (cachedEl) {
-      cachedEl.textContent = data.cached_at ? `Updated ${data.cached_at}` : "";
+      if (data.source === "saved") {
+        cachedEl.textContent = data.cached_at ? `Saved ${data.cached_at}` : "Saved snapshot";
+      } else {
+        cachedEl.textContent = data.cached_at ? `Live · ${data.cached_at}` : "Live";
+      }
+    }
+
+    // Show Save button only for live data (already saved = no need)
+    const saveBtn = document.getElementById("saveSummaryBtn");
+    if (saveBtn) {
+      saveBtn.classList.toggle("hidden", data.source === "saved");
+      saveBtn.textContent = "💾 Save";
+      saveBtn.disabled    = false;
+      saveBtn._data       = { date: ds, arrivals: data.arrivals, departures: data.departures };
     }
 
     const TYPE_LABELS = { guest: "Guest", owner: "Owner", lease: "Lease" };
@@ -430,6 +450,33 @@ async function loadDaySummary(ds, force = false) {
     panel.classList.remove("hidden");
   } catch (e) {
     loading.classList.add("hidden");
+  }
+}
+
+async function saveDaySummary() {
+  const btn  = document.getElementById("saveSummaryBtn");
+  const info = btn?._data;
+  if (!info) return;
+  btn.textContent = "Saving…";
+  btn.disabled    = true;
+  try {
+    const res  = await fetch("/briefing/save-day-summary", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(info),
+    });
+    const data = await res.json();
+    if (data.success) {
+      btn.textContent = "✓ Saved";
+      const cachedEl = document.getElementById("daySummaryCachedAt");
+      if (cachedEl) cachedEl.textContent = `Saved ${data.saved_at}`;
+    } else {
+      btn.textContent = "Error";
+      btn.disabled    = false;
+    }
+  } catch (e) {
+    btn.textContent = "Error";
+    btn.disabled    = false;
   }
 }
 

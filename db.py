@@ -178,6 +178,14 @@ def init_db():
         created_at   TEXT
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS saved_day_summaries (
+        route_date  TEXT PRIMARY KEY,
+        arrivals    TEXT NOT NULL DEFAULT '{}',
+        departures  TEXT NOT NULL DEFAULT '{}',
+        saved_by    INTEGER REFERENCES users(id),
+        saved_at    TEXT NOT NULL
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")
