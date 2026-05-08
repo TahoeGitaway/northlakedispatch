@@ -1031,9 +1031,12 @@ def chatbot_chat():
         "Do not consider the action done until confirmed.\n"
         "- TOOL ACCURACY: The fetch_task_data tool returns ALL tasks from Breezeway for the given property "
         "and date range — it does NOT filter by task title or keyword. If tasks are missing, the cause is "
-        "an API error (e.g. property ID not found) — say that plainly, not 'title matching limitations'. "
-        "Tasks may have prefixes like 'Dept' or date stamps added by Breezeway — report them exactly as returned. "
-        "Always report the full task title, assignee, scheduled date, and status for every task returned.\n\n"
+        "an API error (e.g. property ID not found) — say exactly what the error was. "
+        "Tasks may have prefixes like 'Dept' or date stamps — report them exactly as returned. "
+        "Always report full task title, scheduled date/time, status, and assignee for every task. "
+        "If a field is blank in the data, say 'not listed' rather than claiming the API can't provide it. "
+        "Do NOT tell the user to 'flag it to whoever manages the integration' — they are the ones managing it. "
+        "If data is missing, describe exactly what was and wasn't returned so they can act on it.\n\n"
         + knowledge_section
         + "RESERVATION TYPES:\n"
         "  GUEST = paying guest stay\n"
@@ -1245,6 +1248,17 @@ def chatbot_chat():
         if error and not tasks:
             return f"Could not fetch tasks: {error}"
 
+        # Surface all field names from the first task so we can identify the assignee field
+        if tasks:
+            sample_keys = sorted(tasks[0].keys())
+            # Include raw assignee-related values so we can see exact field names & shape
+            assignee_fields = {k: tasks[0][k] for k in sample_keys
+                               if any(x in k.lower() for x in
+                                      ("assign", "worker", "staff", "user", "person", "crew", "name"))}
+        else:
+            sample_keys = []
+            assignee_fields = {}
+
         # Client-side completion status filter (pending/complete/in_progress) if not a dept keyword
         if status_filter and not dept_filter:
             status_lower = status_filter.lower()
@@ -1330,7 +1344,15 @@ def chatbot_chat():
                 lines.append(line)
             lines.append("")
 
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        # Append raw field-name debug info so we can identify the assignee field
+        if sample_keys:
+            result += f"\n\n[DEBUG — all fields in task response: {sample_keys}]"
+        if assignee_fields:
+            result += f"\n[DEBUG — assignee-related fields: {assignee_fields}]"
+        elif sample_keys:
+            result += "\n[DEBUG — no assignee-related fields found in response]"
+        return result
 
     def generate():
         def sse(obj):
