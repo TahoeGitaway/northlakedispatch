@@ -1224,13 +1224,6 @@ def chatbot_chat():
                     f"Check the property name and try again.")
 
         matched_prop_name = matched_prop_name or property_name_filter
-        # Prefer reference_property_id (external string ID) — the task API validates
-        # against this field. Fall back to home_id (internal integer) if no ref available.
-        ref_id = _property_ref_cache.get(pid)
-        if ref_id:
-            params["reference_property_id"] = ref_id
-        else:
-            params["home_id"] = pid
 
         # type_department filter for category-based queries
         dept_map = {"housekeeping": "housekeeping", "cleaning": "housekeeping",
@@ -1239,31 +1232,38 @@ def chatbot_chat():
         if dept_filter:
             params["type_department"] = dept_filter
 
-        tasks, error, _ = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", params)
+        # Try multiple property param name conventions — stop on first 200 response.
+        # 'property_id' was the working name pre-deployment; also try 'home_id' and
+        # 'reference_property_id' (external string ID from cache) as fallbacks.
+        ref_id = _property_ref_cache.get(pid)
+        prop_params_to_try = []
+        if ref_id:
+            prop_params_to_try.append(("reference_property_id", ref_id))
+        prop_params_to_try.extend([
+            ("property_id", pid),
+            ("home_id", pid),
+        ])
 
-        if "403" in error or "access" in error.lower():
-            return ("Task data requires elevated API access on your Breezeway plan. "
-                    "Contact Breezeway support to request task API access.")
+        tasks, error = [], "property not found"
+        for prop_key, prop_val in prop_params_to_try:
+            attempt_params = {**params, prop_key: prop_val}
+            t, e, status_code = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", attempt_params)
+            if status_code == 200:
+                tasks, error = t, ""
+                break
+            if "403" in e or "access" in e.lower():
+                return ("Task data requires elevated API access on your Breezeway plan. "
+                        "Contact Breezeway support to request task API access.")
+            error = e
 
         if error and not tasks:
             return f"Could not fetch tasks: {error}"
 
-        # Surface all field names from the first task so we can identify the assignee field
-        if tasks:
-            sample_keys = sorted(tasks[0].keys())
-            # Include raw assignee-related values so we can see exact field names & shape
-            assignee_fields = {k: tasks[0][k] for k in sample_keys
-                               if any(x in k.lower() for x in
-                                      ("assign", "worker", "staff", "user", "person", "crew", "name"))}
-        else:
-            sample_keys = []
-            assignee_fields = {}
-
-        # Client-side completion status filter (pending/complete/in_progress) if not a dept keyword
+        # Client-side status filter (pending/complete/in_progress) if not a dept keyword
         if status_filter and not dept_filter:
             status_lower = status_filter.lower()
             tasks = [t for t in tasks
-                     if (t.get("status") or t.get("state") or "").lower() == status_lower]
+                     if (t.get("type_task_status") or t.get("status") or t.get("state") or "").lower() == status_lower]
 
         if not tasks:
             prop_label   = f" at {matched_prop_name or property_name_filter}" if property_name_filter else ""
@@ -1277,7 +1277,7 @@ def chatbot_chat():
 
         by_status = {}
         for t in tasks:
-            st = (t.get("status") or t.get("state") or "unknown").lower()
+            st = (t.get("type_task_status") or t.get("status") or t.get("state") or "unknown").lower()
             by_status.setdefault(st, []).append(t)
 
         status_order = ["complete", "in_progress", "pending", "blocked", "cancelled", "unknown"]
@@ -1291,24 +1291,22 @@ def chatbot_chat():
                 dept     = t.get("type_department") or ""
                 home_id  = t.get("home_id") or t.get("property_id")
                 prop_name = _get_property_name(home_id) if home_id else (t.get("property_name") or "")
-                # Assignee: check every field name Breezeway might use
-                raw_asgn = (t.get("assignee") or t.get("assignees") or
-                            t.get("assigned_to") or t.get("worker") or
-                            t.get("staff") or t.get("user") or "")
-                if isinstance(raw_asgn, list):
+                # Assignee: use 'assignments' list — each entry is a dict with 'name' and 'status'
+                raw_assignments = t.get("assignments") or []
+                if isinstance(raw_assignments, list) and raw_assignments:
                     names = []
-                    for a in raw_asgn:
+                    for a in raw_assignments:
                         if isinstance(a, dict):
-                            names.append(a.get("name") or a.get("full_name") or
-                                         a.get("first_name", "") + " " + a.get("last_name", ""))
-                        else:
+                            n = (a.get("name") or a.get("full_name") or
+                                 (a.get("first_name", "") + " " + a.get("last_name", "")).strip())
+                            if n:
+                                names.append(n)
+                        elif a:
                             names.append(str(a))
-                    assignee = ", ".join(n.strip() for n in names if n.strip())
-                elif isinstance(raw_asgn, dict):
-                    assignee = (raw_asgn.get("name") or raw_asgn.get("full_name") or
-                                (raw_asgn.get("first_name", "") + " " + raw_asgn.get("last_name", "")).strip() or "")
+                    assignee = ", ".join(names)
                 else:
-                    assignee = str(raw_asgn).strip()
+                    assignee = ""
+
                 def _fmt_dt(raw):
                     """Return date + time string from an ISO datetime or date-only string."""
                     if not raw:
@@ -1328,9 +1326,13 @@ def chatbot_chat():
                                 time_part = f" {t_raw}"
                     return date_part + time_part
 
-                sched_raw = (t.get("scheduled_date") or t.get("start_time") or
-                             t.get("scheduled_start") or "")
-                sched    = _fmt_dt(sched_raw)
+                # Combine scheduled_date + scheduled_time (separate fields in Breezeway API)
+                sched_date = t.get("scheduled_date") or ""
+                sched_time = t.get("scheduled_time") or ""
+                if sched_date and sched_time:
+                    sched = _fmt_dt(f"{sched_date}T{sched_time}")
+                else:
+                    sched = _fmt_dt(sched_date or t.get("start_time") or t.get("scheduled_start") or "")
                 finished = _fmt_dt(t.get("finished_at") or t.get("completed_at") or "")
                 notes    = (t.get("notes") or t.get("description") or "")[:120]
 
@@ -1344,15 +1346,7 @@ def chatbot_chat():
                 lines.append(line)
             lines.append("")
 
-        result = "\n".join(lines)
-        # Append raw field-name debug info so we can identify the assignee field
-        if sample_keys:
-            result += f"\n\n[DEBUG — all fields in task response: {sample_keys}]"
-        if assignee_fields:
-            result += f"\n[DEBUG — assignee-related fields: {assignee_fields}]"
-        elif sample_keys:
-            result += "\n[DEBUG — no assignee-related fields found in response]"
-        return result
+        return "\n".join(lines)
 
     def generate():
         def sse(obj):
