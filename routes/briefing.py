@@ -864,6 +864,10 @@ def pri_check():
         if next_kind not in ("owner", "block"):
             continue   # guest or lease following → no PRI needed
 
+        # Owner/block already arrived — PRI window has passed, nothing to action
+        if next_ci_date < today:
+            continue
+
         # Check for existing "owner next" tag on the upcoming booking
         tag_names = [_extract_str(t) for t in (next_r.get("tags") or [])]
         tagged    = "owner next" in tag_names
