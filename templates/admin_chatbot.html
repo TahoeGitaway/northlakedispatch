@@ -42,16 +42,18 @@
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">Context Loaded</div>
         <div id="contextPanel" class="space-y-2 text-sm text-gray-500">
-          <p class="text-xs italic text-gray-400">Add dates and send a message.</p>
+          <p class="text-xs italic text-gray-400">Send a message to load today's data.</p>
         </div>
+        <div id="kbStatus" class="hidden mt-2 pt-2 border-t border-gray-100 text-xs text-gray-400"></div>
       </div>
 
       <!-- Bot info -->
       <div class="bg-amber-50 rounded-xl border border-amber-100 p-4">
         <div class="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2">How this bot works</div>
         <ul class="text-xs text-amber-700 space-y-1.5 leading-relaxed">
-          <li>• Answers only from SOPs, policies, and loaded Breezeway data</li>
-          <li>• If it doesn't know, it says so — it never guesses</li>
+          <li>• Loads today's Breezeway data automatically — add dates for other days</li>
+          <li>• Knows your company SOPs from the Knowledge Base</li>
+          <li>• Uses its own knowledge for general operations questions</li>
           <li>• Conversation resets when you leave this page</li>
           <li>• All interactions are logged for ops review</li>
         </ul>
@@ -70,7 +72,7 @@
           <div class="text-3xl mb-3">🤖</div>
           <div class="font-medium text-gray-500 mb-1">TG Operations Bot</div>
           <div class="text-xs text-gray-400 max-w-xs mx-auto">
-            Add dates, then ask about arrivals, departures, PRIs, or company SOPs and policies.
+            Ask about today's schedule, a property, a policy, PRIs, or anything operations-related.
           </div>
         </div>
       </div>
@@ -187,13 +189,13 @@ function escHtml(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-function appendThinking() {
+function appendThinking(msg) {
   document.getElementById("emptyState")?.remove();
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
   div.id        = "thinking";
   div.className = "self-start bg-gray-100 text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm italic";
-  div.textContent = "Thinking…";
+  div.textContent = msg || "Thinking…";
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
@@ -224,21 +226,27 @@ async function confirmAction(btn, description) {
 }
 
 /* ── Context panel ── */
-function updateContextPanel(summary) {
+function updateContextPanel(summary, kbCount) {
   const el = document.getElementById("contextPanel");
-  if (!summary || !summary.length) return;
-  el.innerHTML = summary.map(s => {
-    if (s.error) return `<div class="text-red-500 text-xs">${s.date}: error loading</div>`;
-    return `
-      <div class="border border-gray-100 rounded-lg p-2">
-        <div class="font-medium text-gray-700 text-xs mb-1">${s.date}</div>
-        <div class="text-xs space-y-0.5 text-gray-500">
-          <div>📋 ${s.routes} route${s.routes !== 1 ? "s" : ""}</div>
-          <div>↓ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
-          <div>↑ ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
-        </div>
-      </div>`;
-  }).join("");
+  if (summary && summary.length) {
+    el.innerHTML = summary.map(s => {
+      if (s.error) return `<div class="text-red-500 text-xs">${s.date}: error loading</div>`;
+      return `
+        <div class="border border-gray-100 rounded-lg p-2">
+          <div class="font-medium text-gray-700 text-xs mb-1">${s.date}</div>
+          <div class="text-xs space-y-0.5 text-gray-500">
+            <div>📋 ${s.routes} route${s.routes !== 1 ? "s" : ""}</div>
+            <div>↓ ${s.arrivals} arrival${s.arrivals !== 1 ? "s" : ""}</div>
+            <div>↑ ${s.departures} departure${s.departures !== 1 ? "s" : ""}</div>
+          </div>
+        </div>`;
+    }).join("");
+  }
+  if (kbCount !== undefined) {
+    const kb = document.getElementById("kbStatus");
+    kb.classList.remove("hidden");
+    kb.textContent = `📚 ${kbCount} knowledge article${kbCount !== 1 ? "s" : ""} loaded`;
+  }
 }
 
 /* ── Send message ── */
@@ -246,10 +254,6 @@ async function sendMessage() {
   const input = document.getElementById("chatInput");
   const text  = input.value.trim();
   if (!text) return;
-  if (!selectedDates.length) {
-    alert("Please add at least one date so the bot can load Breezeway data.");
-    return;
-  }
 
   input.value = "";
   appendMessage("user", text);
@@ -276,8 +280,12 @@ async function sendMessage() {
     }
 
     appendMessage("assistant", data.reply);
+    // Store any intermediate tool-call turns so Claude has full context next message
+    for (const msg of (data.history_additions || [])) {
+      conversationHistory.push(msg);
+    }
     conversationHistory.push({ role: "assistant", content: data.reply });
-    updateContextPanel(data.context_summary);
+    updateContextPanel(data.context_summary, data.kb_count);
   } catch (e) {
     document.getElementById("thinking")?.remove();
     appendMessage("assistant", "Network error: " + e.message);

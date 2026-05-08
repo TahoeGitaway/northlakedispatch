@@ -773,6 +773,53 @@ def knowledge_delete(entry_id):
     return jsonify({"success": True})
 
 
+@admin_bp.route("/admin/knowledge/upload", methods=["POST"])
+@login_required
+@admin_required
+def knowledge_upload():
+    """Upload a .txt, .md, or .pdf file and create a knowledge entry from its content."""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "No file provided."}), 400
+
+    filename  = f.filename
+    ext       = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    raw_title = filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
+    category  = (request.form.get("category") or "Uploaded Documents").strip()
+
+    if ext in ("txt", "md"):
+        try:
+            body = f.read().decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            return jsonify({"error": f"Could not read file: {e}"}), 400
+    elif ext == "pdf":
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(f)
+            pages  = [page.extract_text() or "" for page in reader.pages]
+            body   = "\n\n".join(p.strip() for p in pages if p.strip())
+        except ImportError:
+            return jsonify({"error": "PDF support requires pypdf — run: pip install pypdf"}), 500
+        except Exception as e:
+            return jsonify({"error": f"Could not read PDF: {e}"}), 400
+    else:
+        return jsonify({"error": f"Unsupported file type '.{ext}'. Upload .txt, .md, or .pdf files."}), 400
+
+    if not body:
+        return jsonify({"error": "The file appears to be empty or unreadable."}), 400
+
+    now  = datetime.utcnow().isoformat()
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("""
+        INSERT INTO chatbot_knowledge (title, category, body, is_active, created_by, updated_by, created_at, updated_at)
+        VALUES (%s, %s, %s, 1, %s, %s, %s, %s)
+    """, (raw_title, category, body, current_user.id, current_user.id, now, now))
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"success": True, "title": raw_title})
+
+
 # ── AI Chatbot ────────────────────────────────────────────────────
 
 @admin_bp.route("/admin/chatbot")
@@ -804,10 +851,13 @@ def chatbot_chat():
     messages = data.get("messages", [])
     dates    = data.get("dates", [])
 
-    if not dates:
-        return jsonify({"error": "Select at least one date first."}), 400
     if not messages:
         return jsonify({"error": "No message provided."}), 400
+
+    # Default to today if no dates selected so knowledge-only questions always work
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    if not dates:
+        dates = [today_str]
 
     # Fetch Breezeway data for the full date range — cached 10 min per date range
     capped_dates = sorted(dates)[:7]
@@ -965,17 +1015,19 @@ def chatbot_chat():
         knowledge_section = ""
 
     system_prompt = (
-        f"You are the TG Operations Bot for Tahoe Getaways. Staff: {current_user.name}.\n\n"
-        "RULES — follow exactly, no exceptions:\n"
-        "1. Answer ONLY from the context provided below (SOPs, policies, Breezeway data).\n"
-        "2. If you cannot answer from the provided context, respond: "
-        "\"I don't have that information. Please refer to [name the relevant source] or check with your manager.\"\n"
-        "3. Never guess, assume, or use general knowledge not present in this context.\n"
-        "4. Be as brief as possible. Use bullet points for multi-part answers.\n"
-        "5. Do not offer opinions, suggestions, or unrequested information.\n"
-        "6. When staff asks you to take a write action (save note, flag property, mark complete), "
+        f"You are the TG Operations Bot for Tahoe Getaways, a vacation rental company in Lake Tahoe. "
+        f"You are talking to {current_user.name}. Today's date is {today_str}.\n\n"
+        "HOW TO ANSWER:\n"
+        "- For questions about specific properties, reservations, schedules, or company SOPs: "
+        "use the knowledge base and loaded Breezeway data below as your primary source.\n"
+        "- For general property management, hospitality, or operations questions: use your own knowledge "
+        "to give a helpful, practical answer — you don't need to restrict yourself to the provided context.\n"
+        "- If asked about a specific property or reservation that isn't in the loaded data, say so clearly "
+        "and suggest the staff member check Breezeway or Streamline directly.\n"
+        "- Be concise and direct. Use bullet points for multi-part answers.\n"
+        "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
         "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
-        "Do not consider the action done until the staff member confirms.\n\n"
+        "Do not consider the action done until confirmed.\n\n"
         + knowledge_section
         + "RESERVATION TYPES:\n"
         "  GUEST = paying guest stay\n"
@@ -989,25 +1041,151 @@ def chatbot_chat():
         "Groups: 🔴 Needs tagging · 🟢 Already tagged · 🟠 Vacancy PRI (no upcoming booking found).\n\n"
         "LOADED DATA (routes + arrivals + departures for selected dates):\n"
         + "\n".join(context_blocks)
-        + "\n\nIf asked about anything outside this context, say you don't have that information."
+        + "\n\nYou also have a tool — fetch_reservation_data — to look up Breezeway data "
+        "for any other date range the user asks about (next week, this Friday, June, etc.)."
     )
 
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
 
+    tools = [{
+        "name": "fetch_reservation_data",
+        "description": (
+            "Fetch Breezeway reservation data (arrivals, departures, routes) for a date range. "
+            "Use this whenever the user asks about dates not already in the loaded context — "
+            "e.g. 'next week', 'this Friday', 'next month', 'June', 'this summer'. "
+            "Resolve relative references using today's date before calling. "
+            "Maximum range is 30 days per call."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "end_date":   {"type": "string", "description": "End date YYYY-MM-DD (inclusive, max 30 days after start)"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    }]
+
+    def _execute_fetch(start_str, end_str):
+        from datetime import date as _date2
+        from collections import defaultdict
+        try:
+            s = _date2.fromisoformat(start_str)
+            e = _date2.fromisoformat(end_str)
+        except ValueError:
+            return "Error: invalid date format. Use YYYY-MM-DD."
+        if (e - s).days > 30:
+            e = s + timedelta(days=30)
+            end_str = e.isoformat()
+        if e < s:
+            return "Error: end_date must be on or after start_date."
+
+        tok = _get_breezeway_token()
+        if not tok:
+            return "Breezeway not configured — cannot fetch reservation data."
+        try:
+            cis  = _fetch_bw_reservations(tok, {"checkin_date_ge":  start_str, "checkin_date_le":  end_str})
+            cos  = _fetch_bw_reservations(tok, {"checkout_date_ge": start_str, "checkout_date_le": end_str})
+        except Exception as ex:
+            return f"Error fetching data: {ex}"
+
+        ci_by  = defaultdict(list)
+        co_by  = defaultdict(list)
+        for r in cis:
+            d = (r.get("checkin_date")  or "")[:10]
+            if start_str <= d <= end_str:
+                ci_by[d].append(r)
+        for r in cos:
+            d = (r.get("checkout_date") or "")[:10]
+            if start_str <= d <= end_str:
+                co_by[d].append(r)
+
+        all_days = sorted(set(list(ci_by.keys()) + list(co_by.keys())))
+        lines = [f"Data for {start_str} through {end_str}:"]
+        if not all_days:
+            lines.append("No arrivals or departures found in this period.")
+        for d in all_days:
+            lines.append(f"\n--- {d} ---")
+            try:
+                rts = _fetch_todays_routes(d)
+                for r in rts:
+                    stops = [x for x in json.loads(r["stops_json"] or "[]") if not x.get("isLunch")]
+                    ln = f"  Route: \"{r['name']}\""
+                    if r["assigned_to"]: ln += f" → {r['assigned_to']}"
+                    ln += f" ({len(stops)} stops)"
+                    lines.append(ln)
+            except Exception:
+                pass
+            for r in ci_by.get(d, []):
+                kind = _classify_reservation(r)
+                prop = _get_property_name(r.get("property_id"))
+                co_d = (r.get("checkout_date") or "")[:10]
+                ci_d = (r.get("checkin_date")  or "")[:10]
+                nights = ""
+                if ci_d and co_d:
+                    try:
+                        n = (_date2.fromisoformat(co_d) - _date2.fromisoformat(ci_d)).days
+                        nights = f", {n} nights"
+                    except Exception:
+                        pass
+                lines.append(f"  ARRIVAL  [{kind.upper()}] {prop} (out {co_d}{nights})")
+            for r in co_by.get(d, []):
+                kind = _classify_reservation(r)
+                prop = _get_property_name(r.get("property_id"))
+                ci_d = (r.get("checkin_date")  or "")[:10]
+                co_d = (r.get("checkout_date") or "")[:10]
+                nights = ""
+                if ci_d and co_d:
+                    try:
+                        n = (_date2.fromisoformat(co_d) - _date2.fromisoformat(ci_d)).days
+                        nights = f", {n} nights"
+                    except Exception:
+                        pass
+                lines.append(f"  DEPARTURE [{kind.upper()}] {prop} (in since {ci_d}{nights})")
+        return "\n".join(lines)
+
     try:
-        client = anthropic.Anthropic(api_key=key)
-        # Keep last 20 messages to prevent unbounded context growth
-        trimmed = messages[-20:] if len(messages) > 20 else messages
-        resp   = client.messages.create(
-            model      = "claude-sonnet-4-6",
-            max_tokens = 1200,
-            system     = system_prompt,
-            messages   = trimmed,
-        )
-        reply_text = resp.content[0].text
-        # Log the interaction (best-effort — never block the response)
+        ai_client    = anthropic.Anthropic(api_key=key)
+        trimmed      = list(messages[-30:]) if len(messages) > 30 else list(messages)
+        history_additions = []
+        reply_text   = "Sorry, I couldn't complete that request. Please try again."
+
+        for _turn in range(6):
+            resp = ai_client.messages.create(
+                model      = "claude-sonnet-4-6",
+                max_tokens = 2000,
+                system     = system_prompt,
+                messages   = trimmed,
+                tools      = tools,
+            )
+
+            if resp.stop_reason == "tool_use":
+                asst_content = [b.model_dump() for b in resp.content]
+                trimmed.append({"role": "assistant", "content": asst_content})
+                history_additions.append({"role": "assistant", "content": asst_content})
+
+                tool_results = []
+                for block in resp.content:
+                    if block.type == "tool_use":
+                        result = _execute_fetch(
+                            block.input.get("start_date", ""),
+                            block.input.get("end_date",   ""),
+                        ) if block.name == "fetch_reservation_data" else f"Unknown tool: {block.name}"
+                        tool_results.append({
+                            "type":        "tool_result",
+                            "tool_use_id": block.id,
+                            "content":     result,
+                        })
+                tool_msg = {"role": "user", "content": tool_results}
+                trimmed.append(tool_msg)
+                history_additions.append(tool_msg)
+            else:
+                reply_text = next((b.text for b in resp.content if hasattr(b, "text")), reply_text)
+                break
+
+        # Log (best-effort)
         try:
             user_msg = messages[-1]["content"] if messages else ""
             conn_log = get_db()
@@ -1024,9 +1202,12 @@ def chatbot_chat():
             cur_log.close(); conn_log.close()
         except Exception:
             pass
+
         return jsonify({
-            "reply":           reply_text,
-            "context_summary": context_summary,
+            "reply":             reply_text,
+            "context_summary":   context_summary,
+            "kb_count":          len(knowledge_rows),
+            "history_additions": history_additions,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -7,3 +7,4 @@ python-dotenv==1.2.2
 gunicorn==25.3.0
 psycopg2-binary==2.9.11
 anthropic==0.93.0
+pypdf==4.3.1

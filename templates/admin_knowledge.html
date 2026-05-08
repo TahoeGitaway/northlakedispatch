@@ -6,13 +6,46 @@
   <div class="flex items-center justify-between mb-5">
     <div>
       <h2 class="text-2xl font-bold text-gray-800">Knowledge Base</h2>
-      <p class="text-sm text-gray-400 mt-0.5">Everything written here is injected into the AI chatbot automatically.</p>
+      <p class="text-sm text-gray-400 mt-0.5">Everything here is automatically loaded into the Operations Bot.</p>
     </div>
-    <button onclick="openNew()"
-            class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
-                   px-4 py-2 rounded-lg transition-colors">
-      + New Entry
-    </button>
+    <div class="flex gap-2">
+      <button onclick="document.getElementById('uploadTrigger').click()"
+              class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium
+                     px-4 py-2 rounded-lg transition-colors border border-gray-200">
+        ↑ Upload File
+      </button>
+      <button onclick="openNew()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-4 py-2 rounded-lg transition-colors">
+        + New Entry
+      </button>
+    </div>
+  </div>
+
+  <!-- Hidden file input -->
+  <input type="file" id="uploadTrigger" accept=".txt,.md,.pdf" class="hidden" onchange="handleUpload(this)">
+
+  <!-- Upload status -->
+  <div id="uploadStatus" class="hidden mb-4 px-4 py-3 rounded-lg text-sm font-medium"></div>
+
+  <!-- Upload category picker (shown when file is selected) -->
+  <div id="uploadPanel" class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-5">
+    <div class="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">Uploading: <span id="uploadFilename" class="text-gray-600 font-semibold normal-case"></span></div>
+    <div class="flex gap-3 items-end">
+      <div class="flex-1">
+        <label class="block text-xs font-medium text-gray-500 mb-1">Category</label>
+        <input type="text" id="uploadCategory" value="Uploaded Documents"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <button onclick="submitUpload()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
+                     px-5 py-2 rounded-lg transition-colors">
+        Save to Knowledge Base
+      </button>
+      <button onclick="cancelUpload()"
+              class="text-sm text-gray-400 hover:text-gray-600 px-3 py-2">Cancel</button>
+    </div>
   </div>
 
   <!-- Editor panel (hidden by default) -->
@@ -72,12 +105,20 @@
                   <span class="text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">Disabled</span>
                   {% endif %}
                 </div>
-                <p class="text-xs text-gray-400 mt-1 line-clamp-2">{{ e.body[:200] }}{% if e.body|length > 200 %}…{% endif %}</p>
+                <p class="text-xs text-gray-400 mt-1" id="preview-{{ e.id }}">{{ e.body[:160] }}{% if e.body|length > 160 %}…{% endif %}</p>
+                <!-- Full body — hidden until View is clicked -->
+                <pre id="body-{{ e.id }}"
+                     class="hidden mt-2 text-xs text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap font-sans leading-relaxed max-h-96 overflow-y-auto border border-gray-100">{{ e.body }}</pre>
                 {% if e.author %}
                 <p class="text-xs text-gray-300 mt-1">Last edited by {{ e.author }}</p>
                 {% endif %}
               </div>
               <div class="flex items-center gap-2 shrink-0">
+                <button id="viewbtn-{{ e.id }}" onclick="toggleView({{ e.id }})"
+                        class="text-xs px-2 py-1 rounded border border-gray-200 text-gray-500
+                               hover:bg-gray-50 transition-colors">
+                  View
+                </button>
                 <button onclick="toggleEntry({{ e.id }}, {{ e.is_active }})"
                         class="text-xs px-2 py-1 rounded border transition-colors
                                {% if e.is_active %}border-green-200 text-green-600 hover:bg-green-50
@@ -112,6 +153,16 @@
 </div>
 
 <script>
+function toggleView(id) {
+  const body    = document.getElementById("body-" + id);
+  const preview = document.getElementById("preview-" + id);
+  const btn     = document.getElementById("viewbtn-" + id);
+  const open    = body.classList.contains("hidden");
+  body.classList.toggle("hidden", !open);
+  preview.classList.toggle("hidden", open);
+  btn.textContent = open ? "Hide" : "View";
+}
+
 function openNew() {
   document.getElementById("editId").value = "";
   document.getElementById("editTitle").value = "";
@@ -163,6 +214,57 @@ async function deleteEntry(id) {
   const res  = await fetch(`/admin/knowledge/${id}/delete`, {method: "POST"});
   const data = await res.json();
   if (data.success) location.reload();
+}
+
+/* ── File upload ── */
+let _uploadFile = null;
+
+function handleUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  _uploadFile = file;
+  document.getElementById("uploadFilename").textContent = file.name;
+  document.getElementById("uploadPanel").classList.remove("hidden");
+  document.getElementById("uploadStatus").classList.add("hidden");
+  document.getElementById("uploadPanel").scrollIntoView({behavior: "smooth"});
+}
+
+function cancelUpload() {
+  _uploadFile = null;
+  document.getElementById("uploadTrigger").value = "";
+  document.getElementById("uploadPanel").classList.add("hidden");
+}
+
+async function submitUpload() {
+  if (!_uploadFile) return;
+  const category = document.getElementById("uploadCategory").value.trim() || "Uploaded Documents";
+  const form = new FormData();
+  form.append("file", _uploadFile);
+  form.append("category", category);
+
+  const statusEl = document.getElementById("uploadStatus");
+  statusEl.className = "mb-4 px-4 py-3 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-700";
+  statusEl.textContent = "Uploading…";
+  statusEl.classList.remove("hidden");
+
+  try {
+    const res  = await fetch("/admin/knowledge/upload", { method: "POST", body: form });
+    const data = await res.json();
+    if (data.success) {
+      statusEl.className = "mb-4 px-4 py-3 rounded-lg text-sm font-medium bg-green-50 text-green-700";
+      statusEl.textContent = `✓ "${data.title}" added to the knowledge base.`;
+      document.getElementById("uploadPanel").classList.add("hidden");
+      _uploadFile = null;
+      document.getElementById("uploadTrigger").value = "";
+      setTimeout(() => location.reload(), 900);
+    } else {
+      statusEl.className = "mb-4 px-4 py-3 rounded-lg text-sm font-medium bg-red-50 text-red-700";
+      statusEl.textContent = "Error: " + data.error;
+    }
+  } catch (e) {
+    statusEl.className = "mb-4 px-4 py-3 rounded-lg text-sm font-medium bg-red-50 text-red-700";
+    statusEl.textContent = "Upload failed: " + e.message;
+  }
 }
 </script>
 {% endblock %}

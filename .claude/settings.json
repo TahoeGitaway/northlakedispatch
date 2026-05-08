@@ -24,7 +24,9 @@
       "Bash(railway status *)",
       "Read(//c/Users/madel/chatbotclub//**)",
       "Read(//c/Users/madel/chatbotclub/**)",
-      "Bash(python -c \"from routes.admin import admin_bp; print\\('OK'\\)\")"
+      "Bash(python -c \"from routes.admin import admin_bp; print\\('OK'\\)\")",
+      "Bash(pip list *)",
+      "Bash(pip install *)"
     ]
   }
 }
