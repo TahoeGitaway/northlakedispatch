@@ -1225,13 +1225,22 @@ def chatbot_chat():
             matched_prop_name = _property_cache.get(pid, property_name_filter) if pid else None
 
         if not pid:
+            cache_size = len(_property_cache)
+            if cache_size == 0:
+                return (f"Property cache is empty — Breezeway property list could not be loaded. "
+                        f"This may be a token or API connectivity issue. Cannot look up tasks for "
+                        f"'{property_name_filter}'.")
             # Surface near candidates so the bot can retry with the exact Breezeway name
             candidates = difflib.get_close_matches(name_lower, rev.keys(), n=5, cutoff=0.3)
             candidate_str = (", ".join(f'"{_property_cache[rev[c]]}"' for c in candidates)
                              if candidates else "none found")
-            return (f"Could not find a property matching '{property_name_filter}' in the local "
-                    f"property cache. Closest names in Breezeway: {candidate_str}. "
-                    f"Retry using one of those exact names.")
+            # Also include a sample of all cached names so the exact name is visible
+            all_names_sample = sorted(_property_cache.values())[:30]
+            return (f"Could not find a property matching '{property_name_filter}' "
+                    f"({cache_size} properties in cache). "
+                    f"Closest matches: {candidate_str}. "
+                    f"All cached property names: {all_names_sample}. "
+                    f"Retry using the exact name from that list.")
 
         matched_prop_name = matched_prop_name or property_name_filter
 
