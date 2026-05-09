@@ -203,6 +203,38 @@ def init_db():
         dismissed_at  TEXT NOT NULL
     )""")
 
+    cur.execute("""CREATE TABLE IF NOT EXISTS pri_banner_alerts (
+        id            SERIAL PRIMARY KEY,
+        item_key      TEXT NOT NULL UNIQUE,
+        property_name TEXT NOT NULL,
+        checkout_date TEXT NOT NULL,
+        next_checkin  TEXT,
+        alert_type    TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        dismissed_at  TEXT,
+        dismissed_by  INTEGER REFERENCES users(id)
+    )""")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS asana_notifications (
+        id           SERIAL PRIMARY KEY,
+        item_key     TEXT NOT NULL UNIQUE,
+        task_gid     TEXT NOT NULL,
+        task_name    TEXT NOT NULL,
+        story_gid    TEXT NOT NULL,
+        commenter    TEXT NOT NULL DEFAULT '',
+        comment_text TEXT NOT NULL DEFAULT '',
+        asana_created_at TEXT,
+        created_at   TEXT NOT NULL,
+        dismissed_at TEXT,
+        replied_at   TEXT
+    )""")
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS asana_poll_state (
+        id           SERIAL PRIMARY KEY,
+        key          TEXT NOT NULL UNIQUE,
+        value        TEXT NOT NULL
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")

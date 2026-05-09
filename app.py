@@ -9,6 +9,8 @@ from datetime import timedelta
 from flask import Flask
 from flask_login import LoginManager
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 load_dotenv()
 
@@ -58,6 +60,51 @@ app.register_blueprint(projects_bp)
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():
     init_db()
+
+# ── Template context ──────────────────────────────────────────────
+@app.context_processor
+def inject_globals():
+    from flask_login import current_user
+    allowed_raw = os.environ.get("MY_BOT_ALLOWED_EMAILS", "")
+    allowed = {e.strip().lower() for e in allowed_raw.split(",") if e.strip()}
+    try:
+        my_bot_ok = current_user.is_authenticated and current_user.email.lower() in allowed
+    except Exception:
+        my_bot_ok = False
+    return {"my_bot_allowed": my_bot_ok}
+
+# ── Scheduled jobs ────────────────────────────────────────────────
+def _scheduled_pri_check():
+    with app.app_context():
+        try:
+            from routes.briefing import refresh_pri_banner_alerts
+            refresh_pri_banner_alerts(alert_days=3)
+        except Exception:
+            pass
+
+def _scheduled_asana_poll():
+    with app.app_context():
+        try:
+            from routes.admin import poll_asana_notifications
+            poll_asana_notifications()
+        except Exception:
+            pass
+
+scheduler = BackgroundScheduler(timezone="America/Los_Angeles")
+scheduler.add_job(
+    _scheduled_pri_check,
+    CronTrigger(hour=7, minute=30, timezone="America/Los_Angeles"),
+    id="pri_alert_check",
+    replace_existing=True,
+)
+scheduler.add_job(
+    _scheduled_asana_poll,
+    "interval",
+    minutes=30,
+    id="asana_poll",
+    replace_existing=True,
+)
+scheduler.start()
 
 # ── Run ───────────────────────────────────────────────────────────
 if __name__ == "__main__":

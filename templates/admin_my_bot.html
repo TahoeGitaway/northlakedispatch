@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% block title %}My Bot — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-6">
+
+  <div class="mb-4 flex items-start justify-between gap-3">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-800">My Bot
+        <span class="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-medium border border-violet-200 align-middle ml-2">Personal</span>
+      </h2>
+      <p class="text-sm text-gray-400 mt-0.5">Your Asana tasks, managed with AI. Only you can see this.</p>
+    </div>
+    <button onclick="newChat()"
+            class="text-sm text-gray-500 hover:text-violet-600 border border-gray-200 hover:border-violet-300
+                   rounded-lg px-3 py-1.5 transition-colors flex items-center gap-1.5 flex-shrink-0 mt-1">
+      + New Chat
+    </button>
+  </div>
+
+  <div id="chatMessages"
+       class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3 overflow-y-auto mb-3"
+       style="min-height: 480px; max-height: 640px;">
+    <div id="emptyState" class="flex-1 flex items-center justify-center text-gray-300 text-sm italic select-none">
+      Ask about your tasks, or say "what's on my plate this week?"
+    </div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-3">
+    <textarea id="chatInput" rows="2" placeholder="Type a message…"
+              onkeydown="handleKey(event)"
+              class="w-full text-sm text-gray-700 resize-none outline-none placeholder-gray-300"></textarea>
+    <div class="flex justify-end mt-2">
+      <button onclick="sendMessage()"
+              class="bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium
+                     px-4 py-1.5 rounded-lg transition-colors">
+        Send
+      </button>
+    </div>
+  </div>
+  <p class="text-xs text-gray-400 mt-1.5">Enter to send · Shift+Enter for new line</p>
+
+</div>
+
+<style>
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.15; transform: scale(0.75); }
+  40%            { opacity: 1;    transform: scale(1);    }
+}
+.thinking-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: #6b7280; animation: blink 1.4s infinite ease-in-out;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+</style>
+
+<script>
+let conversationHistory = [];
+let chatStarted = false;
+
+function handleKey(e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+
+function newChat() {
+  conversationHistory = []; chatStarted = false;
+  const box = document.getElementById("chatMessages");
+  box.innerHTML = `<div id="emptyState" class="flex-1 flex items-center justify-center text-gray-300 text-sm italic select-none">Ask about your tasks, or say "what's on my plate this week?"</div>`;
+  box.style.transition = "opacity 0.15s"; box.style.opacity = "0.4";
+  setTimeout(() => { box.style.opacity = "1"; }, 150);
+  document.getElementById("chatInput").focus();
+}
+
+function clearEmpty() {
+  if (chatStarted) return; chatStarted = true;
+  document.getElementById("emptyState")?.remove();
+}
+
+function scrollIfAtBottom() {
+  const box = document.getElementById("chatMessages");
+  if (box.scrollHeight - box.scrollTop - box.clientHeight < 60) box.scrollTop = box.scrollHeight;
+}
+
+function appendMessage(role, text) {
+  clearEmpty();
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = role === "user"
+    ? "self-end bg-violet-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap"
+    : "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+function appendThinking() {
+  clearEmpty();
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.id = "thinking";
+  div.className = "self-start bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1";
+  div.innerHTML = `<span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>`;
+  box.appendChild(div); box.scrollTop = box.scrollHeight;
+}
+
+function showStatus(msg) {
+  const thinking = document.getElementById("thinking");
+  if (thinking) {
+    thinking.className = "self-start bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-2.5 flex items-center gap-2 text-sm text-gray-500";
+    thinking.innerHTML = `<svg class="animate-spin w-3.5 h-3.5 text-gray-400 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg><span>${msg}</span>`;
+    scrollIfAtBottom(); return;
+  }
+}
+
+/* ── Draft comment confirm UI ── */
+function showCommentEditor(taskGid, taskName, suggestedText) {
+  clearEmpty();
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = "self-start w-full max-w-[90%]";
+  div.innerHTML = `
+    <div class="bg-violet-50 border border-violet-200 rounded-xl p-4 space-y-3">
+      <div class="text-xs font-semibold text-violet-700 uppercase tracking-wide">Draft comment for: ${taskName}</div>
+      <textarea id="commentDraft_${taskGid}" rows="4"
+                class="w-full text-sm text-gray-700 border border-violet-200 rounded-lg p-2.5 resize-y outline-none
+                       focus:border-violet-400 bg-white">${suggestedText}</textarea>
+      <div class="flex gap-2">
+        <button onclick="submitComment('${taskGid}', '${taskName.replace(/'/g,"&#39;")}')"
+                class="bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors">
+          Post Comment
+        </button>
+        <button onclick="this.closest('.self-start').remove()"
+                class="text-sm text-gray-400 hover:text-gray-600 px-3 py-1.5">
+          Cancel
+        </button>
+      </div>
+    </div>`;
+  box.appendChild(div);
+  scrollIfAtBottom();
+}
+
+async function submitComment(taskGid, taskName) {
+  const textarea = document.getElementById(`commentDraft_${taskGid}`);
+  const text = (textarea?.value || "").trim();
+  if (!text) return;
+  const btn = textarea.closest(".space-y-3").querySelector("button");
+  btn.disabled = true; btn.textContent = "Posting…";
+  try {
+    const res  = await fetch("/admin/my-bot/post-comment", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task_gid: taskGid, task_name: taskName, text}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      textarea.closest(".self-start").remove();
+      appendMessage("assistant", `✓ Comment posted to "${taskName}".`);
+    } else {
+      btn.disabled = false; btn.textContent = "Post Comment";
+      appendMessage("assistant", `Error posting comment: ${data.error}`);
+    }
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Post Comment";
+    appendMessage("assistant", `Network error: ${e.message}`);
+  }
+}
+
+/* ── CONFIRM_ACTION ── */
+function showConfirmAction(description) {
+  clearEmpty();
+  const box = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = "self-start";
+  div.innerHTML = `
+    <div class="flex gap-2 items-center mt-1">
+      <button onclick="confirmAction(this, ${JSON.stringify(description)})"
+              class="text-sm bg-violet-600 hover:bg-violet-700 text-white font-medium px-4 py-1.5 rounded-lg transition-colors">
+        Confirm: ${description}
+      </button>
+      <button onclick="this.closest('.self-start').remove()"
+              class="text-sm text-gray-400 hover:text-gray-600 px-2 py-1.5">
+        Cancel
+      </button>
+    </div>`;
+  box.appendChild(div); scrollIfAtBottom();
+}
+
+async function confirmAction(btn, description) {
+  btn.disabled = true; btn.textContent = "Done";
+  conversationHistory.push({role: "user", content: `Confirmed: ${description}`});
+  await sendMessage(`Confirmed: ${description}`);
+}
+
+async function sendMessage(overrideText) {
+  const input = document.getElementById("chatInput");
+  const text  = overrideText !== undefined ? overrideText : input.value.trim();
+  if (!text) return;
+  if (overrideText === undefined) input.value = "";
+
+  if (!overrideText) appendMessage("user", text);
+  conversationHistory.push({role: "user", content: text});
+  appendThinking();
+
+  let botBubble = null, replyText = "", statusLine = null;
+
+  function getOrCreateBubble() {
+    if (botBubble) return botBubble;
+    document.getElementById("thinking")?.remove();
+    const box = document.getElementById("chatMessages");
+    botBubble = document.createElement("div");
+    botBubble.className = "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
+    box.appendChild(botBubble); return botBubble;
+  }
+
+  try {
+    const res = await fetch("/admin/my-bot/chat", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({messages: conversationHistory}),
+    });
+    if (!res.ok) {
+      document.getElementById("thinking")?.remove();
+      appendMessage("assistant", "Server error: " + res.status);
+      conversationHistory.pop(); return;
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf     = "";
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split("\n\n");
+      buf = lines.pop();
+
+      for (const line of lines) {
+        const raw = line.startsWith("data: ") ? line.slice(6) : line;
+        if (!raw) continue;
+        let evt;
+        try { evt = JSON.parse(raw); } catch { continue; }
+
+        if (evt.type === "status") {
+          showStatus(evt.text);
+        } else if (evt.type === "delta") {
+          document.getElementById("thinking")?.remove();
+          const bubble = getOrCreateBubble();
+          replyText += evt.text;
+          // Check for DRAFT_COMMENT_READY before rendering
+          bubble.textContent = replyText.replace(/DRAFT_COMMENT_READY[\s\S]*/g, "").trimEnd();
+          scrollIfAtBottom();
+        } else if (evt.type === "done") {
+          document.getElementById("thinking")?.remove();
+
+          // Parse DRAFT_COMMENT_READY block out of reply
+          const draftMatch = replyText.match(/DRAFT_COMMENT_READY\ntask_gid=([^\n]+)\ntask_name=([^\n]+)\nsuggested_text=([\s\S]+)/);
+          if (draftMatch) {
+            showCommentEditor(draftMatch[1].trim(), draftMatch[2].trim(), draftMatch[3].trim());
+          }
+
+          // Parse CONFIRM_ACTION
+          const confirmMatch = replyText.match(/CONFIRM_ACTION:\s*(.+)/i);
+          if (confirmMatch) showConfirmAction(confirmMatch[1].trim());
+
+          const cleanReply = replyText
+            .replace(/DRAFT_COMMENT_READY[\s\S]*/g, "")
+            .replace(/CONFIRM_ACTION:\s*.+/gi, "")
+            .trimEnd();
+          conversationHistory.push({role: "assistant", content: cleanReply || replyText});
+          if (botBubble) botBubble.textContent = cleanReply;
+          scrollIfAtBottom();
+        } else if (evt.type === "error") {
+          document.getElementById("thinking")?.remove();
+          if (!botBubble) appendMessage("assistant", "Error: " + evt.text);
+          else botBubble.textContent = (replyText ? replyText + "\n\n" : "") + "Error: " + evt.text;
+          conversationHistory.pop();
+        }
+      }
+    }
+  } catch (e) {
+    document.getElementById("thinking")?.remove();
+    if (!botBubble) appendMessage("assistant", "Network error: " + e.message);
+    conversationHistory.pop();
+  }
+}
+</script>
+{% endblock %}

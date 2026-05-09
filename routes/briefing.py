@@ -1017,6 +1017,159 @@ def pri_check():
     })
 
 
+def refresh_pri_banner_alerts(alert_days=3):
+    """Recompute PRI alerts for the next `alert_days` days and write to DB.
+    Called daily by the scheduler at 7:30 AM (and on-demand via admin route).
+    Preserves dismissed status — only upserts metadata, never clears dismissed_at.
+    """
+    from db import get_db, get_cursor
+    from datetime import timezone
+
+    token = _get_breezeway_token()
+    if not token:
+        return
+
+    today      = date_cls.today()
+    window_end = today + timedelta(days=alert_days)
+
+    lookback_start = today - timedelta(days=1)
+    far_end        = today + timedelta(days=150)
+
+    raw_checkouts = _fetch_bw_reservations(token, {
+        "checkout_date_ge": lookback_start.isoformat(),
+        "checkout_date_le": window_end.isoformat(),
+    })
+    raw_upcoming = _fetch_bw_reservations(token, {
+        "checkin_date_ge": lookback_start.isoformat(),
+        "checkin_date_le": far_end.isoformat(),
+    })
+
+    checkouts = [
+        r for r in raw_checkouts
+        if today.isoformat() <= (r.get("checkout_date") or "")[:10] <= window_end.isoformat()
+    ]
+
+    by_prop = {}
+    for r in raw_upcoming:
+        pid = r.get("property_id")
+        if pid:
+            by_prop.setdefault(pid, []).append(r)
+    for pid in by_prop:
+        by_prop[pid].sort(key=lambda r: r.get("checkin_date", ""))
+
+    active_keys = set()
+    rows_to_upsert = []
+
+    for co in checkouts:
+        if _classify_reservation(co) != "guest":
+            continue
+        pid = co.get("property_id")
+        if not pid:
+            continue
+        co_date_str = (co.get("checkout_date") or "")[:10]
+        try:
+            co_date = date_cls.fromisoformat(co_date_str)
+        except Exception:
+            continue
+
+        prop_name = _get_property_name(pid)
+
+        next_r = next_ci_date = None
+        for r in by_prop.get(pid, []):
+            ci_str = (r.get("checkin_date") or "")[:10]
+            try:
+                ci_date = date_cls.fromisoformat(ci_str)
+            except Exception:
+                continue
+            if ci_date >= co_date:
+                next_r, next_ci_date = r, ci_date
+                break
+
+        if not next_r:
+            key = f"{prop_name}::{co_date_str}"
+            active_keys.add(key)
+            rows_to_upsert.append((key, prop_name, co_date_str, None, "vacancy_pri"))
+            continue
+
+        next_kind = _classify_reservation(next_r)
+        if next_kind not in ("owner", "block"):
+            continue
+        if next_ci_date < today:
+            continue
+
+        tag_names = [_extract_str(t) for t in (next_r.get("tags") or [])]
+        if "owner next" in tag_names:
+            continue  # already tagged — no alert needed
+
+        key = f"{prop_name}::{co_date_str}::on"
+        active_keys.add(key)
+        rows_to_upsert.append((key, prop_name, co_date_str, next_ci_date.isoformat(), "needs_owner_next"))
+
+    now = datetime.utcnow().isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        for (key, prop, co, nci, atype) in rows_to_upsert:
+            cur.execute(
+                """INSERT INTO pri_banner_alerts
+                       (item_key, property_name, checkout_date, next_checkin, alert_type, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (item_key) DO UPDATE SET
+                       property_name = EXCLUDED.property_name,
+                       checkout_date = EXCLUDED.checkout_date,
+                       next_checkin  = EXCLUDED.next_checkin,
+                       alert_type    = EXCLUDED.alert_type""",
+                (key, prop, co, nci, atype, now),
+            )
+        # Remove alerts no longer in the active set and not yet dismissed
+        if active_keys:
+            placeholders = ",".join(["%s"] * len(active_keys))
+            cur.execute(
+                f"DELETE FROM pri_banner_alerts WHERE item_key NOT IN ({placeholders}) "
+                "AND dismissed_at IS NULL",
+                list(active_keys),
+            )
+        else:
+            cur.execute("DELETE FROM pri_banner_alerts WHERE dismissed_at IS NULL")
+        # Clean up old dismissed alerts (checkout more than 7 days ago)
+        cutoff = (today - timedelta(days=7)).isoformat()
+        cur.execute("DELETE FROM pri_banner_alerts WHERE checkout_date < %s", (cutoff,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        cur.close(); conn.close()
+
+
+@briefing_bp.route("/api/pri-alerts")
+@login_required
+def api_pri_alerts():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "SELECT item_key, property_name, checkout_date, next_checkin, alert_type "
+        "FROM pri_banner_alerts WHERE dismissed_at IS NULL "
+        "ORDER BY checkout_date ASC"
+    )
+    alerts = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.rollback(); conn.close()
+    return jsonify({"alerts": alerts})
+
+
+@briefing_bp.route("/api/pri-alert/dismiss", methods=["POST"])
+@login_required
+def api_pri_alert_dismiss():
+    key = (request.get_json(force=True) or {}).get("key", "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    now  = datetime.utcnow().isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "UPDATE pri_banner_alerts SET dismissed_at=%s, dismissed_by=%s WHERE item_key=%s",
+        (now, current_user.id, key),
+    )
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
 @briefing_bp.route("/briefing/property-status")
 @login_required
 def property_status():

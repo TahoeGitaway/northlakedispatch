@@ -22,6 +22,22 @@ from routes.auth import admin_required
 
 admin_bp = Blueprint("admin", __name__)
 
+def _my_bot_allowed():
+    """True if the current user is allowed to use the personal Asana bot."""
+    allowed_raw = os.environ.get("MY_BOT_ALLOWED_EMAILS", "")
+    allowed = {e.strip().lower() for e in allowed_raw.split(",") if e.strip()}
+    return current_user.email.lower() in allowed
+
+def my_bot_required(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or not _my_bot_allowed():
+            from flask import abort
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
 # ── Breezeway context cache (avoids re-fetching on every chat message) ──
 import time as _time
 _bw_ctx_cache: dict = {}   # {cache_key: (timestamp, checkins, checkouts)}
@@ -1782,6 +1798,397 @@ def pri_dismissals_clear():
         cur.execute("DELETE FROM pri_dismissals")
     conn.commit(); cur.close(); conn.close()
     return jsonify({"ok": True})
+
+
+# ── PRI alert manual refresh ─────────────────────────────────────
+
+@admin_bp.route("/admin/pri-alert-refresh", methods=["POST"])
+@login_required
+@admin_required
+def pri_alert_refresh():
+    from routes.briefing import refresh_pri_banner_alerts
+    try:
+        refresh_pri_banner_alerts(alert_days=3)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Asana notification polling + routes ──────────────────────────
+
+def poll_asana_notifications():
+    """Check Asana for new comments on tasks assigned to me since last poll.
+    Called by the scheduler every 30 minutes.
+    """
+    from db import get_db, get_cursor
+    token = os.environ.get("ASANA_TOKEN", "")
+    if not token:
+        return
+
+    now_str = datetime.utcnow().isoformat()
+
+    # Read last-checked timestamp
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT value FROM asana_poll_state WHERE key='last_checked'")
+    row = cur.fetchone()
+    last_checked = row["value"] if row else None
+    cur.close(); conn.rollback(); conn.close()
+
+    ws = _get_asana_workspace()
+    if not ws:
+        return
+
+    # Get all incomplete tasks assigned to me
+    tasks_data, err = _asana_request("GET", "/tasks", {
+        "assignee":   "me",
+        "workspace":  ws,
+        "completed":  "false",
+        "opt_fields": "gid,name",
+    })
+    if err or not tasks_data:
+        return
+    tasks = tasks_data if isinstance(tasks_data, list) else []
+
+    new_notifications = []
+    for task in tasks:
+        tgid  = task.get("gid")
+        tname = task.get("name", "Unnamed task")
+        if not tgid:
+            continue
+        stories_data, serr = _asana_request("GET", f"/tasks/{tgid}/stories", {
+            "opt_fields": "gid,type,created_at,created_by.name,text",
+        })
+        if serr or not stories_data:
+            continue
+        for story in (stories_data if isinstance(stories_data, list) else []):
+            if story.get("type") != "comment":
+                continue
+            sgid         = story.get("gid", "")
+            created_at   = story.get("created_at", "")
+            commenter    = (story.get("created_by") or {}).get("name", "Someone")
+            comment_text = story.get("text", "")
+            # Skip old stories if we have a last_checked timestamp
+            if last_checked and created_at and created_at <= last_checked:
+                continue
+            item_key = f"{tgid}::{sgid}"
+            new_notifications.append((item_key, tgid, tname, sgid, commenter, comment_text, created_at))
+
+    if new_notifications:
+        conn2 = get_db(); cur2 = get_cursor(conn2)
+        for (key, tgid, tname, sgid, commenter, text, cat) in new_notifications:
+            cur2.execute(
+                """INSERT INTO asana_notifications
+                   (item_key, task_gid, task_name, story_gid, commenter, comment_text, asana_created_at, created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (item_key) DO NOTHING""",
+                (key, tgid, tname, sgid, commenter, text, cat, now_str),
+            )
+        conn2.commit(); cur2.close(); conn2.close()
+
+    # Update last_checked
+    conn3 = get_db(); cur3 = get_cursor(conn3)
+    cur3.execute(
+        "INSERT INTO asana_poll_state (key, value) VALUES ('last_checked', %s) "
+        "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+        (now_str,),
+    )
+    conn3.commit(); cur3.close(); conn3.close()
+
+
+@admin_bp.route("/api/asana-notifications")
+@login_required
+@my_bot_required
+def api_asana_notifications():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "SELECT item_key, task_gid, task_name, commenter, comment_text, asana_created_at "
+        "FROM asana_notifications WHERE dismissed_at IS NULL AND replied_at IS NULL "
+        "ORDER BY asana_created_at DESC"
+    )
+    notes = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.rollback(); conn.close()
+    return jsonify({"notifications": notes})
+
+
+@admin_bp.route("/api/asana-notification/dismiss", methods=["POST"])
+@login_required
+@my_bot_required
+def api_asana_notification_dismiss():
+    key = (request.get_json(force=True) or {}).get("key", "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "UPDATE asana_notifications SET dismissed_at=%s WHERE item_key=%s",
+        (datetime.utcnow().isoformat(), key),
+    )
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
+# ── Personal Asana bot ────────────────────────────────────────────
+
+def _asana_request(method, path, payload=None):
+    token = os.environ.get("ASANA_TOKEN", "")
+    if not token:
+        return None, "ASANA_TOKEN not configured."
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json",
+               "Content-Type": "application/json"}
+    url = f"https://app.asana.com/api/1.0{path}"
+    try:
+        if method == "GET":
+            resp = requests.get(url, headers=headers, params=payload, timeout=15)
+        elif method == "POST":
+            resp = requests.post(url, headers=headers, json=payload or {}, timeout=15)
+        elif method == "PUT":
+            resp = requests.put(url, headers=headers, json=payload or {}, timeout=15)
+        else:
+            return None, f"Unknown method {method}"
+        if not resp.ok:
+            return None, f"Asana API {resp.status_code}: {resp.text[:200]}"
+        return resp.json().get("data"), None
+    except Exception as e:
+        return None, str(e)
+
+_asana_workspace_cache = {"gid": None}
+
+def _get_asana_workspace():
+    if _asana_workspace_cache["gid"]:
+        return _asana_workspace_cache["gid"]
+    data, err = _asana_request("GET", "/workspaces")
+    if err or not data:
+        return None
+    gid = data[0].get("gid") if isinstance(data, list) else data.get("gid")
+    _asana_workspace_cache["gid"] = gid
+    return gid
+
+
+@admin_bp.route("/admin/my-bot")
+@login_required
+@my_bot_required
+def my_bot_page():
+    return render_template("admin_my_bot.html")
+
+
+@admin_bp.route("/admin/my-bot/chat", methods=["POST"])
+@login_required
+@my_bot_required
+def my_bot_chat():
+    import anthropic as _anthropic
+
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured."}), 500
+
+    data     = request.get_json(force=True) or {}
+    messages = data.get("messages", [])
+
+    tools = [
+        {
+            "name": "get_my_asana_tasks",
+            "description": (
+                "Fetch Asana tasks assigned to the current user. "
+                "Returns task name, GID, due date, project, completion status, and notes. "
+                "Use filter='incomplete' (default) to see open tasks, 'complete' for done tasks, "
+                "or 'all' for everything. Optionally filter by project name."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "filter":  {"type": "string", "description": "'incomplete', 'complete', or 'all'"},
+                    "project": {"type": "string", "description": "Optional project name to filter by"},
+                },
+            },
+        },
+        {
+            "name": "update_asana_task",
+            "description": (
+                "Update an Asana task — mark complete/incomplete, change due date, or update notes. "
+                "Requires task_gid from get_my_asana_tasks."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_gid":  {"type": "string", "description": "Asana task GID"},
+                    "task_name": {"type": "string", "description": "Task name for context"},
+                    "completed": {"type": "boolean", "description": "Set completion status"},
+                    "due_on":    {"type": "string",  "description": "New due date YYYY-MM-DD"},
+                    "notes":     {"type": "string",  "description": "Replace task notes/description"},
+                },
+                "required": ["task_gid", "task_name"],
+            },
+        },
+        {
+            "name": "draft_asana_comment",
+            "description": (
+                "Draft a comment to post on an Asana task. "
+                "Returns the suggested comment text for user review and editing before posting. "
+                "Always use this instead of posting directly — the user must confirm the text first."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_gid":       {"type": "string", "description": "Asana task GID"},
+                    "task_name":      {"type": "string", "description": "Task name for context"},
+                    "suggested_text": {"type": "string", "description": "The suggested comment text"},
+                },
+                "required": ["task_gid", "task_name", "suggested_text"],
+            },
+        },
+    ]
+
+    def _exec_get_tasks(filter_val="incomplete", project_filter=None):
+        ws = _get_asana_workspace()
+        if not ws:
+            return "Could not retrieve Asana workspace."
+        params = {
+            "assignee":   "me",
+            "workspace":  ws,
+            "opt_fields": "name,gid,due_on,completed,notes,projects.name,permalink_url",
+        }
+        if filter_val == "complete":
+            params["completed"] = "true"
+        elif filter_val == "incomplete":
+            params["completed"] = "false"
+        data, err = _asana_request("GET", "/tasks", params)
+        if err:
+            return f"Error fetching tasks: {err}"
+        tasks = data if isinstance(data, list) else []
+        if project_filter:
+            pf = project_filter.lower()
+            tasks = [t for t in tasks if any(
+                pf in (p.get("name") or "").lower()
+                for p in (t.get("projects") or [])
+            )]
+        if not tasks:
+            return "No tasks found."
+        lines = [f"Found {len(tasks)} task(s):"]
+        for t in tasks:
+            projects = ", ".join(p.get("name", "") for p in (t.get("projects") or []))
+            status   = "✓ done" if t.get("completed") else "open"
+            due      = t.get("due_on") or "no due date"
+            lines.append(f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}')
+            if t.get("notes"):
+                lines.append(f'  Notes: {t["notes"][:100]}')
+        return "\n".join(lines)
+
+    def _exec_update_task(task_gid, task_name, completed=None, due_on=None, notes=None):
+        payload = {"data": {}}
+        if completed is not None:
+            payload["data"]["completed"] = completed
+        if due_on:
+            payload["data"]["due_on"] = due_on
+        if notes is not None:
+            payload["data"]["notes"] = notes
+        if not payload["data"]:
+            return "No fields to update provided."
+        _, err = _asana_request("PUT", f"/tasks/{task_gid}", payload)
+        if err:
+            return f"Error updating task: {err}"
+        return f"Task '{task_name}' updated successfully."
+
+    def generate():
+        def sse(obj):
+            return f"data: {json.dumps(obj)}\n\n"
+
+        ai_client  = _anthropic.Anthropic(api_key=key)
+        trimmed    = list(messages[-20:]) if len(messages) > 20 else list(messages)
+        history_additions = []
+        reply_text = ""
+        system_prompt = (
+            "You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
+            "You have access to their Asana task list.\n"
+            "- Use get_my_asana_tasks to look up tasks before making changes.\n"
+            "- Use update_asana_task to mark tasks complete or update details. "
+            "Before calling update_asana_task, always confirm with the user using 'CONFIRM_ACTION: <description>'.\n"
+            "- Use draft_asana_comment to suggest a comment — the user will edit it before it posts.\n"
+            "- Be concise and direct."
+        )
+
+        try:
+            for _turn in range(6):
+                turn_text    = ""
+                asst_content = []
+                with ai_client.messages.stream(
+                    model="claude-sonnet-4-6", max_tokens=1500,
+                    system=system_prompt, messages=trimmed, tools=tools,
+                ) as stream:
+                    for chunk in stream.text_stream:
+                        turn_text  += chunk
+                        reply_text += chunk
+                        yield sse({"type": "delta", "text": chunk})
+                    final_msg = stream.get_final_message()
+
+                if final_msg.stop_reason == "tool_use":
+                    for b in final_msg.content:
+                        if b.type == "tool_use":
+                            asst_content.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
+                        elif b.type == "text":
+                            asst_content.append({"type": "text", "text": b.text})
+                    trimmed.append({"role": "assistant", "content": asst_content})
+                    history_additions.append({"role": "assistant", "content": asst_content})
+
+                    tool_results = []
+                    for block in final_msg.content:
+                        if block.type != "tool_use":
+                            continue
+                        if block.name == "get_my_asana_tasks":
+                            yield sse({"type": "status", "text": "Fetching your Asana tasks…"})
+                            result = _exec_get_tasks(
+                                block.input.get("filter", "incomplete"),
+                                block.input.get("project"),
+                            )
+                        elif block.name == "update_asana_task":
+                            yield sse({"type": "status", "text": f"Updating task…"})
+                            result = _exec_update_task(
+                                block.input.get("task_gid", ""),
+                                block.input.get("task_name", ""),
+                                block.input.get("completed"),
+                                block.input.get("due_on"),
+                                block.input.get("notes"),
+                            )
+                        elif block.name == "draft_asana_comment":
+                            # Return draft to frontend — user edits before posting
+                            result = (
+                                f"DRAFT_COMMENT_READY\n"
+                                f"task_gid={block.input.get('task_gid','')}\n"
+                                f"task_name={block.input.get('task_name','')}\n"
+                                f"suggested_text={block.input.get('suggested_text','')}"
+                            )
+                        else:
+                            result = f"Unknown tool: {block.name}"
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": block.id, "content": result,
+                        })
+                    tool_msg = {"role": "user", "content": tool_results}
+                    trimmed.append(tool_msg)
+                    history_additions.append(tool_msg)
+                else:
+                    break
+
+            yield sse({"type": "done", "history_additions": history_additions})
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+@admin_bp.route("/admin/my-bot/post-comment", methods=["POST"])
+@login_required
+@my_bot_required
+def my_bot_post_comment():
+    """Post a user-confirmed (and possibly edited) comment to an Asana task."""
+    body      = request.get_json(force=True) or {}
+    task_gid  = (body.get("task_gid") or "").strip()
+    task_name = (body.get("task_name") or "").strip()
+    text      = (body.get("text") or "").strip()
+    if not task_gid or not text:
+        return jsonify({"error": "task_gid and text required"}), 400
+    _, err = _asana_request("POST", f"/tasks/{task_gid}/stories", {"data": {"text": text}})
+    if err:
+        return jsonify({"error": err}), 500
+    return jsonify({"ok": True, "task_name": task_name})
 
 
 # ── Security overview page ────────────────────────────────────────

@@ -11,10 +11,17 @@
         Scans guest checkouts and flags properties needing a PRI based on what follows.
       </p>
     </div>
-    <button onclick="reload()"
-            class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1">
-      ↺ Refresh
-    </button>
+    <div class="flex items-center gap-3">
+      <button onclick="reload()"
+              class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1">
+        ↺ Refresh
+      </button>
+      <button id="runNowBtn" onclick="runAlertRefresh()"
+              class="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300
+                     font-medium px-3 py-1.5 rounded-lg transition-colors">
+        Run alert check now
+      </button>
+    </div>
   </div>
 
   <!-- Disclaimer banner -->
@@ -297,6 +304,20 @@ async function load() {
     document.getElementById("loading").classList.add("hidden");
     document.getElementById("errorBox").textContent = "Could not load PRI data: " + e.message;
     document.getElementById("errorBox").classList.remove("hidden");
+  }
+}
+
+async function runAlertRefresh() {
+  const btn = document.getElementById("runNowBtn");
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    await fetch("/admin/pri-alert-refresh", {method:"POST"});
+    btn.textContent = "✓ Done";
+    setTimeout(() => { btn.disabled = false; btn.textContent = "Run alert check now"; }, 2000);
+    // Reload the page banner by dispatching a storage event (or just reload)
+    window.location.reload();
+  } catch {
+    btn.disabled = false; btn.textContent = "Run alert check now";
   }
 }
 
