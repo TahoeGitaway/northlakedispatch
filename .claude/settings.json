@@ -32,7 +32,8 @@
       "Bash(.venv/Scripts/python -c \"from routes.admin import admin_bp; print\\('admin OK'\\)\")",
       "Bash(.venv/Scripts/python -c \"from routes.admin import admin_bp; from routes.briefing import _fetch_bw_tasks; print\\('OK'\\)\")",
       "Bash(.venv\\\\Scripts\\\\pip install *)",
-      "Bash(.venv/Scripts/pip install *)"
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/python -c \"from app import app; rules = [str\\(r\\) for r in app.url_map.iter_rules\\(\\) if 'my' in str\\(r\\).lower\\(\\)]; print\\(rules\\)\")"
     ]
   }
 }

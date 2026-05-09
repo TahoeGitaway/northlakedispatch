@@ -65,10 +65,8 @@ with app.app_context():
 @app.context_processor
 def inject_globals():
     from flask_login import current_user
-    allowed_raw = os.environ.get("MY_BOT_ALLOWED_EMAILS", "")
-    allowed = {e.strip().lower() for e in allowed_raw.split(",") if e.strip()}
     try:
-        my_bot_ok = current_user.is_authenticated and current_user.email.lower() in allowed
+        my_bot_ok = current_user.is_authenticated and current_user.is_admin
     except Exception:
         my_bot_ok = False
     return {"my_bot_allowed": my_bot_ok}

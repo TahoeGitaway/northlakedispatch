@@ -22,20 +22,11 @@ from routes.auth import admin_required
 
 admin_bp = Blueprint("admin", __name__)
 
-def _my_bot_allowed():
-    """True if the current user is allowed to use the personal Asana bot."""
-    allowed_raw = os.environ.get("MY_BOT_ALLOWED_EMAILS", "")
-    allowed = {e.strip().lower() for e in allowed_raw.split(",") if e.strip()}
-    return current_user.email.lower() in allowed
-
 def my_bot_required(f):
     from functools import wraps
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or not _my_bot_allowed():
-            from flask import abort
-            abort(403)
-        return f(*args, **kwargs)
+        return admin_required(f)(*args, **kwargs)
     return decorated
 
 # ── Breezeway context cache (avoids re-fetching on every chat message) ──
