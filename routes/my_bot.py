@@ -78,6 +78,32 @@ def _asana_request(method, path, payload=None):
         return None, str(e)
 
 
+def _asana_fetch_all(path, params):
+    """GET a paginated Asana collection and return every item across all pages."""
+    token = os.environ.get("ASANA_TOKEN", "")
+    if not token:
+        return None, "ASANA_TOKEN not configured."
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    url = f"https://app.asana.com/api/1.0{path}"
+    all_items = []
+    page_params = dict(params)
+    for _ in range(30):  # safety cap at 3 000 items
+        try:
+            resp = requests.get(url, headers=headers, params=page_params, timeout=20)
+            if not resp.ok:
+                return None, f"Asana API {resp.status_code}: {resp.text[:200]}"
+            body = resp.json()
+        except Exception as e:
+            return None, str(e)
+        all_items.extend(body.get("data", []))
+        nxt = body.get("next_page")
+        if not nxt or not nxt.get("offset"):
+            break
+        page_params = dict(params)
+        page_params["offset"] = nxt["offset"]
+    return all_items, None
+
+
 _asana_workspace_cache = {"gid": None}
 
 
@@ -278,6 +304,37 @@ def my_bot_chat():
             },
         },
         {
+            "name": "batch_update_asana_tasks",
+            "description": (
+                "Update multiple Asana tasks in parallel in a single call. "
+                "Use this whenever you need to update more than one task — it runs all updates "
+                "simultaneously server-side and returns per-task success/failure/timeout results. "
+                "NEVER call update_asana_task in a loop; use this instead."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "updates": {
+                        "type": "array",
+                        "description": "List of task updates to apply in parallel",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task_gid":  {"type": "string", "description": "Asana task GID"},
+                                "task_name": {"type": "string", "description": "Task name for context"},
+                                "new_name":  {"type": "string", "description": "New title for the task"},
+                                "due_on":    {"type": "string", "description": "New due date YYYY-MM-DD"},
+                                "completed": {"type": "boolean"},
+                                "notes":     {"type": "string"},
+                            },
+                            "required": ["task_gid", "task_name"],
+                        },
+                    },
+                },
+                "required": ["updates"],
+            },
+        },
+        {
             "name": "fetch_breezeway_tasks",
             "description": (
                 "Fetch Breezeway task data (cleaning jobs, inspections, maintenance) "
@@ -320,10 +377,11 @@ def my_bot_chat():
         if filter_val == "incomplete":
             params["completed_since"] = "now"
 
-        data, err = _asana_request("GET", f"/user_task_lists/{utl_gid}/tasks", params)
+        tasks, err = _asana_fetch_all(f"/user_task_lists/{utl_gid}/tasks", params)
         if err:
             return f"Error fetching tasks: {err}"
-        tasks = data if isinstance(data, list) else []
+        if tasks is None:
+            tasks = []
 
         if filter_val == "complete":
             tasks = [t for t in tasks if t.get("completed")]
@@ -353,6 +411,53 @@ def my_bot_chat():
             lines.append(line)
             if t.get("notes"):
                 lines.append(f'  Notes: {t["notes"]}')
+        return "\n".join(lines)
+
+    def _exec_batch_update(updates):
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+
+        def _do_one(u):
+            payload = {"data": {}}
+            if u.get("new_name"):    payload["data"]["name"]      = u["new_name"]
+            if u.get("due_on"):      payload["data"]["due_on"]    = u["due_on"]
+            if u.get("completed") is not None:
+                                     payload["data"]["completed"] = u["completed"]
+            if u.get("notes") is not None:
+                                     payload["data"]["notes"]     = u["notes"]
+            label = u.get("new_name") or u.get("task_name", u.get("task_gid", "?"))
+            if not payload["data"]:
+                return label, "skipped — nothing to change"
+            _, err = _asana_request("PUT", f"/tasks/{u['task_gid']}", payload)
+            if err:
+                return label, f"FAILED: {err}"
+            return label, "✓"
+
+        rows = []
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = {ex.submit(_do_one, u): u for u in updates}
+            for fut in as_completed(futures, timeout=60):
+                try:
+                    label, status = fut.result(timeout=12)
+                except FutureTimeout:
+                    u = futures[fut]
+                    label = u.get("task_name", u.get("task_gid", "?"))
+                    status = "TIMED OUT — Asana did not respond in 12 s"
+                except Exception as exc:
+                    u = futures[fut]
+                    label = u.get("task_name", u.get("task_gid", "?"))
+                    status = f"ERROR: {exc}"
+                rows.append((label, status))
+
+        ok  = sum(1 for _, s in rows if s == "✓")
+        bad = [(l, s) for l, s in rows if s != "✓" and not s.startswith("skipped")]
+        lines = [f"Batch complete: {ok}/{len(updates)} succeeded."]
+        if bad:
+            lines.append(f"⚠️ {len(bad)} issue(s):")
+            for l, s in bad:
+                lines.append(f"  • {l}: {s}")
+        lines.append("\nAll results:")
+        for l, s in sorted(rows, key=lambda x: x[0]):
+            lines.append(f"  {s}  {l}")
         return "\n".join(lines)
 
     def _exec_update_task(task_gid, task_name, new_name=None, completed=None, due_on=None, notes=None):
@@ -385,16 +490,24 @@ def my_bot_chat():
         today_str = _today_cls.today().isoformat()
         system_prompt = (
             f"You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
-            f"Today is {today_str}.\n"
-            "You have two data sources:\n"
-            "1. ASANA — the user's personal task list. Use get_my_asana_tasks to look up tasks, "
-            "update_asana_task to update them (always CONFIRM_ACTION first), "
-            "and draft_asana_comment to suggest a comment the user edits before posting.\n"
-            "2. BREEZEWAY — property operations tasks (cleaning, inspections, maintenance). "
-            "Use fetch_breezeway_tasks with property names and a date range.\n"
-            "- Be concise and direct. Use bullet points.\n"
-            "- Never guess task GIDs — always call get_my_asana_tasks first to find them.\n"
-            "- For write actions (update, comment), always show CONFIRM_ACTION: <description> first."
+            f"Today is {today_str}.\n\n"
+            "TOOLS:\n"
+            "1. ASANA — get_my_asana_tasks (fetch), update_asana_task (single update), "
+            "batch_update_asana_tasks (multiple updates in parallel — use this for 2+ tasks), "
+            "draft_asana_comment (suggest a comment for the user to edit and post).\n"
+            "2. BREEZEWAY — fetch_breezeway_tasks (property cleaning/inspection/maintenance tasks).\n\n"
+            "RULES — follow these exactly:\n"
+            "- NEVER say you are doing something without immediately calling the tool. "
+            "Saying 'I'll fire all updates now' and then not calling a tool is not allowed. "
+            "Call the tool first, then describe what happened based on the results.\n"
+            "- For 2 or more task updates: ALWAYS use batch_update_asana_tasks, never loop update_asana_task.\n"
+            "- After any tool call, report the results honestly: how many succeeded, "
+            "which ones timed out or failed, and the exact error message for failures.\n"
+            "- Before any write (update, batch, comment): show CONFIRM_ACTION: <what you will do> "
+            "and wait for the user to confirm. After confirmation, call the tool immediately.\n"
+            "- Never guess task GIDs — always call get_my_asana_tasks first.\n"
+            "- If a tool returns an error, tell the user exactly what it says.\n"
+            "- Be concise. Use bullet points. Do not pad responses."
         )
 
         try:
@@ -402,7 +515,7 @@ def my_bot_chat():
                 turn_text    = ""
                 asst_content = []
                 with ai_client.messages.stream(
-                    model="claude-sonnet-4-6", max_tokens=1500,
+                    model="claude-sonnet-4-6", max_tokens=4096,
                     system=system_prompt, messages=trimmed, tools=tools,
                 ) as stream:
                     for chunk in stream.text_stream:
@@ -440,6 +553,11 @@ def my_bot_chat():
                                 block.input.get("due_on"),
                                 block.input.get("notes"),
                             )
+                        elif block.name == "batch_update_asana_tasks":
+                            updates = block.input.get("updates", [])
+                            n = len(updates)
+                            yield sse({"type": "status", "text": f"Running {n} Asana update{'s' if n != 1 else ''} in parallel…"})
+                            result = _exec_batch_update(updates)
                         elif block.name == "draft_asana_comment":
                             result = (
                                 f"DRAFT_COMMENT_READY\n"
