@@ -69,6 +69,8 @@ def _asana_request(method, path, payload=None):
             resp = requests.post(url, headers=headers, json=payload or {}, timeout=15)
         elif method == "PUT":
             resp = requests.put(url, headers=headers, json=payload or {}, timeout=15)
+        elif method == "DELETE":
+            resp = requests.delete(url, headers=headers, timeout=15)
         else:
             return None, f"Unknown method {method}"
         if not resp.ok:
@@ -335,6 +337,46 @@ def my_bot_chat():
             },
         },
         {
+            "name": "delete_asana_task",
+            "description": (
+                "Permanently delete a single Asana task. This cannot be undone. "
+                "Always CONFIRM_ACTION before calling this."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_gid":  {"type": "string", "description": "Asana task GID"},
+                    "task_name": {"type": "string", "description": "Task name for confirmation context"},
+                },
+                "required": ["task_gid", "task_name"],
+            },
+        },
+        {
+            "name": "batch_delete_asana_tasks",
+            "description": (
+                "Permanently delete multiple Asana tasks in parallel. Cannot be undone. "
+                "Use for 2+ deletions. Always CONFIRM_ACTION first."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "description": "Tasks to delete",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task_gid":  {"type": "string"},
+                                "task_name": {"type": "string"},
+                            },
+                            "required": ["task_gid", "task_name"],
+                        },
+                    },
+                },
+                "required": ["tasks"],
+            },
+        },
+        {
             "name": "fetch_breezeway_tasks",
             "description": (
                 "Fetch Breezeway task data (cleaning jobs, inspections, maintenance) "
@@ -460,6 +502,47 @@ def my_bot_chat():
             lines.append(f"  {s}  {l}")
         return "\n".join(lines)
 
+    def _exec_delete_task(task_gid, task_name):
+        _, err = _asana_request("DELETE", f"/tasks/{task_gid}")
+        if err:
+            return f"Failed to delete '{task_name}': {err}"
+        return f"'{task_name}' deleted."
+
+    def _exec_batch_delete(tasks):
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+
+        def _do_one(t):
+            _, err = _asana_request("DELETE", f"/tasks/{t['task_gid']}")
+            label = t.get("task_name", t.get("task_gid", "?"))
+            if err:
+                return label, f"FAILED: {err}"
+            return label, "✓ deleted"
+
+        rows = []
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = {ex.submit(_do_one, t): t for t in tasks}
+            for fut in as_completed(futures, timeout=60):
+                try:
+                    label, status = fut.result(timeout=12)
+                except FutureTimeout:
+                    t = futures[fut]
+                    label = t.get("task_name", t.get("task_gid", "?"))
+                    status = "TIMED OUT"
+                except Exception as exc:
+                    t = futures[fut]
+                    label = t.get("task_name", t.get("task_gid", "?"))
+                    status = f"ERROR: {exc}"
+                rows.append((label, status))
+
+        ok  = sum(1 for _, s in rows if s == "✓ deleted")
+        bad = [(l, s) for l, s in rows if s != "✓ deleted"]
+        lines = [f"Batch delete complete: {ok}/{len(tasks)} deleted."]
+        if bad:
+            lines.append(f"⚠️ {len(bad)} issue(s):")
+            for l, s in bad:
+                lines.append(f"  • {l}: {s}")
+        return "\n".join(lines)
+
     def _exec_update_task(task_gid, task_name, new_name=None, completed=None, due_on=None, notes=None):
         payload = {"data": {}}
         if new_name:
@@ -494,6 +577,8 @@ def my_bot_chat():
             "TOOLS:\n"
             "1. ASANA — get_my_asana_tasks (fetch), update_asana_task (single update), "
             "batch_update_asana_tasks (multiple updates in parallel — use this for 2+ tasks), "
+            "delete_asana_task (delete one task), "
+            "batch_delete_asana_tasks (delete multiple tasks in parallel — use for 2+), "
             "draft_asana_comment (suggest a comment for the user to edit and post).\n"
             "2. BREEZEWAY — fetch_breezeway_tasks (property cleaning/inspection/maintenance tasks).\n\n"
             "RULES — follow these exactly:\n"
@@ -558,6 +643,17 @@ def my_bot_chat():
                             n = len(updates)
                             yield sse({"type": "status", "text": f"Running {n} Asana update{'s' if n != 1 else ''} in parallel…"})
                             result = _exec_batch_update(updates)
+                        elif block.name == "delete_asana_task":
+                            yield sse({"type": "status", "text": f"Deleting task…"})
+                            result = _exec_delete_task(
+                                block.input.get("task_gid", ""),
+                                block.input.get("task_name", ""),
+                            )
+                        elif block.name == "batch_delete_asana_tasks":
+                            tasks_to_del = block.input.get("tasks", [])
+                            n = len(tasks_to_del)
+                            yield sse({"type": "status", "text": f"Deleting {n} task{'s' if n != 1 else ''} in parallel…"})
+                            result = _exec_batch_delete(tasks_to_del)
                         elif block.name == "draft_asana_comment":
                             result = (
                                 f"DRAFT_COMMENT_READY\n"
