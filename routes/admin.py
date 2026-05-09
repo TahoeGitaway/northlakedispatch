@@ -915,13 +915,10 @@ def chatbot_chat():
         {
             "name": "fetch_task_data",
             "description": (
-                "Fetch Breezeway task data (cleaning jobs, inspections, maintenance, any work orders) "
-                "for a date range at a specific property. "
-                "IMPORTANT: property_name is required — the Breezeway API does not support global task queries. "
-                "Use this when the user asks about: what tasks were done or not done, "
-                "task completion status, who completed work, pending or overdue tasks, "
-                "cleaning history, or to compare what work was expected vs. actually completed. "
-                "If the user asks about tasks without specifying a property, ask them which property before calling. "
+                "Fetch Breezeway task data for a SINGLE property. "
+                "Use fetch_tasks_multi instead when asking about 2 or more properties at once — "
+                "it fetches all of them in parallel and is much faster. "
+                "Use this only when fetching exactly one property. "
                 "Maximum date range is 30 days per call. "
                 "Use status='housekeeping' for cleaning tasks, 'maintenance' for maintenance, 'inspection' for inspections."
             ),
@@ -930,10 +927,31 @@ def chatbot_chat():
                 "properties": {
                     "start_date":    {"type": "string", "description": "Start date YYYY-MM-DD"},
                     "end_date":      {"type": "string", "description": "End date YYYY-MM-DD (max 30 days after start)"},
-                    "property_name": {"type": "string", "description": "Required: property name (partial match ok, e.g. 'Beaver Lake View')."},
+                    "property_name": {"type": "string", "description": "Required: property name (partial match ok)."},
                     "status":        {"type": "string", "description": "Optional: 'housekeeping', 'maintenance', 'inspection', 'safety', 'complete', 'pending', or 'in_progress'."},
                 },
                 "required": ["start_date", "end_date", "property_name"],
+            },
+        },
+        {
+            "name": "fetch_tasks_multi",
+            "description": (
+                "Fetch Breezeway task data for MULTIPLE properties simultaneously (in parallel). "
+                "ALWAYS use this instead of multiple fetch_task_data calls when the user asks about "
+                "2 or more properties. It runs all fetches concurrently so results come back in seconds "
+                "regardless of how many properties are requested. "
+                "Maximum date range is 30 days per call."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date":      {"type": "string", "description": "Start date YYYY-MM-DD"},
+                    "end_date":        {"type": "string", "description": "End date YYYY-MM-DD (max 30 days after start)"},
+                    "property_names":  {"type": "array", "items": {"type": "string"},
+                                        "description": "List of property names to fetch tasks for simultaneously."},
+                    "status":          {"type": "string", "description": "Optional: 'housekeeping', 'maintenance', 'inspection', 'safety', 'complete', 'pending', or 'in_progress'."},
+                },
+                "required": ["start_date", "end_date", "property_names"],
             },
         },
     ]
@@ -1044,18 +1062,30 @@ def chatbot_chat():
                     "Please ask the user which property they want to check.")
 
         _property_cache = _get_live_property_cache()
-        name_lower = property_name_filter.lower()
+        name_lower = property_name_filter.lower().strip()
         rev = {v.lower(): k for k, v in _property_cache.items() if isinstance(v, str)}
         if name_lower in rev:
             pid = rev[name_lower]
             matched_prop_name = property_name_filter
         else:
-            # Try progressively looser matching so partial names still resolve
-            matches = (difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.6) or
+            # Multi-strategy matching — tried in order of confidence:
+            # 1. Query is a prefix of the full name ("Kodiak Cabin" → "Kodiak Cabin at Tahoe Donner")
+            prefix_m = [k for k in rev if k.startswith(name_lower)]
+            # 2. Query appears as a substring of the full name
+            substr_m = [k for k in rev if name_lower in k]
+            # 3. All words in the query appear in the full name (handles reordering or extra words)
+            query_words = set(name_lower.split())
+            word_m = [k for k in rev if query_words and query_words.issubset(set(k.split()))]
+            # 4. Fuzzy matching (catches typos and minor variations)
+            fuzzy_m = (difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.6) or
                        difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.4))
-            # Also accept any key that contains the filter as a substring (or vice versa)
-            if not matches:
-                matches = [k for k in rev if name_lower in k or k in name_lower]
+            # 5. Full name is a substring of the query (user typed extra words)
+            reverse_m = [k for k in rev if len(k) > 4 and k in name_lower]
+
+            matches = prefix_m or substr_m or word_m or fuzzy_m or reverse_m
+            # If multiple candidates, prefer the shortest (most specific match)
+            if len(matches) > 1:
+                matches = sorted(matches, key=len)
             pid = rev[matches[0]] if matches else None
             matched_prop_name = _property_cache.get(pid, property_name_filter) if pid else None
 
@@ -1220,6 +1250,28 @@ def chatbot_chat():
 
         return "\n".join(lines)
 
+    def _execute_fetch_tasks_multi(start_str, end_str, property_names, status_filter=None):
+        """Fetch tasks for multiple properties concurrently using a thread pool."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        if not property_names:
+            return "No property names provided."
+        results = {}
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {
+                executor.submit(_execute_fetch_tasks, start_str, end_str, name, status_filter): name
+                for name in property_names
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    results[name] = future.result()
+                except Exception as ex:
+                    results[name] = f"Error fetching tasks: {ex}"
+        sections = []
+        for name in property_names:
+            sections.append(f"=== {name} ===\n{results.get(name, 'No data returned.')}")
+        return "\n\n".join(sections)
+
     def generate():
         def sse(obj):
             return f"data: {json.dumps(obj)}\n\n"
@@ -1376,8 +1428,11 @@ def chatbot_chat():
             "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
             "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
             "Do not consider the action done until confirmed.\n"
-            "- TOOL ACCURACY: The fetch_task_data tool returns ALL tasks from Breezeway for the given property "
-            "and date range — it does NOT filter by task title or keyword. If tasks are missing, the cause is "
+            "- TOOL USAGE: When the user asks about tasks at 2+ properties, ALWAYS use fetch_tasks_multi "
+            "(not multiple fetch_task_data calls) — it fetches all properties in parallel in one shot. "
+            "Never say 'I'll pull these simultaneously' and then use individual fetch_task_data calls.\n"
+            "- TOOL ACCURACY: fetch_task_data and fetch_tasks_multi return ALL tasks from Breezeway for the given property "
+            "and date range — they do NOT filter by task title or keyword. If tasks are missing, the cause is "
             "an API error (e.g. property ID not found) — say exactly what the error was. "
             "Tasks may have prefixes like 'Dept' or date stamps — report them exactly as returned. "
             "Always report full task title, scheduled date/time, status, and assignee for every task. "
@@ -1459,6 +1514,16 @@ def chatbot_chat():
                                     block.input.get("start_date", ""),
                                     block.input.get("end_date",   ""),
                                     prop or None,
+                                    block.input.get("status"),
+                                )
+                            elif block.name == "fetch_tasks_multi":
+                                names = block.input.get("property_names") or []
+                                n = len(names)
+                                yield sse({"type": "status", "text": f"Fetching tasks for {n} properties simultaneously…"})
+                                result = _execute_fetch_tasks_multi(
+                                    block.input.get("start_date", ""),
+                                    block.input.get("end_date",   ""),
+                                    names,
                                     block.input.get("status"),
                                 )
                             else:
