@@ -134,6 +134,8 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
             if len(page_results) < limit:
                 break
             page += 1
+    except requests.exceptions.Timeout:
+        return [], "Request timed out — Breezeway API did not respond within 15 s", last_status
     except Exception as ex:
         return [], str(ex), last_status
     return all_results, "", last_status

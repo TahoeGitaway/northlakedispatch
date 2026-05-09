@@ -84,6 +84,22 @@
 
 </div>
 
+<style>
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.15; transform: scale(0.75); }
+  40%            { opacity: 1;    transform: scale(1);    }
+}
+.thinking-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #6b7280;
+  animation: blink 1.4s infinite ease-in-out;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+</style>
+
 <script>
 const today = new Date().toISOString().slice(0, 10);
 // _currentSessionId is the live session — newChat() resets it, loadSession() overrides it
@@ -344,13 +360,13 @@ function appendMessage(role, text) {
   box.scrollTop = box.scrollHeight;
 }
 
-function appendThinking(msg) {
+function appendThinking() {
   clearEmpty();
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
   div.id        = "thinking";
-  div.className = "self-start bg-gray-100 text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm italic";
-  div.textContent = msg || "Thinking…";
+  div.className = "self-start bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1";
+  div.innerHTML = `<span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>`;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
@@ -446,7 +462,12 @@ async function sendMessage() {
 
   function showStatus(msg) {
     const thinking = document.getElementById("thinking");
-    if (thinking) { thinking.textContent = msg; return; }
+    if (thinking) {
+      thinking.className = "self-start bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-2.5 flex items-center gap-2 text-sm text-gray-500";
+      thinking.innerHTML = `<svg class="animate-spin w-3.5 h-3.5 text-gray-400 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg><span>${msg}</span>`;
+      scrollIfAtBottom();
+      return;
+    }
     if (!statusLine) {
       const box = document.getElementById("chatMessages");
       statusLine = document.createElement("div");

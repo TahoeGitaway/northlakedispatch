@@ -1437,21 +1437,28 @@ def chatbot_chat():
                     trimmed.append({"role": "assistant", "content": asst_content})
                     history_additions.append({"role": "assistant", "content": asst_content})
 
-                    tool_results = []
+                    tool_results  = []
+                    tool_blocks   = [b for b in final_msg.content if b.type == "tool_use"]
+                    tool_total    = len(tool_blocks)
+                    tool_idx      = 0
                     for block in final_msg.content:
                         if block.type == "tool_use":
-                            label = "reservation data" if block.name == "fetch_reservation_data" else "task data"
-                            yield sse({"type": "status", "text": f"Fetching {label}…"})
+                            tool_idx += 1
+                            counter  = f" ({tool_idx}/{tool_total})" if tool_total > 1 else ""
                             if block.name == "fetch_reservation_data":
+                                yield sse({"type": "status", "text": f"Fetching reservation data{counter}…"})
                                 result = _execute_fetch(
                                     block.input.get("start_date", ""),
                                     block.input.get("end_date",   ""),
                                 )
                             elif block.name == "fetch_task_data":
+                                prop = block.input.get("property_name") or ""
+                                prop_label = f" for {prop}" if prop else ""
+                                yield sse({"type": "status", "text": f"Fetching tasks{prop_label}{counter}…"})
                                 result = _execute_fetch_tasks(
                                     block.input.get("start_date", ""),
                                     block.input.get("end_date",   ""),
-                                    block.input.get("property_name"),
+                                    prop or None,
                                     block.input.get("status"),
                                 )
                             else:
