@@ -49,9 +49,9 @@
                 </a>
                 {% endif %}
                 {% if my_bot_allowed %}
-                <a href="{{ url_for('admin.my_bot_page') }}"
+                <a href="{{ url_for('my_bot.my_bot_page') }}"
                    class="text-gray-600 hover:text-violet-600 font-medium
-                          {% if request.endpoint == 'admin.my_bot_page' %}text-violet-600{% endif %}">
+                          {% if request.endpoint == 'my_bot.my_bot_page' %}text-violet-600{% endif %}">
                     My Bot
                 </a>
                 {% endif %}

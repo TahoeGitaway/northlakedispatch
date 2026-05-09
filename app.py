@@ -48,6 +48,7 @@ from routes.carpet   import carpet_bp
 from routes.briefing import briefing_bp
 from routes.employee import employee_bp
 from routes.projects import projects_bp
+from routes.my_bot   import my_bot_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
@@ -56,6 +57,7 @@ app.register_blueprint(carpet_bp)
 app.register_blueprint(briefing_bp)
 app.register_blueprint(employee_bp)
 app.register_blueprint(projects_bp)
+app.register_blueprint(my_bot_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():
@@ -83,7 +85,7 @@ def _scheduled_pri_check():
 def _scheduled_asana_poll():
     with app.app_context():
         try:
-            from routes.admin import poll_asana_notifications
+            from routes.my_bot import poll_asana_notifications
             poll_asana_notifications()
         except Exception:
             pass
