@@ -313,7 +313,7 @@ def my_bot_chat():
             return "Could not find user task list GID."
 
         params = {
-            "opt_fields": "name,gid,due_on,completed,notes,projects.name",
+            "opt_fields": "name,gid,due_on,completed,notes,projects.name,parent.name,parent.gid",
             "limit":      100,
         }
         if filter_val == "incomplete":
@@ -342,10 +342,14 @@ def my_bot_chat():
             return "No tasks found."
         lines = [f"Found {len(tasks)} task(s):"]
         for t in tasks:
-            projects = ", ".join(p.get("name", "") for p in (t.get("projects") or []))
-            status   = "✓ done" if t.get("completed") else "open"
-            due      = t.get("due_on") or "no due date"
-            lines.append(f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}')
+            projects   = ", ".join(p.get("name", "") for p in (t.get("projects") or []))
+            parent     = (t.get("parent") or {}).get("name", "")
+            status     = "✓ done" if t.get("completed") else "open"
+            due        = t.get("due_on") or "no due date"
+            line = f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}'
+            if parent:
+                line += f' | parent task: {parent}'
+            lines.append(line)
             if t.get("notes"):
                 lines.append(f'  Notes: {t["notes"]}')
         return "\n".join(lines)
