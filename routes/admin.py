@@ -2174,7 +2174,7 @@ def my_bot_chat():
             due      = t.get("due_on") or "no due date"
             lines.append(f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}')
             if t.get("notes"):
-                lines.append(f'  Notes: {t["notes"][:100]}')
+                lines.append(f'  Notes: {t["notes"]}')
         return "\n".join(lines)
 
     def _exec_update_task(task_gid, task_name, completed=None, due_on=None, notes=None):
