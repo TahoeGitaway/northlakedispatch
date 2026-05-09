@@ -1736,6 +1736,54 @@ def chatbot_save_flag():
     return jsonify({"success": True})
 
 
+# ── PRI dismissals (shared across all users/browsers) ────────────────
+
+@admin_bp.route("/admin/pri-dismissals", methods=["GET"])
+@login_required
+@admin_required
+def pri_dismissals_get():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT item_key FROM pri_dismissals")
+    keys = [r["item_key"] for r in cur.fetchall()]
+    cur.close(); conn.rollback(); conn.close()
+    return jsonify({"keys": keys})
+
+
+@admin_bp.route("/admin/pri-dismissal", methods=["POST"])
+@login_required
+@admin_required
+def pri_dismissal_add():
+    key = (request.get_json(force=True) or {}).get("key", "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    now  = datetime.utcnow().isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO pri_dismissals (item_key, dismissed_by, dismissed_at) "
+        "VALUES (%s, %s, %s) ON CONFLICT (item_key) DO NOTHING",
+        (key, current_user.id, now),
+    )
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
+@admin_bp.route("/admin/pri-dismissals/clear", methods=["POST"])
+@login_required
+@admin_required
+def pri_dismissals_clear():
+    # type: "owner_next" clears only ::on keys; "vacancy" clears non-::on; omit to clear all
+    kind = (request.get_json(force=True) or {}).get("type", "all")
+    conn = get_db(); cur = get_cursor(conn)
+    if kind == "owner_next":
+        cur.execute("DELETE FROM pri_dismissals WHERE item_key LIKE %s", ("%::on",))
+    elif kind == "vacancy":
+        cur.execute("DELETE FROM pri_dismissals WHERE item_key NOT LIKE %s", ("%::on",))
+    else:
+        cur.execute("DELETE FROM pri_dismissals")
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
 # ── Security overview page ────────────────────────────────────────
 
 _SECURITY_PIN = os.environ.get("SECURITY_PAGE_PIN", "")

@@ -61,47 +61,42 @@
 
 <script>
 let _days = 30;
+let _dismissedKeys = new Set();  // loaded from server on each page load
 
-/* ── Vacancy dismissal (persists in localStorage) ── */
-const DISMISS_KEY        = "pri_vacancy_dismissed";
-const OWNER_NEXT_DISMISS = "pri_owner_next_dismissed";
+function _vacancyKey(p)   { return `${p.property}::${p.checkout_date}`; }
+function _ownerNextKey(p) { return `${p.property}::${p.checkout_date}::on`; }
 
-function _dismissed()    {
-  try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); }
-  catch { return {}; }
-}
-function _ownerNextDismissed() {
-  try { return JSON.parse(localStorage.getItem(OWNER_NEXT_DISMISS) || "{}"); }
-  catch { return {}; }
-}
-
-function _vacancyKey(p)    { return `${p.property}::${p.checkout_date}`; }
-function _ownerNextKey(p)  { return `${p.property}::${p.checkout_date}::on`; }
-
-function _dismissCard(storageKey, key, cardEl, badgeId) {
-  const d = JSON.parse(localStorage.getItem(storageKey) || "{}");
-  d[key]  = Date.now();
-  localStorage.setItem(storageKey, JSON.stringify(d));
+async function _dismissCard(key, cardEl, badgeId) {
+  _dismissedKeys.add(key);
   cardEl.style.transition = "opacity 0.25s";
   cardEl.style.opacity    = "0";
   setTimeout(() => cardEl.remove(), 260);
   const badge = document.getElementById(badgeId);
-  if (badge) badge.textContent = Object.keys(JSON.parse(localStorage.getItem(storageKey) || "{}")).length + " dismissed";
+  if (badge) {
+    const count = [..._dismissedKeys].filter(k => badgeId.includes("ownerNext") ? k.endsWith("::on") : !k.endsWith("::on")).length;
+    badge.textContent = count + " dismissed";
+  }
+  await fetch("/admin/pri-dismissal", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ key }),
+  });
 }
 
-function dismissVacancy(key, cardEl) {
-  _dismissCard(DISMISS_KEY, key, cardEl, "vacancyDismissedBadge");
-}
-function dismissOwnerNext(key, cardEl) {
-  _dismissCard(OWNER_NEXT_DISMISS, key, cardEl, "ownerNextDismissedBadge");
-}
+function dismissVacancy(key, cardEl)   { _dismissCard(key, cardEl, "vacancyDismissedBadge"); }
+function dismissOwnerNext(key, cardEl) { _dismissCard(key, cardEl, "ownerNextDismissedBadge"); }
 
-function clearAllDismissed() {
-  localStorage.removeItem(DISMISS_KEY);
+async function clearAllDismissed() {
+  await fetch("/admin/pri-dismissals/clear", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ type: "vacancy" }),
+  });
   load();
 }
-function clearAllOwnerNextDismissed() {
-  localStorage.removeItem(OWNER_NEXT_DISMISS);
+async function clearAllOwnerNextDismissed() {
+  await fetch("/admin/pri-dismissals/clear", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ type: "owner_next" }),
+  });
   load();
 }
 
@@ -221,8 +216,12 @@ async function load() {
   document.getElementById("subtitle").textContent = "";
 
   try {
-    const res  = await fetch(`/briefing/pri-check?days=${_days}`);
-    const data = await res.json();
+    const [res, dismissRes] = await Promise.all([
+      fetch(`/briefing/pri-check?days=${_days}`),
+      fetch("/admin/pri-dismissals"),
+    ]);
+    const [data, dismissData] = await Promise.all([res.json(), dismissRes.json()]);
+    _dismissedKeys = new Set(dismissData.keys || []);
     document.getElementById("loading").classList.add("hidden");
 
     if (data.error) {
@@ -235,11 +234,9 @@ async function load() {
     const done      = data.already_tagged || [];
     const allVacant = data.no_booking     || [];
 
-    // Filter dismissed items
-    const dismissed    = _dismissed();
-    const onDismissed  = _ownerNextDismissed();
-    const needs        = allNeeds.filter(p => !onDismissed[_ownerNextKey(p)]);
-    const vacant       = allVacant.filter(p => !dismissed[_vacancyKey(p)]);
+    // Filter dismissed items (keys stored in DB, shared across all users)
+    const needs  = allNeeds.filter(p => !_dismissedKeys.has(_ownerNextKey(p)));
+    const vacant = allVacant.filter(p => !_dismissedKeys.has(_vacancyKey(p)));
     const hiddenCt     = allVacant.length - vacant.length;
     const hiddenOnCt   = allNeeds.length  - needs.length;
 
