@@ -103,12 +103,16 @@ function newChat() {
   chatStarted         = false;
   pendingImages       = [];
   renderImagePreviews();
-  // Reassign SESSION_ID so this becomes a fresh session
   window._currentSessionId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
   const box = document.getElementById("chatMessages");
   box.innerHTML = `<div id="emptyState" class="flex-1 flex items-center justify-center text-gray-300 text-sm italic select-none">
     Ask anything — this week's schedule, task status at a property, PRI gaps, policies…</div>`;
   document.getElementById("historyDropdown").classList.add("hidden");
+  document.getElementById("chatInput").focus();
+  // Brief flash so the user knows the reset happened
+  box.style.transition = "opacity 0.15s";
+  box.style.opacity = "0.4";
+  setTimeout(() => { box.style.opacity = "1"; }, 150);
 }
 
 /* ── History panel ── */
@@ -422,6 +426,7 @@ async function sendMessage() {
       ]}
     : { role: "user", content: text };
   conversationHistory.push(userHistoryEntry);
+  saveSession();
   appendThinking();
 
   let botBubble  = null;
