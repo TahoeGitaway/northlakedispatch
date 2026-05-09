@@ -575,6 +575,9 @@ const allRoutes = [
     route_date: {{ (r.route_date or '') | tojson }},
     assigned_to: {{ (r.assigned_to or '') | tojson }},
     created_by_name: {{ (r.created_by_name or '') | tojson }},
+    last_edited_by_name: {{ (r.last_edited_by_name or '') | tojson }},
+    updated_at: {{ (r.updated_at or '') | tojson }},
+    created_at: {{ (r.created_at or '') | tojson }},
     total_duration: {{ r.total_duration or 0 }},
     distance: {{ r.distance or 0 }},
     team_id: {{ r.team_id if r.team_id else 'null' }}
@@ -799,6 +802,11 @@ function selectDay(ds) {
     let metaHtml = route.created_by_name ? `<span class="text-gray-400">by ${route.created_by_name}</span>` : "";
     if (route.total_duration) metaHtml += `<span>⏱ ${(route.total_duration/3600).toFixed(1)} hrs</span>`;
     if (route.distance)       metaHtml += `<span>🛣 ${(route.distance/1609).toFixed(1)} mi</span>`;
+    if (route.updated_at && route.updated_at !== route.created_at) {
+      const ts = new Date(route.updated_at).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"});
+      const editor = route.last_edited_by_name || "unknown";
+      metaHtml += `<span class="text-amber-600">edited ${ts} by ${editor}</span>`;
+    }
     meta.innerHTML = metaHtml;
     info.appendChild(meta);
     div.appendChild(info);

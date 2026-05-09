@@ -5,6 +5,13 @@
 
 function makeStopId() { return "stop_" + (++_stopIdCounter); }
 
+function minutesToHHMM24(m) {
+  m = Math.max(0, Math.round(m));
+  const h = Math.floor(m / 60) % 24;
+  const mins = m % 60;
+  return `${String(h).padStart(2,'0')}:${String(mins).padStart(2,'0')}`;
+}
+
 function minutesToHHMM(m) {
   m = Math.max(0, Math.round(m));
   const totalMins = m % (24 * 60);

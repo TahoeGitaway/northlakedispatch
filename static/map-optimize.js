@@ -235,7 +235,7 @@ async function submitSaveRoute() {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId, startTime:minutesToHHMM24(startMinutes), startLocation, endLocation })
     });
     if (res.redirected || res.url.includes("/login")) {
       document.getElementById("sessionBanner").style.display = "block";
@@ -287,7 +287,7 @@ async function submitUpdateRoute() {
     const res = await fetch(`/routes/${currentRouteId}/update`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId })
+      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId, startTime:minutesToHHMM24(startMinutes), startLocation, endLocation })
     });
     if (res.redirected || res.url.includes("/login")) {
       document.getElementById("sessionBanner").style.display = "block"; return;
@@ -389,15 +389,15 @@ async function submitUpdateRoute() {
 
     isOptimized = true;
 
-    // Derive true depot start from the first stop's arrival minus its drive time
-    if (optimizedSchedule.length > 0 && optimizedSchedule[0].eta_minutes != null) {
+    // Use saved start_time if present; fall back to inferring from first stop's eta
+    if (data.start_time) {
+      startMinutes = hhmmToMinutes(data.start_time);
+    } else if (optimizedSchedule.length > 0 && optimizedSchedule[0].eta_minutes != null) {
       const firstStop = optimizedSchedule[0];
       const driveToFirstMin = (firstStop.drive_seconds != null) ? firstStop.drive_seconds / 60 : 0;
       startMinutes = Math.round(firstStop.eta_minutes - driveToFirstMin);
-    } else {
-      startMinutes = hhmmToMinutes(document.getElementById("startTime").value);
     }
-    document.getElementById("startTime").value = minutesToHHMM(startMinutes);
+    document.getElementById("startTime").value = minutesToHHMM24(startMinutes);
 
     // Build drive-time matrix directly from saved eta_minutes — no API call needed.
     // These values were computed from the Google Maps matrix when the route was first
@@ -451,6 +451,20 @@ async function submitUpdateRoute() {
       if (teamEl)      teamEl.value      = data.team_id;
       if (sidebarTeam) sidebarTeam.value = data.team_id;
     }
+
+    // Restore saved start/end locations — fall back to defaults if not saved
+    if (data.start_location) {
+      startLocation = data.start_location;
+    } else {
+      startLocation = { ...DEFAULT_START_LOCATION };
+    }
+    if (data.end_location) {
+      endLocation = data.end_location;
+    } else {
+      endLocation = { ...DEFAULT_END_LOCATION };
+    }
+    _updateStartEndPill();
+    _highlightCustomDepot();
 
     const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
     if (getLunchEnabled()) insertLunchAt(lunchMins);

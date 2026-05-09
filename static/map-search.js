@@ -379,6 +379,31 @@ function closeAddMore() {
 
 /* ── CUSTOM START LOCATION ── */
 /* ── POST-OPTIMIZE CHANGE START FORM (inline, no scrolling needed) ── */
+function _isDefaultLocation(loc) {
+  return (Math.abs(loc.lat - DEFAULT_START_LOCATION.lat) < 1e-4 &&
+          Math.abs(loc.lng - DEFAULT_START_LOCATION.lng) < 1e-4);
+}
+
+function _highlightCustomDepot() {
+  const pill    = document.querySelector("button[onclick='toggleCustomStart()']");
+  const label   = document.getElementById("customStartLabel");
+  const isCustomStart = !_isDefaultLocation(startLocation);
+  const isCustomEnd   = !_isDefaultLocation(endLocation);
+  const isCustom = isCustomStart || isCustomEnd;
+
+  if (isCustom) {
+    pill.classList.remove("bg-gray-50");
+    pill.classList.add("bg-amber-50", "border-amber-300", "ring-1", "ring-amber-300");
+    label.classList.add("text-amber-700");
+    label.classList.remove("text-gray-800");
+  } else {
+    pill.classList.add("bg-gray-50");
+    pill.classList.remove("bg-amber-50", "border-amber-300", "ring-1", "ring-amber-300");
+    label.classList.remove("text-amber-700");
+    label.classList.add("text-gray-800");
+  }
+}
+
 function _updateStartEndPill() {
   const startName = startLocation.name || "Custom Start";
   const endName   = endLocation.name   || "Custom End";
@@ -393,6 +418,7 @@ function _updateStartEndPill() {
     endLabel.textContent = "→ End: " + short(endName);
     endLabel.classList.remove("hidden");
   }
+  _highlightCustomDepot();
 }
 
 function toggleChangeStartForm() {

@@ -197,6 +197,9 @@ def init_db():
     )""")
 
     # Safe migrations
+    cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
+    cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")
+    cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS end_location_json TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS assigned_to TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS notes_public INTEGER DEFAULT 0")

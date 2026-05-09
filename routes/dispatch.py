@@ -237,15 +237,20 @@ def saved_routes():
 @dispatch_bp.route("/routes/save", methods=["POST"])
 @login_required
 def save_route():
-    data         = request.json or {}
-    name         = (data.get("name") or "").strip()
-    assigned_to  = (data.get("assigned_to") or "").strip()
-    route_date   = (data.get("route_date") or "").strip()
-    schedule     = data.get("schedule", [])
-    stats        = data.get("stats", {})
-    notes        = (data.get("notes") or "").strip() or None
-    notes_public = int(bool(data.get("notes_public", False)))
-    team_id      = data.get("team_id") or None
+    data              = request.json or {}
+    name              = (data.get("name") or "").strip()
+    assigned_to       = (data.get("assigned_to") or "").strip()
+    route_date        = (data.get("route_date") or "").strip()
+    start_time        = (data.get("startTime") or "").strip() or None
+    start_loc         = data.get("startLocation") or None
+    end_loc           = data.get("endLocation") or None
+    schedule          = data.get("schedule", [])
+    stats             = data.get("stats", {})
+    notes             = (data.get("notes") or "").strip() or None
+    notes_public      = int(bool(data.get("notes_public", False)))
+    team_id           = data.get("team_id") or None
+    start_loc_json    = json.dumps(start_loc) if start_loc else None
+    end_loc_json      = json.dumps(end_loc)   if end_loc   else None
 
     if not name:
         return jsonify({"error": "Route name is required."}), 400
@@ -266,12 +271,13 @@ def save_route():
 
     cur.execute(
         """INSERT INTO saved_routes
-           (name, assigned_to, route_date, stops_json, total_duration,
-            driving_duration, service_duration, distance,
+           (name, assigned_to, route_date, start_time, start_location_json, end_location_json,
+            stops_json, total_duration, driving_duration, service_duration, distance,
             notes, notes_public, team_id,
             created_by, last_edited_by, created_at, updated_at)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (name, assigned_to or None, route_date, json.dumps(schedule),
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (name, assigned_to or None, route_date, start_time, start_loc_json, end_loc_json,
+         json.dumps(schedule),
          stats.get("total_duration", 0), stats.get("driving_duration", 0),
          stats.get("service_duration", 0), stats.get("distance", 0),
          notes, notes_public, team_id,
@@ -287,14 +293,19 @@ def save_route():
 @login_required
 def update_route(route_id):
     data         = request.json or {}
-    name         = (data.get("name") or "").strip()
-    assigned_to  = (data.get("assigned_to") or "").strip()
-    route_date   = (data.get("route_date") or "").strip()
-    schedule     = data.get("schedule", [])
-    stats        = data.get("stats", {})
-    notes        = (data.get("notes") or "").strip() or None
-    notes_public = int(bool(data.get("notes_public", False)))
-    team_id      = data.get("team_id") or None
+    name           = (data.get("name") or "").strip()
+    assigned_to    = (data.get("assigned_to") or "").strip()
+    route_date     = (data.get("route_date") or "").strip()
+    start_time     = (data.get("startTime") or "").strip() or None
+    start_loc      = data.get("startLocation") or None
+    end_loc        = data.get("endLocation") or None
+    start_loc_json = json.dumps(start_loc) if start_loc else None
+    end_loc_json   = json.dumps(end_loc)   if end_loc   else None
+    schedule       = data.get("schedule", [])
+    stats          = data.get("stats", {})
+    notes          = (data.get("notes") or "").strip() or None
+    notes_public   = int(bool(data.get("notes_public", False)))
+    team_id        = data.get("team_id") or None
 
     if not schedule:
         return jsonify({"error": "No stops to save."}), 400
@@ -307,13 +318,15 @@ def update_route(route_id):
     if team_id is not None:
         cur.execute(
             """UPDATE saved_routes SET
-               name=%s, assigned_to=%s, route_date=%s,
+               name=%s, assigned_to=%s, route_date=%s, start_time=%s,
+               start_location_json=%s, end_location_json=%s,
                stops_json=%s, total_duration=%s, driving_duration=%s,
                service_duration=%s, distance=%s,
                notes=%s, notes_public=%s, team_id=%s,
                last_edited_by=%s, updated_at=%s
                WHERE id=%s""",
-            (name or None, assigned_to or None, route_date or None,
+            (name or None, assigned_to or None, route_date or None, start_time,
+             start_loc_json, end_loc_json,
              json.dumps(schedule),
              stats.get("total_duration", 0), stats.get("driving_duration", 0),
              stats.get("service_duration", 0), stats.get("distance", 0),
@@ -323,13 +336,15 @@ def update_route(route_id):
     else:
         cur.execute(
             """UPDATE saved_routes SET
-               name=%s, assigned_to=%s, route_date=%s,
+               name=%s, assigned_to=%s, route_date=%s, start_time=%s,
+               start_location_json=%s, end_location_json=%s,
                stops_json=%s, total_duration=%s, driving_duration=%s,
                service_duration=%s, distance=%s,
                notes=%s, notes_public=%s,
                last_edited_by=%s, updated_at=%s
                WHERE id=%s""",
-            (name or None, assigned_to or None, route_date or None,
+            (name or None, assigned_to or None, route_date or None, start_time,
+             start_loc_json, end_loc_json,
              json.dumps(schedule),
              stats.get("total_duration", 0), stats.get("driving_duration", 0),
              stats.get("service_duration", 0), stats.get("distance", 0),
@@ -356,11 +371,23 @@ def load_route(route_id):
         return redirect(url_for("dispatch.saved_routes"))
 
     schedule = json.loads(row["stops_json"])
+    try:
+        start_loc = json.loads(row["start_location_json"]) if row.get("start_location_json") else None
+    except Exception:
+        start_loc = None
+    try:
+        end_loc = json.loads(row["end_location_json"]) if row.get("end_location_json") else None
+    except Exception:
+        end_loc = None
+
     return jsonify({
         "id":               row["id"],
         "name":             row["name"],
         "assigned_to":      row["assigned_to"] or "",
         "route_date":       row["route_date"],
+        "start_time":       row.get("start_time") or "",
+        "start_location":   start_loc,
+        "end_location":     end_loc,
         "schedule":         schedule,
         "total_duration":   row["total_duration"],
         "driving_duration": row["driving_duration"],

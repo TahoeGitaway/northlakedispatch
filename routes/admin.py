@@ -884,204 +884,10 @@ def chatbot_chat():
             ]
             messages[-1] = {"role": "user", "content": image_blocks + content_blocks}
 
-    # Default to today if no dates selected so knowledge-only questions always work
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
-    if not dates:
-        dates = [today_str]
-
-    # Fetch Breezeway data for the full date range — cached 10 min per date range
-    capped_dates = sorted(dates)[:7]
-    min_date     = capped_dates[0]
-    max_date     = capped_dates[-1]
-    date_set     = set(capped_dates)
-
-    cache_key = f"{min_date}:{max_date}"
-    cached    = _bw_ctx_cache.get(cache_key)
-    if cached and _time.time() - cached[0] < _BW_CTX_TTL:
-        all_checkins, all_checkouts = cached[1], cached[2]
-    else:
-        try:
-            token = _get_breezeway_token()
-            if token:
-                all_checkins  = _fetch_bw_reservations(token, {
-                    "checkin_date_ge": min_date, "checkin_date_le": max_date,
-                })
-                all_checkouts = _fetch_bw_reservations(token, {
-                    "checkout_date_ge": min_date, "checkout_date_le": max_date,
-                })
-            else:
-                all_checkins = all_checkouts = []
-        except Exception:
-            all_checkins = all_checkouts = []
-        _bw_ctx_cache[cache_key] = (_time.time(), all_checkins, all_checkouts)
-
-    # Index by date
-    checkins_by_date  = {}
-    checkouts_by_date = {}
-    for r in all_checkins:
-        d = (r.get("checkin_date") or "")[:10]
-        if d in date_set:
-            checkins_by_date.setdefault(d, []).append(r)
-    for r in all_checkouts:
-        d = (r.get("checkout_date") or "")[:10]
-        if d in date_set:
-            checkouts_by_date.setdefault(d, []).append(r)
-
-    context_blocks  = []
-    context_summary = []
-
-    for date_str in capped_dates:
-        try:
-            routes    = _fetch_todays_routes(date_str)
-            checkins  = checkins_by_date.get(date_str, [])
-            checkouts = checkouts_by_date.get(date_str, [])
-
-            block = [f"\n=== {date_str} ==="]
-
-            if routes:
-                block.append(f"Saved routes ({len(routes)}):")
-                for r in routes:
-                    stops = [s for s in json.loads(r["stops_json"] or "[]")
-                             if not s.get("isLunch")]
-                    line  = f"  - \"{r['name']}\""
-                    if r["assigned_to"]:
-                        line += f" → {r['assigned_to']}"
-                    line += f": {len(stops)} stop{'s' if len(stops) != 1 else ''}"
-                    if (r.get("notes") or "").strip():
-                        line += f". Notes: {r['notes'].strip()}"
-                    block.append(line)
-            else:
-                block.append("No routes saved for this date.")
-
-            if checkins:
-                block.append(f"Arrivals ({len(checkins)}):")
-                for r in checkins:
-                    kind     = _classify_reservation(r)
-                    pid      = r.get("property_id")
-                    prop     = _get_property_name(pid)
-                    addr     = _get_property_address(pid)
-                    t        = r.get("checkin_time", "")
-                    checkout = (r.get("checkout_date") or "")[:10]
-                    checkin  = (r.get("checkin_date")  or "")[:10]
-                    tag_names = [_extract_str(tg) for tg in (r.get("tags") or [])]
-                    nights   = ""
-                    if checkin and checkout:
-                        try:
-                            from datetime import date as _date
-                            n = (_date.fromisoformat(checkout) - _date.fromisoformat(checkin)).days
-                            nights = f", {n} nights"
-                        except Exception:
-                            pass
-                    prop_str = f"{prop}" + (f" — {addr}" if addr else "")
-                    line = f"  - [{kind.upper()}] {prop_str} (checkin {checkin}, checkout {checkout}{nights})"
-                    if t:
-                        line += f" at {t[:5]}"
-                    if tag_names:
-                        line += f" [tags: {', '.join(tag_names)}]"
-                    block.append(line)
-            else:
-                block.append("No arrivals this date.")
-
-            if checkouts:
-                block.append(f"Departures ({len(checkouts)}):")
-                for r in checkouts:
-                    kind     = _classify_reservation(r)
-                    pid      = r.get("property_id")
-                    prop     = _get_property_name(pid)
-                    addr     = _get_property_address(pid)
-                    t        = r.get("checkout_time", "")
-                    checkout = (r.get("checkout_date") or "")[:10]
-                    checkin  = (r.get("checkin_date")  or "")[:10]
-                    tag_names = [_extract_str(tg) for tg in (r.get("tags") or [])]
-                    nights   = ""
-                    if checkin and checkout:
-                        try:
-                            from datetime import date as _date
-                            n = (_date.fromisoformat(checkout) - _date.fromisoformat(checkin)).days
-                            nights = f", {n} nights"
-                        except Exception:
-                            pass
-                    prop_str = f"{prop}" + (f" — {addr}" if addr else "")
-                    line = f"  - [{kind.upper()}] {prop_str} (checkin {checkin}, checkout {checkout}{nights})"
-                    if t:
-                        line += f" by {t[:5]}"
-                    if tag_names:
-                        line += f" [tags: {', '.join(tag_names)}]"
-                    block.append(line)
-            else:
-                block.append("No departures this date.")
-
-            context_blocks.append("\n".join(block))
-            context_summary.append({
-                "date":       date_str,
-                "routes":     len(routes),
-                "arrivals":   len(checkins),
-                "departures": len(checkouts),
-            })
-        except Exception as e:
-            context_blocks.append(f"\n=== {date_str} ===\nData load error: {e}")
-            context_summary.append({"date": date_str, "error": str(e)})
-
-    # Load active knowledge base entries
-    conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute("""
-        SELECT title, category, body FROM chatbot_knowledge
-        WHERE is_active = 1 ORDER BY category, title
-    """)
-    knowledge_rows = cur.fetchall()
-    cur.close(); conn.rollback(); conn.close()
-
-    if knowledge_rows:
-        kb_lines = ["=== COMPANY KNOWLEDGE BASE ===",
-                    "The following policies and SOPs are from Tahoe Getaways. "
-                    "Use them to answer questions accurately.\n"]
-        for row in knowledge_rows:
-            kb_lines.append(f"[{row['category']}: {row['title']}]")
-            kb_lines.append(row["body"].strip())
-            kb_lines.append("")
-        knowledge_section = "\n".join(kb_lines) + "\n\n"
-    else:
-        knowledge_section = ""
-
-    system_prompt = (
-        f"You are the TG Operations Bot for Tahoe Getaways, a vacation rental company in Lake Tahoe. "
-        f"You are talking to {current_user.name}. Today's date is {today_str}.\n\n"
-        "HOW TO ANSWER:\n"
-        "- For questions about specific properties, reservations, schedules, or company SOPs: "
-        "use the knowledge base and loaded Breezeway data below as your primary source.\n"
-        "- For general property management, hospitality, or operations questions: use your own knowledge "
-        "to give a helpful, practical answer — you don't need to restrict yourself to the provided context.\n"
-        "- If asked about a specific property or reservation that isn't in the loaded data, say so clearly "
-        "and suggest the staff member check Breezeway or Streamline directly.\n"
-        "- Be concise and direct. Use bullet points for multi-part answers.\n"
-        "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
-        "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
-        "Do not consider the action done until confirmed.\n"
-        "- TOOL ACCURACY: The fetch_task_data tool returns ALL tasks from Breezeway for the given property "
-        "and date range — it does NOT filter by task title or keyword. If tasks are missing, the cause is "
-        "an API error (e.g. property ID not found) — say exactly what the error was. "
-        "Tasks may have prefixes like 'Dept' or date stamps — report them exactly as returned. "
-        "Always report full task title, scheduled date/time, status, and assignee for every task. "
-        "If a field is blank in the data, say 'not listed' rather than claiming the API can't provide it. "
-        "Do NOT tell the user to 'flag it to whoever manages the integration' — they are the ones managing it. "
-        "If data is missing, describe exactly what was and wasn't returned so they can act on it.\n\n"
-        + knowledge_section
-        + "RESERVATION TYPES:\n"
-        "  GUEST = paying guest stay\n"
-        "  OWNER = owner stay or owner-booked reservation\n"
-        "  LEASE = paying guest stay of 30+ days (long-term rental — still a paying guest, not an owner)\n"
-        "  BLOCK = maintenance hold or owner block — no guests, property unavailable\n\n"
-        "POST RENTAL INSPECTION (PRI):\n"
-        "Required when a short-term GUEST (<30 days) checks out AND the next reservation at that "
-        "property is OWNER or BLOCK. Also required if no upcoming reservation within 60 days (vacancy PRI).\n"
-        "Flagged in Breezeway by adding 'owner next' tag to the incoming OWNER/BLOCK booking.\n"
-        "Groups: 🔴 Needs tagging · 🟢 Already tagged · 🟠 Vacancy PRI (no upcoming booking found).\n\n"
-        "LOADED DATA (routes + arrivals + departures for selected dates):\n"
-        + "\n".join(context_blocks)
-        + "\n\nYou also have a tool — fetch_reservation_data — to look up Breezeway data "
-        "for any other date range the user asks about (next week, this Friday, June, etc.)."
-    )
+    today_str    = datetime.utcnow().strftime("%Y-%m-%d")
+    user_name    = current_user.name
+    user_id      = current_user.id
+    session_id   = data.get("session_id", "")
 
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
@@ -1418,6 +1224,184 @@ def chatbot_chat():
         def sse(obj):
             return f"data: {json.dumps(obj)}\n\n"
 
+        # ── Load all context data here so errors surface as SSE events ──
+        yield sse({"type": "status", "text": "Loading schedule data…"})
+
+        capped_dates = sorted(dates if dates else [today_str])[:7]
+        min_date     = capped_dates[0]
+        max_date     = capped_dates[-1]
+        date_set     = set(capped_dates)
+
+        cache_key = f"{min_date}:{max_date}"
+        cached    = _bw_ctx_cache.get(cache_key)
+        if cached and _time.time() - cached[0] < _BW_CTX_TTL:
+            all_checkins, all_checkouts = cached[1], cached[2]
+        else:
+            try:
+                token = _get_breezeway_token()
+                if token:
+                    all_checkins  = _fetch_bw_reservations(token, {
+                        "checkin_date_ge": min_date, "checkin_date_le": max_date,
+                    })
+                    all_checkouts = _fetch_bw_reservations(token, {
+                        "checkout_date_ge": min_date, "checkout_date_le": max_date,
+                    })
+                else:
+                    all_checkins = all_checkouts = []
+            except Exception:
+                all_checkins = all_checkouts = []
+            _bw_ctx_cache[cache_key] = (_time.time(), all_checkins, all_checkouts)
+
+        checkins_by_date  = {}
+        checkouts_by_date = {}
+        for r in all_checkins:
+            d = (r.get("checkin_date") or "")[:10]
+            if d in date_set:
+                checkins_by_date.setdefault(d, []).append(r)
+        for r in all_checkouts:
+            d = (r.get("checkout_date") or "")[:10]
+            if d in date_set:
+                checkouts_by_date.setdefault(d, []).append(r)
+
+        context_blocks  = []
+        context_summary = []
+        for date_str in capped_dates:
+            try:
+                routes    = _fetch_todays_routes(date_str)
+                checkins  = checkins_by_date.get(date_str, [])
+                checkouts = checkouts_by_date.get(date_str, [])
+                block = [f"\n=== {date_str} ==="]
+                if routes:
+                    block.append(f"Saved routes ({len(routes)}):")
+                    for r in routes:
+                        stops = [s for s in json.loads(r["stops_json"] or "[]") if not s.get("isLunch")]
+                        line  = f"  - \"{r['name']}\""
+                        if r["assigned_to"]: line += f" → {r['assigned_to']}"
+                        line += f": {len(stops)} stop{'s' if len(stops) != 1 else ''}"
+                        if (r.get("notes") or "").strip(): line += f". Notes: {r['notes'].strip()}"
+                        block.append(line)
+                else:
+                    block.append("No routes saved for this date.")
+                if checkins:
+                    block.append(f"Arrivals ({len(checkins)}):")
+                    for r in checkins:
+                        kind      = _classify_reservation(r)
+                        pid       = r.get("property_id")
+                        prop      = _get_property_name(pid)
+                        addr      = _get_property_address(pid)
+                        t         = r.get("checkin_time", "")
+                        checkout  = (r.get("checkout_date") or "")[:10]
+                        checkin   = (r.get("checkin_date")  or "")[:10]
+                        tag_names = [_extract_str(tg) for tg in (r.get("tags") or [])]
+                        nights    = ""
+                        if checkin and checkout:
+                            try:
+                                from datetime import date as _date
+                                n = (_date.fromisoformat(checkout) - _date.fromisoformat(checkin)).days
+                                nights = f", {n} nights"
+                            except Exception:
+                                pass
+                        line = f"  - [{kind.upper()}] {prop}" + (f" — {addr}" if addr else "")
+                        line += f" (checkin {checkin}, checkout {checkout}{nights})"
+                        if t:         line += f" at {t[:5]}"
+                        if tag_names: line += f" [tags: {', '.join(tag_names)}]"
+                        block.append(line)
+                else:
+                    block.append("No arrivals this date.")
+                if checkouts:
+                    block.append(f"Departures ({len(checkouts)}):")
+                    for r in checkouts:
+                        kind      = _classify_reservation(r)
+                        pid       = r.get("property_id")
+                        prop      = _get_property_name(pid)
+                        addr      = _get_property_address(pid)
+                        t         = r.get("checkout_time", "")
+                        checkout  = (r.get("checkout_date") or "")[:10]
+                        checkin   = (r.get("checkin_date")  or "")[:10]
+                        tag_names = [_extract_str(tg) for tg in (r.get("tags") or [])]
+                        nights    = ""
+                        if checkin and checkout:
+                            try:
+                                from datetime import date as _date
+                                n = (_date.fromisoformat(checkout) - _date.fromisoformat(checkin)).days
+                                nights = f", {n} nights"
+                            except Exception:
+                                pass
+                        line = f"  - [{kind.upper()}] {prop}" + (f" — {addr}" if addr else "")
+                        line += f" (checkin {checkin}, checkout {checkout}{nights})"
+                        if t:         line += f" by {t[:5]}"
+                        if tag_names: line += f" [tags: {', '.join(tag_names)}]"
+                        block.append(line)
+                else:
+                    block.append("No departures this date.")
+                context_blocks.append("\n".join(block))
+                context_summary.append({"date": date_str, "routes": len(routes),
+                                        "arrivals": len(checkins), "departures": len(checkouts)})
+            except Exception as e:
+                context_blocks.append(f"\n=== {date_str} ===\nData load error: {e}")
+                context_summary.append({"date": date_str, "error": str(e)})
+
+        # Knowledge base
+        try:
+            conn = get_db(); cur = get_cursor(conn)
+            cur.execute("SELECT title, category, body FROM chatbot_knowledge WHERE is_active = 1 ORDER BY category, title")
+            knowledge_rows = cur.fetchall()
+            cur.close(); conn.rollback(); conn.close()
+        except Exception:
+            knowledge_rows = []
+
+        if knowledge_rows:
+            kb_lines = ["=== COMPANY KNOWLEDGE BASE ===",
+                        "The following policies and SOPs are from Tahoe Getaways. "
+                        "Use them to answer questions accurately.\n"]
+            for row in knowledge_rows:
+                kb_lines.append(f"[{row['category']}: {row['title']}]")
+                kb_lines.append(row["body"].strip())
+                kb_lines.append("")
+            knowledge_section = "\n".join(kb_lines) + "\n\n"
+        else:
+            knowledge_section = ""
+
+        system_prompt = (
+            f"You are the TG Operations Bot for Tahoe Getaways, a vacation rental company in Lake Tahoe. "
+            f"You are talking to {user_name}. Today's date is {today_str}.\n\n"
+            "HOW TO ANSWER:\n"
+            "- For questions about specific properties, reservations, schedules, or company SOPs: "
+            "use the knowledge base and loaded Breezeway data below as your primary source.\n"
+            "- For general property management, hospitality, or operations questions: use your own knowledge "
+            "to give a helpful, practical answer — you don't need to restrict yourself to the provided context.\n"
+            "- If asked about a specific property or reservation that isn't in the loaded data, say so clearly "
+            "and suggest the staff member check Breezeway or Streamline directly.\n"
+            "- Be concise and direct. Use bullet points for multi-part answers.\n"
+            "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
+            "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
+            "Do not consider the action done until confirmed.\n"
+            "- TOOL ACCURACY: The fetch_task_data tool returns ALL tasks from Breezeway for the given property "
+            "and date range — it does NOT filter by task title or keyword. If tasks are missing, the cause is "
+            "an API error (e.g. property ID not found) — say exactly what the error was. "
+            "Tasks may have prefixes like 'Dept' or date stamps — report them exactly as returned. "
+            "Always report full task title, scheduled date/time, status, and assignee for every task. "
+            "If a field is blank in the data, say 'not listed' rather than claiming the API can't provide it. "
+            "Do NOT tell the user to 'flag it to whoever manages the integration' — they are the ones managing it. "
+            "If data is missing, describe exactly what was and wasn't returned so they can act on it.\n\n"
+            + knowledge_section
+            + "RESERVATION TYPES:\n"
+            "  GUEST = paying guest stay\n"
+            "  OWNER = owner stay or owner-booked reservation\n"
+            "  LEASE = paying guest stay of 30+ days (long-term rental — still a paying guest, not an owner)\n"
+            "  BLOCK = maintenance hold or owner block — no guests, property unavailable\n\n"
+            "POST RENTAL INSPECTION (PRI):\n"
+            "Required when a short-term GUEST (<30 days) checks out AND the next reservation at that "
+            "property is OWNER or BLOCK. Also required if no upcoming reservation within 60 days (vacancy PRI).\n"
+            "Flagged in Breezeway by adding 'owner next' tag to the incoming OWNER/BLOCK booking.\n"
+            "Groups: 🔴 Needs tagging · 🟢 Already tagged · 🟠 Vacancy PRI (no upcoming booking found).\n\n"
+            "LOADED DATA (routes + arrivals + departures for selected dates):\n"
+            + "\n".join(context_blocks)
+            + "\n\nYou also have a tool — fetch_reservation_data — to look up Breezeway data "
+            "for any other date range the user asks about (next week, this Friday, June, etc.)."
+        )
+
+        # ── Claude streaming ──
         ai_client         = anthropic.Anthropic(api_key=key)
         trimmed           = list(messages[-30:]) if len(messages) > 30 else list(messages)
         history_additions = []
