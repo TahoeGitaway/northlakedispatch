@@ -153,13 +153,38 @@
   }
   .cancel-btn:hover { color: #6b7280; }
 
-  /* ── confirm action ── */
-  .confirm-btn {
-    background: linear-gradient(135deg, #10b981, #059669);
-    color: white; border: none; border-radius: 14px;
-    padding: 7px 18px; font-size: 0.82rem; font-weight: 700;
-    cursor: pointer; box-shadow: 0 3px 10px rgba(16,185,129,0.3);
+  /* ── confirm card ── */
+  .confirm-card {
+    align-self: flex-start;
+    max-width: 82%;
+    background: #f0fdf4;
+    border: 1.5px solid #6ee7b7;
+    border-radius: 20px;
+    padding: 14px 16px 12px;
   }
+  .confirm-card-label {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: #059669; margin-bottom: 6px;
+  }
+  .confirm-card-desc {
+    font-size: 0.82rem; color: #065f46; line-height: 1.5; margin-bottom: 12px;
+  }
+  .confirm-card-btns { display: flex; gap: 8px; }
+  .confirm-yes-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white; border: none; border-radius: 12px;
+    padding: 7px 20px; font-size: 0.82rem; font-weight: 700;
+    cursor: pointer; box-shadow: 0 3px 10px rgba(16,185,129,0.25);
+    transition: transform 0.1s;
+  }
+  .confirm-yes-btn:hover { transform: translateY(-1px); }
+  .confirm-yes-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+  .confirm-no-btn {
+    background: none; border: 1.5px solid #6ee7b7; color: #059669;
+    border-radius: 12px; padding: 7px 16px; font-size: 0.82rem;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .confirm-no-btn:hover { background: #dcfce7; }
 
   /* ── image previews ── */
   #myBotImagePreviews {
@@ -466,22 +491,30 @@ async function submitComment(taskGid, taskName) {
 function showConfirmAction(description) {
   clearEmpty();
   const box = document.getElementById("chatMessages");
-  const div = document.createElement("div");
-  div.style.cssText = "align-self:flex-start;";
-  div.innerHTML = `
-    <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
-      <button class="confirm-btn" onclick="confirmAction(this,${JSON.stringify(description)})">
-        ✓ confirm: ${description}
-      </button>
-      <button class="cancel-btn" onclick="this.closest('div').parentElement.remove()">nevermind</button>
+  const card = document.createElement("div");
+  card.className = "confirm-card";
+  const safeDesc = description.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  card.innerHTML = `
+    <div class="confirm-card-label">⚡ action required</div>
+    <div class="confirm-card-desc">${safeDesc}</div>
+    <div class="confirm-card-btns">
+      <button class="confirm-yes-btn">✓ Yes, do it</button>
+      <button class="confirm-no-btn">✕ Cancel</button>
     </div>`;
-  box.appendChild(div); scrollIfAtBottom();
+  card.querySelector(".confirm-yes-btn").addEventListener("click", () => confirmAction(card, description));
+  card.querySelector(".confirm-no-btn").addEventListener("click", () => card.remove());
+  box.appendChild(card);
+  scrollIfAtBottom();
 }
 
-async function confirmAction(btn, description) {
-  btn.disabled = true; btn.textContent = `done ✦`;
+async function confirmAction(card, description) {
+  const yesBtn = card.querySelector(".confirm-yes-btn");
+  const noBtn  = card.querySelector(".confirm-no-btn");
+  yesBtn.disabled = true; yesBtn.textContent = "running…";
+  noBtn.disabled  = true;
   conversationHistory.push({role:"user", content:`Confirmed: ${description}`});
   await sendMessage(`Confirmed: ${description}`);
+  card.remove();
 }
 
 function _setStreaming(on) {
