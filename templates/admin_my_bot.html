@@ -161,6 +161,41 @@
     cursor: pointer; box-shadow: 0 3px 10px rgba(16,185,129,0.3);
   }
 
+  /* ── image previews ── */
+  #myBotImagePreviews {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
+  }
+  .mybot-thumb-wrap { position: relative; }
+  .mybot-thumb-wrap img {
+    width: 56px; height: 56px; object-fit: cover;
+    border-radius: 14px; border: 2px solid rgba(168,85,247,0.25);
+  }
+  .mybot-thumb-wrap button {
+    position: absolute; top: -5px; right: -5px;
+    background: #7c3aed; color: white; border: none;
+    border-radius: 50%; width: 16px; height: 16px;
+    font-size: 9px; line-height: 16px; text-align: center;
+    cursor: pointer; padding: 0;
+  }
+
+  /* ── attach button ── */
+  #myBotAttachLabel {
+    cursor: pointer; color: #c4b5fd; transition: color 0.15s;
+    display: flex; align-items: center; padding: 0 2px;
+  }
+  #myBotAttachLabel:hover { color: #a855f7; }
+
+  /* ── bubble-user image row ── */
+  .bubble-user-imgs {
+    align-self: flex-end;
+    display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
+    max-width: 82%;
+  }
+  .bubble-user-imgs img {
+    width: 80px; height: 80px; object-fit: cover;
+    border-radius: 16px; border: 2px solid rgba(255,255,255,0.4);
+  }
+
   /* ── empty state ── */
   #emptyState {
     flex: 1; display: flex; flex-direction: column;
@@ -209,10 +244,20 @@
   </div>
 
   <div id="inputWrap">
+    <div id="myBotImagePreviews" class="hidden"></div>
     <textarea id="chatInput" rows="2"
-              placeholder="( ˘ ³˘)♥ type something…"
-              onkeydown="handleKey(event)"></textarea>
-    <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+              placeholder="( ˘ ³˘)♥ type something… or paste an image ♡"
+              onkeydown="handleKey(event)"
+              onpaste="handlePaste(event)"></textarea>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+      <label id="myBotAttachLabel" title="Attach image">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21 15 16 10 5 21"/>
+        </svg>
+        <input id="myBotImageUpload" type="file" accept="image/*" multiple class="hidden" onchange="handleImageSelect(event)">
+      </label>
       <button id="sendBtn" onclick="sendMessage()">send ✦</button>
     </div>
   </div>
@@ -226,7 +271,8 @@
 <script>
 let conversationHistory = [];
 let chatStarted = false;
-let _streaming = false;
+let _streaming  = false;
+let pendingImages = [];
 
 const kaomoji = [
   "(◕‿◕✿)", "(っ◔◡◔)っ", "✿(◠‿◠)✿", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
@@ -241,8 +287,53 @@ function handleKey(e) {
 
 function quickSend(text) { document.getElementById("chatInput").value = text; sendMessage(); }
 
+/* ── Image handling ── */
+function handleImageSelect(e) {
+  Array.from(e.target.files).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      pendingImages.push({ data: ev.target.result.split(",")[1], media_type: file.type || "image/jpeg", name: file.name });
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value = "";
+}
+
+function handlePaste(e) {
+  const imgs = Array.from(e.clipboardData?.items || []).filter(it => it.type.startsWith("image/"));
+  if (!imgs.length) return;
+  e.preventDefault();
+  imgs.forEach(item => {
+    const file = item.getAsFile();
+    const reader = new FileReader();
+    reader.onload = ev => {
+      pendingImages.push({ data: ev.target.result.split(",")[1], media_type: file.type || "image/png", name: "pasted.png" });
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderImagePreviews() {
+  const strip = document.getElementById("myBotImagePreviews");
+  strip.innerHTML = "";
+  if (!pendingImages.length) { strip.classList.add("hidden"); return; }
+  strip.classList.remove("hidden");
+  pendingImages.forEach((img, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "mybot-thumb-wrap";
+    wrap.innerHTML = `<img src="data:${img.media_type};base64,${img.data}">
+      <button onclick="removeImage(${i})">×</button>`;
+    strip.appendChild(wrap);
+  });
+}
+
+function removeImage(i) { pendingImages.splice(i, 1); renderImagePreviews(); }
+
 function newChat() {
-  conversationHistory = []; chatStarted = false;
+  conversationHistory = []; chatStarted = false; pendingImages = [];
+  renderImagePreviews();
   const box = document.getElementById("chatMessages");
   box.innerHTML = `
     <div id="emptyState">
@@ -270,9 +361,19 @@ function scrollIfAtBottom() {
   if (box.scrollHeight - box.scrollTop - box.clientHeight < 80) box.scrollTop = box.scrollHeight;
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, images) {
   clearEmpty();
   const box = document.getElementById("chatMessages");
+  if (role === "user" && images && images.length) {
+    const imgRow = document.createElement("div");
+    imgRow.className = "bubble-user-imgs";
+    images.forEach(img => {
+      const el = document.createElement("img");
+      el.src = `data:${img.media_type};base64,${img.data}`;
+      imgRow.appendChild(el);
+    });
+    box.appendChild(imgRow);
+  }
   const div = document.createElement("div");
   div.className = role === "user" ? "bubble-user" : "bubble-bot";
   div.textContent = text;
@@ -381,14 +482,25 @@ function _setStreaming(on) {
 
 async function sendMessage(overrideText) {
   if (_streaming) return;
-  const input = document.getElementById("chatInput");
-  const text  = overrideText !== undefined ? overrideText : input.value.trim();
-  if (!text) return;
-  if (overrideText === undefined) input.value = "";
+  const input  = document.getElementById("chatInput");
+  const text   = overrideText !== undefined ? overrideText : input.value.trim();
+  const images = overrideText !== undefined ? [] : pendingImages.slice();
+  if (!text && !images.length) return;
+  if (overrideText === undefined) {
+    input.value   = "";
+    pendingImages = [];
+    renderImagePreviews();
+  }
 
   // Always show the user's message in the chat
-  appendMessage("user", text);
-  conversationHistory.push({role:"user", content: text});
+  appendMessage("user", text, images);
+  const historyContent = images.length
+    ? [
+        ...images.map(img => ({type:"image", source:{type:"base64", media_type:img.media_type, data:img.data}})),
+        ...(text ? [{type:"text", text}] : []),
+      ]
+    : text;
+  conversationHistory.push({role:"user", content: historyContent});
   appendThinking();
   _setStreaming(true);
 
