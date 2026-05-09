@@ -243,6 +243,17 @@
     </div>
   </div>
 
+  <!-- API / network error bar -->
+  <div id="myBotErrBar" class="hidden" style="
+    margin-bottom:8px; padding:10px 14px; border-radius:16px;
+    background:#fef2f2; border:1px solid #fecaca;
+    font-size:0.78rem; color:#991b1b;
+    display:flex; align-items:flex-start; gap:10px;">
+    <span style="flex:1;" id="myBotErrText"></span>
+    <button onclick="document.getElementById('myBotErrBar').classList.add('hidden')"
+            style="flex-shrink:0;background:none;border:none;color:#991b1b;cursor:pointer;font-size:1rem;line-height:1;">×</button>
+  </div>
+
   <div id="inputWrap">
     <div id="myBotImagePreviews" class="hidden"></div>
     <textarea id="chatInput" rows="2"
@@ -480,6 +491,17 @@ function _setStreaming(on) {
   btn.textContent = on ? "…" : "send ✦";
 }
 
+function _showErr(msg) {
+  const bar  = document.getElementById("myBotErrBar");
+  const text = document.getElementById("myBotErrText");
+  text.textContent = msg;
+  bar.classList.remove("hidden");
+}
+
+function _hideErr() {
+  document.getElementById("myBotErrBar").classList.add("hidden");
+}
+
 async function sendMessage(overrideText) {
   if (_streaming) return;
   const input  = document.getElementById("chatInput");
@@ -503,6 +525,7 @@ async function sendMessage(overrideText) {
   conversationHistory.push({role:"user", content: historyContent});
   appendThinking();
   _setStreaming(true);
+  _hideErr();
 
   let botBubble = null, replyText = "";
 
@@ -522,8 +545,10 @@ async function sendMessage(overrideText) {
       body: JSON.stringify({messages: conversationHistory}),
     });
     if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { const j = await res.json(); detail = j.error || detail; } catch {}
       document.getElementById("thinking")?.remove();
-      appendMessage("assistant", `(╥_╥) server error: ${res.status}`);
+      _showErr(`(╥_╥) API call failed — ${detail}`);
       conversationHistory.pop(); _setStreaming(false); return;
     }
 
@@ -583,9 +608,8 @@ async function sendMessage(overrideText) {
           _setStreaming(false);
         } else if (evt.type === "error") {
           document.getElementById("thinking")?.remove();
-          const msg = `(╥_╥) ${evt.text}`;
-          if (!botBubble) appendMessage("assistant", msg);
-          else botBubble.textContent = (replyText ? replyText + "\n\n" : "") + msg;
+          _showErr(`(╥_╥) ${evt.text}`);
+          if (botBubble && replyText) botBubble.textContent = replyText; // keep partial reply visible
           conversationHistory.pop();
           _setStreaming(false);
         }
@@ -593,7 +617,7 @@ async function sendMessage(overrideText) {
     }
   } catch (e) {
     document.getElementById("thinking")?.remove();
-    if (!botBubble) appendMessage("assistant", `(╥_╥) network error: ${e.message}`);
+    _showErr(`(╥_╥) network error — ${e.message}. Check your connection and try again.`);
     conversationHistory.pop();
     _setStreaming(false);
   }
