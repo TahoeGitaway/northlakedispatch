@@ -1,73 +1,260 @@
 {% extends "base.html" %}
-{% block title %}My Bot — North Lake Dispatch{% endblock %}
+{% block title %}My Bot ✦ North Lake Dispatch{% endblock %}
 {% block content %}
-<div class="max-w-3xl mx-auto px-4 py-6">
-
-  <div class="mb-4 flex items-start justify-between gap-3">
-    <div>
-      <h2 class="text-2xl font-bold text-gray-800">My Bot
-        <span class="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-medium border border-violet-200 align-middle ml-2">Personal</span>
-      </h2>
-      <p class="text-sm text-gray-400 mt-0.5">Your Asana tasks, managed with AI. Only you can see this.</p>
-    </div>
-    <button onclick="newChat()"
-            class="text-sm text-gray-500 hover:text-violet-600 border border-gray-200 hover:border-violet-300
-                   rounded-lg px-3 py-1.5 transition-colors flex items-center gap-1.5 flex-shrink-0 mt-1">
-      + New Chat
-    </button>
-  </div>
-
-  <div id="chatMessages"
-       class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3 overflow-y-auto mb-3"
-       style="min-height: 480px; max-height: 640px;">
-    <div id="emptyState" class="flex-1 flex items-center justify-center text-gray-300 text-sm italic select-none">
-      Ask about your tasks, or say "what's on my plate this week?"
-    </div>
-  </div>
-
-  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-3">
-    <textarea id="chatInput" rows="2" placeholder="Type a message…"
-              onkeydown="handleKey(event)"
-              class="w-full text-sm text-gray-700 resize-none outline-none placeholder-gray-300"></textarea>
-    <div class="flex justify-end mt-2">
-      <button onclick="sendMessage()"
-              class="bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium
-                     px-4 py-1.5 rounded-lg transition-colors">
-        Send
-      </button>
-    </div>
-  </div>
-  <p class="text-xs text-gray-400 mt-1.5">Enter to send · Shift+Enter for new line</p>
-
-</div>
 
 <style>
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0.15; transform: scale(0.75); }
-  40%            { opacity: 1;    transform: scale(1);    }
-}
-.thinking-dot {
-  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-  background: #6b7280; animation: blink 1.4s infinite ease-in-out;
-}
-.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
-.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+  body { background: linear-gradient(135deg, #fdf4ff 0%, #f0f4ff 50%, #fdf4ff 100%); }
+
+  #myBotWrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 32px; }
+
+  /* ── header ── */
+  .mbot-title {
+    font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #a855f7, #6366f1, #ec4899);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+
+  /* ── chat box ── */
+  #chatMessages {
+    background: rgba(255,255,255,0.75);
+    backdrop-filter: blur(12px);
+    border-radius: 28px;
+    border: 1.5px solid rgba(168,85,247,0.15);
+    box-shadow: 0 8px 32px rgba(139,92,246,0.08), 0 1px 3px rgba(0,0,0,0.04);
+    padding: 20px;
+    min-height: 460px; max-height: 600px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  /* ── user bubble ── */
+  .bubble-user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #a855f7, #7c3aed);
+    color: white;
+    border-radius: 22px 22px 6px 22px;
+    padding: 10px 16px;
+    font-size: 0.875rem;
+    max-width: 82%;
+    white-space: pre-wrap;
+    box-shadow: 0 4px 14px rgba(139,92,246,0.3);
+  }
+
+  /* ── bot bubble ── */
+  .bubble-bot {
+    align-self: flex-start;
+    background: white;
+    color: #374151;
+    border-radius: 22px 22px 22px 6px;
+    padding: 10px 16px;
+    font-size: 0.875rem;
+    max-width: 82%;
+    white-space: pre-wrap;
+    border: 1.5px solid rgba(168,85,247,0.12);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  }
+
+  /* ── thinking ── */
+  #thinking {
+    align-self: flex-start;
+    background: white;
+    border: 1.5px solid rgba(168,85,247,0.15);
+    border-radius: 22px 22px 22px 6px;
+    padding: 12px 18px;
+    display: flex; align-items: center; gap: 5px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+
+  @keyframes kawaii-bounce {
+    0%, 80%, 100% { opacity: 0.2; transform: translateY(0) scale(0.7); }
+    40%            { opacity: 1;   transform: translateY(-5px) scale(1); }
+  }
+  .thinking-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block;
+    animation: kawaii-bounce 1.4s infinite ease-in-out;
+  }
+  .thinking-dot:nth-child(1) { background: #a855f7; }
+  .thinking-dot:nth-child(2) { background: #6366f1; animation-delay: 0.2s; }
+  .thinking-dot:nth-child(3) { background: #ec4899; animation-delay: 0.4s; }
+
+  /* ── input area ── */
+  #inputWrap {
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(12px);
+    border-radius: 24px;
+    border: 1.5px solid rgba(168,85,247,0.2);
+    box-shadow: 0 4px 20px rgba(139,92,246,0.08);
+    padding: 12px 16px 10px;
+  }
+  #chatInput {
+    width: 100%; resize: none; outline: none;
+    font-size: 0.9rem; color: #374151;
+    background: transparent;
+    font-family: inherit;
+  }
+  #chatInput::placeholder { color: #c4b5fd; }
+
+  #sendBtn {
+    background: linear-gradient(135deg, #a855f7, #6366f1);
+    color: white; border: none; border-radius: 18px;
+    padding: 8px 22px; font-size: 0.85rem; font-weight: 700;
+    cursor: pointer; transition: transform 0.1s, box-shadow 0.1s;
+    box-shadow: 0 4px 12px rgba(139,92,246,0.35);
+  }
+  #sendBtn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(139,92,246,0.45); }
+  #sendBtn:active { transform: translateY(0); }
+
+  #newChatBtn {
+    background: rgba(168,85,247,0.08);
+    border: 1.5px solid rgba(168,85,247,0.2);
+    color: #7c3aed; border-radius: 20px;
+    padding: 6px 18px; font-size: 0.8rem; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+  #newChatBtn:hover { background: rgba(168,85,247,0.15); }
+
+  /* ── status pill ── */
+  .status-pill {
+    align-self: flex-start;
+    background: linear-gradient(135deg, #fdf4ff, #ede9fe);
+    border: 1px solid rgba(168,85,247,0.2);
+    border-radius: 20px; padding: 5px 14px;
+    font-size: 0.75rem; color: #7c3aed;
+    display: flex; align-items: center; gap-6px;
+  }
+
+  /* ── comment editor ── */
+  .comment-editor {
+    align-self: flex-start; width: min(90%, 520px);
+    background: linear-gradient(135deg, #fdf4ff, #ede9fe);
+    border: 1.5px solid rgba(168,85,247,0.25);
+    border-radius: 20px; padding: 16px;
+  }
+  .comment-editor textarea {
+    width: 100%; border: 1.5px solid rgba(168,85,247,0.25);
+    border-radius: 14px; padding: 10px 12px;
+    font-size: 0.85rem; color: #374151;
+    background: white; resize: vertical; outline: none;
+    font-family: inherit;
+  }
+  .comment-editor textarea:focus { border-color: #a855f7; }
+  .post-btn {
+    background: linear-gradient(135deg, #a855f7, #6366f1);
+    color: white; border: none; border-radius: 14px;
+    padding: 7px 18px; font-size: 0.82rem; font-weight: 700;
+    cursor: pointer;
+  }
+  .cancel-btn {
+    background: none; border: none;
+    color: #9ca3af; font-size: 0.82rem; cursor: pointer; padding: 7px 10px;
+  }
+  .cancel-btn:hover { color: #6b7280; }
+
+  /* ── confirm action ── */
+  .confirm-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white; border: none; border-radius: 14px;
+    padding: 7px 18px; font-size: 0.82rem; font-weight: 700;
+    cursor: pointer; box-shadow: 0 3px 10px rgba(16,185,129,0.3);
+  }
+
+  /* ── empty state ── */
+  #emptyState {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px; text-align: center;
+  }
+  .empty-kaomoji { font-size: 2rem; }
+  .empty-text { color: #c4b5fd; font-size: 0.85rem; }
+  .empty-suggestions {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 6px;
+  }
+  .suggestion-chip {
+    background: rgba(168,85,247,0.07); border: 1px solid rgba(168,85,247,0.18);
+    color: #7c3aed; border-radius: 20px; padding: 5px 14px;
+    font-size: 0.75rem; cursor: pointer; transition: all 0.15s;
+  }
+  .suggestion-chip:hover { background: rgba(168,85,247,0.15); }
 </style>
+
+<div id="myBotWrap">
+
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:14px; gap:12px;">
+    <div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="mbot-title">My Bot</span>
+        <span style="font-size:1.1rem;">✦ ‧₊˚</span>
+      </div>
+      <p style="font-size:0.78rem; color:#a78bfa; margin-top:2px;">
+        (っ◔◡◔)っ &nbsp;your tasks, your schedule, just for you ♡
+      </p>
+    </div>
+    <button id="newChatBtn" onclick="newChat()">✦ new chat</button>
+  </div>
+
+  <div id="chatMessages">
+    <div id="emptyState">
+      <div class="empty-kaomoji">✿(◠‿◠)✿</div>
+      <div class="empty-text">konnichiwa~ ask me anything about your tasks ♡</div>
+      <div class="empty-suggestions">
+        <span class="suggestion-chip" onclick="quickSend('what\'s on my plate today?')">what\'s on my plate today? (◕‿◕)</span>
+        <span class="suggestion-chip" onclick="quickSend('show me my incomplete tasks')">incomplete tasks ✦</span>
+        <span class="suggestion-chip" onclick="quickSend('any lease arrivals this week?')">lease arrivals this week ˚✧</span>
+        <span class="suggestion-chip" onclick="quickSend('what tasks are due soon?')">due soon ⋆｡˚</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="inputWrap">
+    <textarea id="chatInput" rows="2"
+              placeholder="( ˘ ³˘)♥ type something…"
+              onkeydown="handleKey(event)"></textarea>
+    <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+      <button id="sendBtn" onclick="sendMessage()">send ✦</button>
+    </div>
+  </div>
+
+  <p style="font-size:0.7rem; color:#c4b5fd; text-align:center; margin-top:8px;">
+    enter to send · shift+enter for new line &nbsp;˚｡⋆｡˚
+  </p>
+
+</div>
 
 <script>
 let conversationHistory = [];
 let chatStarted = false;
 
+const kaomoji = [
+  "(◕‿◕✿)", "(っ◔◡◔)っ", "✿(◠‿◠)✿", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
+  "(◡ ω ◡)", "˚｡⋆｡˚✦", "٩(◕‿◕｡)۶", "(★ω★)", "♪(๑ᴖ◡ᴖ๑)♪",
+  "ヽ(✿ﾟ▽ﾟ)ノ", "(｡◕‿◕｡)", "✦ ‧₊˚"
+];
+function randKao() { return kaomoji[Math.floor(Math.random() * kaomoji.length)]; }
+
 function handleKey(e) {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 }
 
+function quickSend(text) { document.getElementById("chatInput").value = text; sendMessage(); }
+
 function newChat() {
   conversationHistory = []; chatStarted = false;
   const box = document.getElementById("chatMessages");
-  box.innerHTML = `<div id="emptyState" class="flex-1 flex items-center justify-center text-gray-300 text-sm italic select-none">Ask about your tasks, or say "what's on my plate this week?"</div>`;
-  box.style.transition = "opacity 0.15s"; box.style.opacity = "0.4";
-  setTimeout(() => { box.style.opacity = "1"; }, 150);
+  box.innerHTML = `
+    <div id="emptyState">
+      <div class="empty-kaomoji">${randKao()}</div>
+      <div class="empty-text">new chat~ ask me anything ♡</div>
+      <div class="empty-suggestions">
+        <span class="suggestion-chip" onclick="quickSend('what\\'s on my plate today?')">what's on my plate? (◕‿◕)</span>
+        <span class="suggestion-chip" onclick="quickSend('show me my incomplete tasks')">incomplete tasks ✦</span>
+        <span class="suggestion-chip" onclick="quickSend('any lease arrivals this week?')">lease arrivals ˚✧</span>
+      </div>
+    </div>`;
+  box.style.transition = "opacity 0.18s";
+  box.style.opacity = "0.3";
+  setTimeout(() => { box.style.opacity = "1"; }, 180);
   document.getElementById("chatInput").focus();
 }
 
@@ -78,16 +265,14 @@ function clearEmpty() {
 
 function scrollIfAtBottom() {
   const box = document.getElementById("chatMessages");
-  if (box.scrollHeight - box.scrollTop - box.clientHeight < 60) box.scrollTop = box.scrollHeight;
+  if (box.scrollHeight - box.scrollTop - box.clientHeight < 80) box.scrollTop = box.scrollHeight;
 }
 
 function appendMessage(role, text) {
   clearEmpty();
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
-  div.className = role === "user"
-    ? "self-end bg-violet-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap"
-    : "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
+  div.className = role === "user" ? "bubble-user" : "bubble-bot";
   div.textContent = text;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
@@ -99,7 +284,6 @@ function appendThinking() {
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
   div.id = "thinking";
-  div.className = "self-start bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1";
   div.innerHTML = `<span class="thinking-dot"></span><span class="thinking-dot"></span><span class="thinking-dot"></span>`;
   box.appendChild(div); box.scrollTop = box.scrollHeight;
 }
@@ -107,36 +291,35 @@ function appendThinking() {
 function showStatus(msg) {
   const thinking = document.getElementById("thinking");
   if (thinking) {
-    thinking.className = "self-start bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-2.5 flex items-center gap-2 text-sm text-gray-500";
-    thinking.innerHTML = `<svg class="animate-spin w-3.5 h-3.5 text-gray-400 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg><span>${msg}</span>`;
-    scrollIfAtBottom(); return;
+    thinking.innerHTML = `
+      <svg class="animate-spin" style="width:13px;height:13px;color:#a855f7;flex-shrink:0"
+           xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+      </svg>
+      <span style="font-size:0.78rem;color:#7c3aed;margin-left:7px;">${msg} ${randKao()}</span>`;
+    scrollIfAtBottom();
   }
 }
 
-/* ── Draft comment confirm UI ── */
+/* ── Draft comment editor ── */
 function showCommentEditor(taskGid, taskName, suggestedText) {
   clearEmpty();
   const box = document.getElementById("chatMessages");
-  const div = document.createElement("div");
-  div.className = "self-start w-full max-w-[90%]";
-  div.innerHTML = `
-    <div class="bg-violet-50 border border-violet-200 rounded-xl p-4 space-y-3">
-      <div class="text-xs font-semibold text-violet-700 uppercase tracking-wide">Draft comment for: ${taskName}</div>
-      <textarea id="commentDraft_${taskGid}" rows="4"
-                class="w-full text-sm text-gray-700 border border-violet-200 rounded-lg p-2.5 resize-y outline-none
-                       focus:border-violet-400 bg-white">${suggestedText}</textarea>
-      <div class="flex gap-2">
-        <button onclick="submitComment('${taskGid}', '${taskName.replace(/'/g,"&#39;")}')"
-                class="bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors">
-          Post Comment
-        </button>
-        <button onclick="this.closest('.self-start').remove()"
-                class="text-sm text-gray-400 hover:text-gray-600 px-3 py-1.5">
-          Cancel
-        </button>
-      </div>
+  const wrap = document.createElement("div");
+  wrap.className = "comment-editor";
+  wrap.innerHTML = `
+    <div style="font-size:0.72rem;font-weight:700;color:#7c3aed;margin-bottom:8px;letter-spacing:0.04em;">
+      (◡ ω ◡) draft comment for: <em>${taskName}</em>
+    </div>
+    <textarea id="commentDraft_${taskGid}" rows="4">${suggestedText}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+      <button class="post-btn" onclick="submitComment('${taskGid}','${taskName.replace(/'/g,"&#39;")}')">
+        post it ✦
+      </button>
+      <button class="cancel-btn" onclick="this.closest('.comment-editor').remove()">cancel</button>
     </div>`;
-  box.appendChild(div);
+  box.appendChild(wrap);
   scrollIfAtBottom();
 }
 
@@ -144,24 +327,24 @@ async function submitComment(taskGid, taskName) {
   const textarea = document.getElementById(`commentDraft_${taskGid}`);
   const text = (textarea?.value || "").trim();
   if (!text) return;
-  const btn = textarea.closest(".space-y-3").querySelector("button");
-  btn.disabled = true; btn.textContent = "Posting…";
+  const btn = textarea.closest(".comment-editor").querySelector(".post-btn");
+  btn.disabled = true; btn.textContent = "posting… ˚✧";
   try {
     const res  = await fetch("/admin/my-bot/post-comment", {
-      method: "POST", headers: {"Content-Type": "application/json"},
+      method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({task_gid: taskGid, task_name: taskName, text}),
     });
     const data = await res.json();
     if (data.ok) {
-      textarea.closest(".self-start").remove();
-      appendMessage("assistant", `✓ Comment posted to "${taskName}".`);
+      textarea.closest(".comment-editor").remove();
+      appendMessage("assistant", `✓ comment posted to "${taskName}" ${randKao()}`);
     } else {
-      btn.disabled = false; btn.textContent = "Post Comment";
-      appendMessage("assistant", `Error posting comment: ${data.error}`);
+      btn.disabled = false; btn.textContent = "post it ✦";
+      appendMessage("assistant", `(╥_╥) error: ${data.error}`);
     }
   } catch (e) {
-    btn.disabled = false; btn.textContent = "Post Comment";
-    appendMessage("assistant", `Network error: ${e.message}`);
+    btn.disabled = false; btn.textContent = "post it ✦";
+    appendMessage("assistant", `(╥_╥) network error: ${e.message}`);
   }
 }
 
@@ -170,24 +353,20 @@ function showConfirmAction(description) {
   clearEmpty();
   const box = document.getElementById("chatMessages");
   const div = document.createElement("div");
-  div.className = "self-start";
+  div.style.cssText = "align-self:flex-start;";
   div.innerHTML = `
-    <div class="flex gap-2 items-center mt-1">
-      <button onclick="confirmAction(this, ${JSON.stringify(description)})"
-              class="text-sm bg-violet-600 hover:bg-violet-700 text-white font-medium px-4 py-1.5 rounded-lg transition-colors">
-        Confirm: ${description}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+      <button class="confirm-btn" onclick="confirmAction(this,${JSON.stringify(description)})">
+        ✓ confirm: ${description}
       </button>
-      <button onclick="this.closest('.self-start').remove()"
-              class="text-sm text-gray-400 hover:text-gray-600 px-2 py-1.5">
-        Cancel
-      </button>
+      <button class="cancel-btn" onclick="this.closest('div').parentElement.remove()">nevermind</button>
     </div>`;
   box.appendChild(div); scrollIfAtBottom();
 }
 
 async function confirmAction(btn, description) {
-  btn.disabled = true; btn.textContent = "Done";
-  conversationHistory.push({role: "user", content: `Confirmed: ${description}`});
+  btn.disabled = true; btn.textContent = `done ✦`;
+  conversationHistory.push({role:"user", content:`Confirmed: ${description}`});
   await sendMessage(`Confirmed: ${description}`);
 }
 
@@ -198,28 +377,29 @@ async function sendMessage(overrideText) {
   if (overrideText === undefined) input.value = "";
 
   if (!overrideText) appendMessage("user", text);
-  conversationHistory.push({role: "user", content: text});
+  conversationHistory.push({role:"user", content: text});
   appendThinking();
 
-  let botBubble = null, replyText = "", statusLine = null;
+  let botBubble = null, replyText = "";
 
   function getOrCreateBubble() {
     if (botBubble) return botBubble;
     document.getElementById("thinking")?.remove();
     const box = document.getElementById("chatMessages");
     botBubble = document.createElement("div");
-    botBubble.className = "self-start bg-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap";
-    box.appendChild(botBubble); return botBubble;
+    botBubble.className = "bubble-bot";
+    box.appendChild(botBubble);
+    return botBubble;
   }
 
   try {
     const res = await fetch("/admin/my-bot/chat", {
-      method: "POST", headers: {"Content-Type": "application/json"},
+      method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({messages: conversationHistory}),
     });
     if (!res.ok) {
       document.getElementById("thinking")?.remove();
-      appendMessage("assistant", "Server error: " + res.status);
+      appendMessage("assistant", `(╥_╥) server error: ${res.status}`);
       conversationHistory.pop(); return;
     }
 
@@ -246,40 +426,36 @@ async function sendMessage(overrideText) {
           document.getElementById("thinking")?.remove();
           const bubble = getOrCreateBubble();
           replyText += evt.text;
-          // Check for DRAFT_COMMENT_READY before rendering
-          bubble.textContent = replyText.replace(/DRAFT_COMMENT_READY[\s\S]*/g, "").trimEnd();
+          bubble.textContent = replyText.replace(/DRAFT_COMMENT_READY[\s\S]*/g,"").trimEnd();
           scrollIfAtBottom();
         } else if (evt.type === "done") {
           document.getElementById("thinking")?.remove();
 
-          // Parse DRAFT_COMMENT_READY block out of reply
           const draftMatch = replyText.match(/DRAFT_COMMENT_READY\ntask_gid=([^\n]+)\ntask_name=([^\n]+)\nsuggested_text=([\s\S]+)/);
-          if (draftMatch) {
-            showCommentEditor(draftMatch[1].trim(), draftMatch[2].trim(), draftMatch[3].trim());
-          }
+          if (draftMatch) showCommentEditor(draftMatch[1].trim(), draftMatch[2].trim(), draftMatch[3].trim());
 
-          // Parse CONFIRM_ACTION
           const confirmMatch = replyText.match(/CONFIRM_ACTION:\s*(.+)/i);
           if (confirmMatch) showConfirmAction(confirmMatch[1].trim());
 
           const cleanReply = replyText
-            .replace(/DRAFT_COMMENT_READY[\s\S]*/g, "")
-            .replace(/CONFIRM_ACTION:\s*.+/gi, "")
+            .replace(/DRAFT_COMMENT_READY[\s\S]*/g,"")
+            .replace(/CONFIRM_ACTION:\s*.+/gi,"")
             .trimEnd();
-          conversationHistory.push({role: "assistant", content: cleanReply || replyText});
+          conversationHistory.push({role:"assistant", content: cleanReply || replyText});
           if (botBubble) botBubble.textContent = cleanReply;
           scrollIfAtBottom();
         } else if (evt.type === "error") {
           document.getElementById("thinking")?.remove();
-          if (!botBubble) appendMessage("assistant", "Error: " + evt.text);
-          else botBubble.textContent = (replyText ? replyText + "\n\n" : "") + "Error: " + evt.text;
+          const msg = `(╥_╥) ${evt.text}`;
+          if (!botBubble) appendMessage("assistant", msg);
+          else botBubble.textContent = (replyText ? replyText + "\n\n" : "") + msg;
           conversationHistory.pop();
         }
       }
     }
   } catch (e) {
     document.getElementById("thinking")?.remove();
-    if (!botBubble) appendMessage("assistant", "Network error: " + e.message);
+    if (!botBubble) appendMessage("assistant", `(╥_╥) network error: ${e.message}`);
     conversationHistory.pop();
   }
 }

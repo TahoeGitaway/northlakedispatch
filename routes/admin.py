@@ -843,6 +843,79 @@ def pri_check_page():
     return render_template("admin_pri_check.html")
 
 
+def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, status_filter=None):
+    """Module-level concurrent task fetcher — shared by both ops bot and my-bot."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from routes.briefing import (
+        _fetch_bw_endpoint, _get_breezeway_token, _get_property_name,
+        _get_live_property_cache, _get_live_ref_cache,
+    )
+    import difflib
+
+    def _fetch_one(name):
+        from datetime import date as _d, timedelta
+        try:
+            s = _d.fromisoformat(start_str); e = _d.fromisoformat(end_str)
+        except ValueError:
+            return "Error: invalid date format."
+        if (e - s).days > 30:
+            e = s + timedelta(days=30)
+        tok = _get_breezeway_token()
+        if not tok:
+            return "Breezeway not configured."
+        params = {"scheduled_date": f"{start_str},{e.isoformat()}"}
+        cache  = _get_live_property_cache()
+        nl     = name.lower().strip()
+        rev    = {v.lower(): k for k, v in cache.items() if isinstance(v, str)}
+        if nl in rev:
+            pid = rev[nl]
+        else:
+            qw = set(nl.split())
+            matches = (
+                [k for k in rev if k.startswith(nl)] or
+                [k for k in rev if nl in k] or
+                [k for k in rev if qw and qw.issubset(set(k.split()))] or
+                difflib.get_close_matches(nl, rev.keys(), n=3, cutoff=0.4)
+            )
+            pid = rev[matches[0]] if matches else None
+        if not pid:
+            return f"Property '{name}' not found."
+        ref_id = _get_live_ref_cache().get(pid)
+        for prop_key, prop_val in (
+            [("reference_property_id", ref_id)] if ref_id else []
+        ) + [("property_id", pid), ("home_id", pid)]:
+            t, _, sc = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", {**params, prop_key: prop_val})
+            if sc == 200:
+                if not t:
+                    return f"No tasks found at {name} between {start_str} and {e.isoformat()}."
+                lines = [f"Tasks at {name}:"]
+                for task in t:
+                    title = (task.get("title") or task.get("name") or "Untitled")
+                    if isinstance(title, dict):
+                        title = title.get("value") or title.get("name") or "Untitled"
+                    sdate = task.get("scheduled_date") or ""
+                    stime = task.get("scheduled_time") or ""
+                    assignees = task.get("assignments") or []
+                    names_list = [
+                        (a.get("name") or f"{a.get('first_name','')} {a.get('last_name','')}").strip()
+                        for a in assignees if isinstance(a, dict)
+                    ]
+                    lines.append(f"  • {title} | {sdate} {stime} | assigned: {', '.join(names_list) or 'unassigned'}")
+                return "\n".join(lines)
+        return f"Could not retrieve tasks for '{name}'."
+
+    if not property_names:
+        return "No property names provided."
+    if len(property_names) == 1:
+        return _fetch_one(property_names[0])
+    results = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_one, n): n for n in property_names}
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return "\n\n".join(f"=== {n} ===\n{results.get(n,'No data.')}" for n in property_names)
+
+
 @admin_bp.route("/admin/chatbot/chat", methods=["POST"])
 @login_required
 @admin_required
@@ -2026,31 +2099,72 @@ def my_bot_chat():
                 "required": ["task_gid", "task_name", "suggested_text"],
             },
         },
+        {
+            "name": "fetch_breezeway_tasks",
+            "description": (
+                "Fetch Breezeway task data (cleaning jobs, inspections, maintenance) "
+                "for one or more properties over a date range. "
+                "Use for questions like 'what tasks are scheduled at X this week' or "
+                "'what cleaning jobs do I have coming up'. "
+                "Pass a list of property names to fetch multiple at once (runs in parallel). "
+                "Maximum date range 30 days."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start_date":     {"type": "string", "description": "Start date YYYY-MM-DD"},
+                    "end_date":       {"type": "string", "description": "End date YYYY-MM-DD"},
+                    "property_names": {"type": "array", "items": {"type": "string"},
+                                       "description": "One or more property names"},
+                    "status":         {"type": "string", "description": "Optional: housekeeping, maintenance, inspection, complete, pending"},
+                },
+                "required": ["start_date", "end_date", "property_names"],
+            },
+        },
     ]
 
     def _exec_get_tasks(filter_val="incomplete", project_filter=None):
         ws = _get_asana_workspace()
         if not ws:
             return "Could not retrieve Asana workspace."
+
+        # Get the user's personal task list (more reliable than assignee search)
+        utl_data, err = _asana_request("GET", "/users/me/user_task_list", {"workspace": ws})
+        if err or not utl_data:
+            return f"Could not get user task list: {err or 'no data'}"
+        utl_gid = utl_data.get("gid") if isinstance(utl_data, dict) else None
+        if not utl_gid:
+            return "Could not find user task list GID."
+
         params = {
-            "assignee":   "me",
-            "workspace":  ws,
-            "opt_fields": "name,gid,due_on,completed,notes,projects.name,permalink_url",
+            "opt_fields": "name,gid,due_on,completed,notes,projects.name",
+            "limit":      100,
         }
-        if filter_val == "complete":
-            params["completed"] = "true"
-        elif filter_val == "incomplete":
-            params["completed"] = "false"
-        data, err = _asana_request("GET", "/tasks", params)
+        # completed_since=now returns only incomplete tasks (Asana's standard filter)
+        if filter_val == "incomplete":
+            params["completed_since"] = "now"
+
+        data, err = _asana_request("GET", f"/user_task_lists/{utl_gid}/tasks", params)
         if err:
             return f"Error fetching tasks: {err}"
         tasks = data if isinstance(data, list) else []
+
+        # For 'complete' filter, fetch all and filter client-side
+        if filter_val == "complete":
+            tasks = [t for t in tasks if t.get("completed")]
+        elif filter_val == "incomplete":
+            tasks = [t for t in tasks if not t.get("completed")]
+
         if project_filter:
             pf = project_filter.lower()
             tasks = [t for t in tasks if any(
                 pf in (p.get("name") or "").lower()
                 for p in (t.get("projects") or [])
             )]
+
+        # Sort by due date (soonest first, no-due-date last)
+        tasks.sort(key=lambda t: (t.get("due_on") or "9999-99-99"))
+
         if not tasks:
             return "No tasks found."
         lines = [f"Found {len(tasks)} task(s):"]
@@ -2086,14 +2200,20 @@ def my_bot_chat():
         trimmed    = list(messages[-20:]) if len(messages) > 20 else list(messages)
         history_additions = []
         reply_text = ""
+        from datetime import date as _today_cls
+        today_str = _today_cls.today().isoformat()
         system_prompt = (
-            "You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
-            "You have access to their Asana task list.\n"
-            "- Use get_my_asana_tasks to look up tasks before making changes.\n"
-            "- Use update_asana_task to mark tasks complete or update details. "
-            "Before calling update_asana_task, always confirm with the user using 'CONFIRM_ACTION: <description>'.\n"
-            "- Use draft_asana_comment to suggest a comment — the user will edit it before it posts.\n"
-            "- Be concise and direct."
+            f"You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
+            f"Today is {today_str}.\n"
+            "You have two data sources:\n"
+            "1. ASANA — the user's personal task list. Use get_my_asana_tasks to look up tasks, "
+            "update_asana_task to update them (always CONFIRM_ACTION first), "
+            "and draft_asana_comment to suggest a comment the user edits before posting.\n"
+            "2. BREEZEWAY — property operations tasks (cleaning, inspections, maintenance). "
+            "Use fetch_breezeway_tasks with property names and a date range.\n"
+            "- Be concise and direct. Use bullet points.\n"
+            "- Never guess task GIDs — always call get_my_asana_tasks first to find them.\n"
+            "- For write actions (update, comment), always show CONFIRM_ACTION: <description> first."
         )
 
         try:
@@ -2139,12 +2259,21 @@ def my_bot_chat():
                                 block.input.get("notes"),
                             )
                         elif block.name == "draft_asana_comment":
-                            # Return draft to frontend — user edits before posting
                             result = (
                                 f"DRAFT_COMMENT_READY\n"
                                 f"task_gid={block.input.get('task_gid','')}\n"
                                 f"task_name={block.input.get('task_name','')}\n"
                                 f"suggested_text={block.input.get('suggested_text','')}"
+                            )
+                        elif block.name == "fetch_breezeway_tasks":
+                            names = block.input.get("property_names") or []
+                            n = len(names)
+                            yield sse({"type": "status", "text": f"Fetching Breezeway tasks for {n} propert{'y' if n==1 else 'ies'}…"})
+                            result = _execute_fetch_tasks_multi_standalone(
+                                block.input.get("start_date", ""),
+                                block.input.get("end_date", ""),
+                                names,
+                                block.input.get("status"),
                             )
                         else:
                             result = f"Unknown tool: {block.name}"
