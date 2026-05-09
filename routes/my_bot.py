@@ -244,14 +244,15 @@ def my_bot_chat():
         {
             "name": "update_asana_task",
             "description": (
-                "Update an Asana task — mark complete/incomplete, change due date, or update notes. "
+                "Update an Asana task — rename it, mark complete/incomplete, change due date, or update notes. "
                 "Requires task_gid from get_my_asana_tasks."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "task_gid":  {"type": "string", "description": "Asana task GID"},
-                    "task_name": {"type": "string", "description": "Task name for context"},
+                    "task_name": {"type": "string", "description": "Current task name for context"},
+                    "new_name":  {"type": "string", "description": "New title/name for the task"},
                     "completed": {"type": "boolean", "description": "Set completion status"},
                     "due_on":    {"type": "string",  "description": "New due date YYYY-MM-DD"},
                     "notes":     {"type": "string",  "description": "Replace task notes/description"},
@@ -354,8 +355,10 @@ def my_bot_chat():
                 lines.append(f'  Notes: {t["notes"]}')
         return "\n".join(lines)
 
-    def _exec_update_task(task_gid, task_name, completed=None, due_on=None, notes=None):
+    def _exec_update_task(task_gid, task_name, new_name=None, completed=None, due_on=None, notes=None):
         payload = {"data": {}}
+        if new_name:
+            payload["data"]["name"] = new_name
         if completed is not None:
             payload["data"]["completed"] = completed
         if due_on:
@@ -367,7 +370,8 @@ def my_bot_chat():
         _, err = _asana_request("PUT", f"/tasks/{task_gid}", payload)
         if err:
             return f"Error updating task: {err}"
-        return f"Task '{task_name}' updated successfully."
+        label = new_name or task_name
+        return f"Task '{label}' updated successfully."
 
     def generate():
         def sse(obj):
@@ -431,6 +435,7 @@ def my_bot_chat():
                             result = _exec_update_task(
                                 block.input.get("task_gid", ""),
                                 block.input.get("task_name", ""),
+                                block.input.get("new_name"),
                                 block.input.get("completed"),
                                 block.input.get("due_on"),
                                 block.input.get("notes"),

@@ -15,9 +15,10 @@
   }
 
   /* ── chat box ── */
+  /* NOTE: backdrop-filter + overflow-y:auto causes child elements to disappear
+     in Chrome/Firefox — use a solid background instead. */
   #chatMessages {
-    background: rgba(255,255,255,0.75);
-    backdrop-filter: blur(12px);
+    background: #faf5ff;
     border-radius: 28px;
     border: 1.5px solid rgba(168,85,247,0.15);
     box-shadow: 0 8px 32px rgba(139,92,246,0.08), 0 1px 3px rgba(0,0,0,0.04);
@@ -225,6 +226,7 @@
 <script>
 let conversationHistory = [];
 let chatStarted = false;
+let _streaming = false;
 
 const kaomoji = [
   "(◕‿◕✿)", "(っ◔◡◔)っ", "✿(◠‿◠)✿", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
@@ -370,15 +372,25 @@ async function confirmAction(btn, description) {
   await sendMessage(`Confirmed: ${description}`);
 }
 
+function _setStreaming(on) {
+  _streaming = on;
+  const btn = document.getElementById("sendBtn");
+  btn.disabled = on;
+  btn.textContent = on ? "…" : "send ✦";
+}
+
 async function sendMessage(overrideText) {
+  if (_streaming) return;
   const input = document.getElementById("chatInput");
   const text  = overrideText !== undefined ? overrideText : input.value.trim();
   if (!text) return;
   if (overrideText === undefined) input.value = "";
 
-  if (!overrideText) appendMessage("user", text);
+  // Always show the user's message in the chat
+  appendMessage("user", text);
   conversationHistory.push({role:"user", content: text});
   appendThinking();
+  _setStreaming(true);
 
   let botBubble = null, replyText = "";
 
@@ -400,7 +412,7 @@ async function sendMessage(overrideText) {
     if (!res.ok) {
       document.getElementById("thinking")?.remove();
       appendMessage("assistant", `(╥_╥) server error: ${res.status}`);
-      conversationHistory.pop(); return;
+      conversationHistory.pop(); _setStreaming(false); return;
     }
 
     const reader  = res.body.getReader();
@@ -431,6 +443,11 @@ async function sendMessage(overrideText) {
         } else if (evt.type === "done") {
           document.getElementById("thinking")?.remove();
 
+          // Save tool_use/tool_result pairs so history stays in sync
+          for (const msg of (evt.history_additions || [])) {
+            conversationHistory.push(msg);
+          }
+
           const draftMatch = replyText.match(/DRAFT_COMMENT_READY\ntask_gid=([^\n]+)\ntask_name=([^\n]+)\nsuggested_text=([\s\S]+)/);
           if (draftMatch) showCommentEditor(draftMatch[1].trim(), draftMatch[2].trim(), draftMatch[3].trim());
 
@@ -442,14 +459,23 @@ async function sendMessage(overrideText) {
             .replace(/CONFIRM_ACTION:\s*.+/gi,"")
             .trimEnd();
           conversationHistory.push({role:"assistant", content: cleanReply || replyText});
-          if (botBubble) botBubble.textContent = cleanReply;
+          if (botBubble) {
+            if (cleanReply) {
+              botBubble.textContent = cleanReply;
+            } else {
+              botBubble.remove(); // nothing to show; UI element (confirm/draft) handles it
+              botBubble = null;
+            }
+          }
           scrollIfAtBottom();
+          _setStreaming(false);
         } else if (evt.type === "error") {
           document.getElementById("thinking")?.remove();
           const msg = `(╥_╥) ${evt.text}`;
           if (!botBubble) appendMessage("assistant", msg);
           else botBubble.textContent = (replyText ? replyText + "\n\n" : "") + msg;
           conversationHistory.pop();
+          _setStreaming(false);
         }
       }
     }
@@ -457,6 +483,7 @@ async function sendMessage(overrideText) {
     document.getElementById("thinking")?.remove();
     if (!botBubble) appendMessage("assistant", `(╥_╥) network error: ${e.message}`);
     conversationHistory.pop();
+    _setStreaming(false);
   }
 }
 </script>
