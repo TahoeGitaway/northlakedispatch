@@ -1170,6 +1170,24 @@ def api_pri_alert_dismiss():
     return jsonify({"ok": True})
 
 
+@briefing_bp.route("/api/cron/pri-check", methods=["POST"])
+def cron_pri_check():
+    """Unauthenticated cron endpoint — secured by Bearer token in CRON_SECRET env var.
+    Called by Railway Cron Service at 7:30 AM PT so the check is reliable across deploys.
+    """
+    secret = os.environ.get("CRON_SECRET", "").strip()
+    if not secret:
+        return jsonify({"error": "CRON_SECRET not configured on server"}), 500
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {secret}":
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        refresh_pri_banner_alerts(alert_days=3)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @briefing_bp.route("/briefing/property-status")
 @login_required
 def property_status():

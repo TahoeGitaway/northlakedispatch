@@ -289,6 +289,22 @@ def my_bot_chat():
             },
         },
         {
+            "name": "get_task_comments",
+            "description": (
+                "Fetch all comments on a specific Asana task so you can summarize or quote them. "
+                "Use this whenever the user asks what people said, what comments exist, "
+                "or wants a summary of activity on a task."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_gid":  {"type": "string", "description": "Asana task GID"},
+                    "task_name": {"type": "string", "description": "Task name for context"},
+                },
+                "required": ["task_gid", "task_name"],
+            },
+        },
+        {
             "name": "draft_asana_comment",
             "description": (
                 "Draft a comment to post on an Asana task. "
@@ -561,6 +577,25 @@ def my_bot_chat():
         label = new_name or task_name
         return f"Task '{label}' updated successfully."
 
+    def _exec_get_comments(task_gid, task_name):
+        stories, err = _asana_request("GET", f"/tasks/{task_gid}/stories",
+                                      {"opt_fields": "type,text,created_by.name,created_at"})
+        if err:
+            return f"Error fetching comments for '{task_name}': {err}"
+        if not stories:
+            return f"No comments found on '{task_name}'."
+        comments = [s for s in (stories if isinstance(stories, list) else [])
+                    if s.get("type") == "comment"]
+        if not comments:
+            return f"No comments on '{task_name}' (task has activity but no written comments)."
+        lines = [f"Comments on '{task_name}' ({len(comments)} total):"]
+        for c in comments:
+            author = (c.get("created_by") or {}).get("name", "Unknown")
+            when   = (c.get("created_at") or "")[:10]
+            text   = (c.get("text") or "").strip()
+            lines.append(f"\n[{author} — {when}]\n{text}")
+        return "\n".join(lines)
+
     def _trunc_for_history(content, limit=800):
         if not isinstance(content, str) or len(content) <= limit:
             return content
@@ -583,13 +618,17 @@ def my_bot_chat():
             f"You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
             f"Today is {today_str}.\n\n"
             "TOOLS:\n"
-            "1. ASANA — get_my_asana_tasks (fetch), update_asana_task (single update), "
+            "1. ASANA — get_my_asana_tasks (fetch tasks), get_task_comments (fetch + summarize comments on a task), "
+            "update_asana_task (single update), "
             "batch_update_asana_tasks (multiple updates in parallel — use this for 2+ tasks), "
             "delete_asana_task (delete one task), "
             "batch_delete_asana_tasks (delete multiple tasks in parallel — use for 2+), "
             "draft_asana_comment (suggest a comment for the user to edit and post).\n"
             "2. BREEZEWAY — fetch_breezeway_tasks (property cleaning/inspection/maintenance tasks).\n\n"
             "RULES — follow these exactly:\n"
+            "- DEFAULT SOURCE IS ASANA. When the user asks about tasks, always use Asana tools. "
+            "Only use fetch_breezeway_tasks if the user explicitly says 'Breezeway' or asks about "
+            "cleaning jobs, inspections, or maintenance schedules by property.\n"
             "- NEVER say you are doing something without immediately calling the tool. "
             "Saying 'I'll fire all updates now' and then not calling a tool is not allowed. "
             "Call the tool first, then describe what happened based on the results.\n"
@@ -631,7 +670,13 @@ def my_bot_chat():
                     for block in final_msg.content:
                         if block.type != "tool_use":
                             continue
-                        if block.name == "get_my_asana_tasks":
+                        if block.name == "get_task_comments":
+                            yield sse({"type": "status", "text": f"Fetching comments on '{block.input.get('task_name', 'task')}'…"})
+                            result = _exec_get_comments(
+                                block.input.get("task_gid", ""),
+                                block.input.get("task_name", ""),
+                            )
+                        elif block.name == "get_my_asana_tasks":
                             yield sse({"type": "status", "text": "Fetching your Asana tasks…"})
                             result = _exec_get_tasks(
                                 block.input.get("filter", "incomplete"),

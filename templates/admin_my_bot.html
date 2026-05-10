@@ -269,13 +269,13 @@
   </div>
 
   <!-- API / network error bar -->
-  <div id="myBotErrBar" class="hidden" style="
-    margin-bottom:8px; padding:10px 14px; border-radius:16px;
+  <div id="myBotErrBar" style="
+    display:none; margin-bottom:8px; padding:10px 14px; border-radius:16px;
     background:#fef2f2; border:1px solid #fecaca;
     font-size:0.78rem; color:#991b1b;
-    display:flex; align-items:flex-start; gap:10px;">
+    align-items:flex-start; gap:10px;">
     <span style="flex:1;" id="myBotErrText"></span>
-    <button onclick="document.getElementById('myBotErrBar').classList.add('hidden')"
+    <button onclick="document.getElementById('myBotErrBar').style.display='none'"
             style="flex-shrink:0;background:none;border:none;color:#991b1b;cursor:pointer;font-size:1rem;line-height:1;">×</button>
   </div>
 
@@ -294,6 +294,11 @@
         </svg>
         <input id="myBotImageUpload" type="file" accept="image/*" multiple class="hidden" onchange="handleImageSelect(event)">
       </label>
+      <button id="stopBtn" onclick="stopStreaming()" style="display:none;
+        background:#fdf4ff; color:#7c3aed; border:1px solid #ddd6fe;
+        border-radius:999px; padding:6px 18px; font-size:0.8rem; font-weight:600; cursor:pointer;">
+        ✕ stop
+      </button>
       <button id="sendBtn" onclick="sendMessage()">send ✦</button>
     </div>
   </div>
@@ -309,6 +314,7 @@ let conversationHistory = [];
 let chatStarted = false;
 let _streaming  = false;
 let pendingImages = [];
+let _abortController = null;
 
 const kaomoji = [
   "(◕‿◕✿)", "(っ◔◡◔)っ", "✿(◠‿◠)✿", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
@@ -519,20 +525,25 @@ async function confirmAction(card, description) {
 
 function _setStreaming(on) {
   _streaming = on;
-  const btn = document.getElementById("sendBtn");
-  btn.disabled = on;
-  btn.textContent = on ? "…" : "send ✦";
+  const sendBtn = document.getElementById("sendBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  sendBtn.disabled = on;
+  sendBtn.style.display = on ? "none" : "";
+  stopBtn.style.display = on ? "" : "none";
+  if (!on) _abortController = null;
+}
+
+function stopStreaming() {
+  if (_abortController) _abortController.abort();
 }
 
 function _showErr(msg) {
-  const bar  = document.getElementById("myBotErrBar");
-  const text = document.getElementById("myBotErrText");
-  text.textContent = msg;
-  bar.classList.remove("hidden");
+  document.getElementById("myBotErrText").textContent = msg;
+  document.getElementById("myBotErrBar").style.display = "flex";
 }
 
 function _hideErr() {
-  document.getElementById("myBotErrBar").classList.add("hidden");
+  document.getElementById("myBotErrBar").style.display = "none";
 }
 
 async function sendMessage(overrideText) {
@@ -573,9 +584,11 @@ async function sendMessage(overrideText) {
   }
 
   try {
+    _abortController = new AbortController();
     const res = await fetch("/admin/my-bot/chat", {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({messages: conversationHistory}),
+      signal: _abortController.signal,
     });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
@@ -650,8 +663,24 @@ async function sendMessage(overrideText) {
     }
   } catch (e) {
     document.getElementById("thinking")?.remove();
-    _showErr(`(╥_╥) network error — ${e.message}. Check your connection and try again.`);
-    conversationHistory.pop();
+    if (e.name === "AbortError") {
+      // User hit stop — keep whatever partial reply rendered, don't show error
+      if (botBubble && replyText) {
+        const kept = replyText.replace(/DRAFT_COMMENT_READY[\s\S]*/g,"").replace(/CONFIRM_ACTION:\s*.+/gi,"").trimEnd();
+        if (kept) {
+          botBubble.textContent = kept;
+          conversationHistory.push({role:"assistant", content: kept});
+        } else {
+          botBubble.remove();
+          conversationHistory.pop();
+        }
+      } else {
+        conversationHistory.pop();
+      }
+    } else {
+      _showErr(`(╥_╥) network error — ${e.message}. Check your connection and try again.`);
+      conversationHistory.pop();
+    }
     _setStreaming(false);
   }
 }
