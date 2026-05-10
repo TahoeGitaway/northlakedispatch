@@ -4,8 +4,8 @@
     <title>{% block title %}North Lake Dispatch{% endblock %}</title>
     <link rel="icon" type="image/jpeg" href="{{ url_for('static', filename='favicon.jpg') }}">
 
-    <!-- Tailwind -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.min.css') }}">
+    <!-- Tailwind (Play CDN — all classes, no build/purge) -->
+    <script src="https://cdn.tailwindcss.com"></script>
 
     <!-- Leaflet -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
