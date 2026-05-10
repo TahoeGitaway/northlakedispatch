@@ -669,23 +669,21 @@ function reOptimize() {
 }
 
 /* ── BREEZEWAY IMPORT ── */
-function toggleBwImport() {
-  const panel = document.getElementById("bwImportPanel");
-  const isHidden = panel.classList.toggle("hidden");
-  document.getElementById("bwImportChevron").textContent = isHidden ? "▼" : "▲";
-  if (!isHidden) {
-    // Auto-fill from Route Date and Assigned To fields
-    const dateVal     = document.getElementById("routeDateField").value;
-    const assigneeVal = document.getElementById("assignedToField").value.trim();
-    if (dateVal)     document.getElementById("bwImportDate").value     = dateVal;
-    if (assigneeVal) document.getElementById("bwImportAssignee").value = assigneeVal;
-    document.getElementById(assigneeVal ? "bwImportDate" : "bwImportAssignee").focus();
-  }
-}
-
 async function runBwImport() {
-  const date     = document.getElementById("bwImportDate").value;
-  const assignee = document.getElementById("bwImportAssignee").value.trim();
+  // Auto-fill from route fields if import fields are empty
+  const dateInput     = document.getElementById("bwImportDate");
+  const assigneeInput = document.getElementById("bwImportAssignee");
+  if (!dateInput.value) {
+    const routeDate = document.getElementById("routeDateField").value;
+    if (routeDate) dateInput.value = routeDate;
+  }
+  if (!assigneeInput.value.trim()) {
+    const routeAssignee = document.getElementById("assignedToField").value.trim();
+    if (routeAssignee) assigneeInput.value = routeAssignee;
+  }
+
+  const date     = dateInput.value;
+  const assignee = assigneeInput.value.trim();
   const resultEl = document.getElementById("bwImportResult");
   const btn      = document.getElementById("bwImportBtn");
 
@@ -694,8 +692,9 @@ async function runBwImport() {
     return;
   }
 
-  btn.disabled    = true;
-  btn.textContent = "Importing…";
+  btn.disabled         = true;
+  btn.textContent      = "Importing…";
+  btn.style.background = "#6366f1";
   resultEl.classList.add("hidden");
 
   try {
@@ -730,16 +729,22 @@ async function runBwImport() {
   } catch (_) {
     _bwImportMsg("Network error — could not reach server.", "red");
   } finally {
-    btn.disabled    = false;
-    btn.textContent = "Import Stops";
+    btn.disabled         = false;
+    btn.textContent      = "Import Stops";
+    btn.style.background = "#4f46e5";
   }
 }
 
 function _bwImportMsg(text, color) {
   const el = document.getElementById("bwImportResult");
-  const bg = {green:"bg-green-50 text-green-700", amber:"bg-amber-50 text-amber-700",
-              red:"bg-red-50 text-red-700", gray:"bg-gray-50 text-gray-600"}[color] || "bg-gray-50 text-gray-600";
-  el.className = `text-xs rounded-lg p-2 leading-relaxed ${bg}`;
+  const styles = {
+    green: "background:#f0fdf4; color:#15803d;",
+    amber: "background:#fffbeb; color:#b45309;",
+    red:   "background:#fef2f2; color:#b91c1c;",
+    gray:  "background:#f9fafb; color:#4b5563;",
+  }[color] || "background:#f9fafb; color:#4b5563;";
+  el.className = "text-xs rounded-lg leading-relaxed";
+  el.style.cssText = `padding:6px 10px; ${styles}`;
   el.textContent = text;
   el.classList.remove("hidden");
 }
