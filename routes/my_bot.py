@@ -291,9 +291,7 @@ def my_bot_chat():
         {
             "name": "get_task_comments",
             "description": (
-                "Fetch all comments on a specific Asana task so you can summarize or quote them. "
-                "Use this whenever the user asks what people said, what comments exist, "
-                "or wants a summary of activity on a task."
+                "Fetch comments on a SINGLE Asana task. Use get_comments_batch for 2+ tasks."
             ),
             "input_schema": {
                 "type": "object",
@@ -302,6 +300,33 @@ def my_bot_chat():
                     "task_name": {"type": "string", "description": "Task name for context"},
                 },
                 "required": ["task_gid", "task_name"],
+            },
+        },
+        {
+            "name": "get_comments_batch",
+            "description": (
+                "Fetch comments on MULTIPLE Asana tasks simultaneously (in parallel). "
+                "ALWAYS use this instead of calling get_task_comments repeatedly when checking "
+                "comments across more than one task. Returns only tasks that have comments from "
+                "others — skips tasks with no activity. Max ~20 tasks per call for reliability."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "description": "Tasks to check for comments",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task_gid":  {"type": "string"},
+                                "task_name": {"type": "string"},
+                            },
+                            "required": ["task_gid", "task_name"],
+                        },
+                    },
+                },
+                "required": ["tasks"],
             },
         },
         {
@@ -611,6 +636,66 @@ def my_bot_chat():
                     f"(only your own comments exist).\nTask link: {task_url}")
         return "\n".join(lines)
 
+    def _exec_get_comments_batch(tasks):
+        """Fetch comments for multiple tasks in parallel. tasks = [{task_gid, task_name}]."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+        MY_NAME = "Madeline Gall"
+
+        def _fetch_one(task_gid, task_name):
+            task_url = f"https://app.asana.com/0/0/{task_gid}"
+            stories, err = _asana_request("GET", f"/tasks/{task_gid}/stories",
+                                          {"opt_fields": "type,text,created_by.name,created_at"})
+            if err:
+                return task_name, f"error: {err}", task_url
+            all_comments = [s for s in (stories if isinstance(stories, list) else [])
+                            if s.get("type") == "comment"]
+            last_was_mine = False
+            others = []
+            for c in all_comments:
+                author = (c.get("created_by") or {}).get("name", "Unknown")
+                when   = (c.get("created_at") or "")[:10]
+                text   = (c.get("text") or "").strip()
+                if author == MY_NAME:
+                    last_was_mine = True
+                    continue
+                prefix = " · ↩ replied to you" if last_was_mine else ""
+                others.append(f"[{author} — {when}{prefix}]\n{text}")
+                last_was_mine = False
+            return task_name, others, task_url
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = {ex.submit(_fetch_one, t["task_gid"], t["task_name"]): t["task_name"]
+                       for t in tasks}
+            for fut in as_completed(futures, timeout=30):
+                try:
+                    name, comments, url = fut.result(timeout=8)
+                    results[name] = (comments, url)
+                except FutureTimeout:
+                    results[futures[fut]] = (["timed out"], "")
+                except Exception as ex2:
+                    results[futures[fut]] = ([f"error: {ex2}"], "")
+
+        sections = []
+        has_activity = False
+        for t in tasks:
+            name = t["task_name"]
+            comments, url = results.get(name, ([], ""))
+            if isinstance(comments, str):  # error string
+                sections.append(f"⚠ {name}: {comments}")
+            elif comments == ["timed out"]:
+                sections.append(f"⏱ {name}: timed out")
+            elif not comments:
+                pass  # skip tasks with no comments from others
+            else:
+                has_activity = True
+                link = f" — {url}" if url else ""
+                sections.append(f"\n📌 {name}{link}\n" + "\n\n".join(comments))
+
+        if not has_activity:
+            return f"No comments from others on any of the {len(tasks)} tasks checked."
+        return "\n\n".join(sections)
+
     def _trunc_for_history(content, limit=800):
         if not isinstance(content, str) or len(content) <= limit:
             return content
@@ -633,7 +718,9 @@ def my_bot_chat():
             f"You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
             f"Today is {today_str}.\n\n"
             "TOOLS:\n"
-            "1. ASANA — get_my_asana_tasks (fetch tasks), get_task_comments (fetch + summarize comments on a task), "
+            "1. ASANA — get_my_asana_tasks (fetch tasks), "
+            "get_task_comments (comments on ONE task), "
+            "get_comments_batch (comments on MULTIPLE tasks in parallel — ALWAYS use this for 2+ tasks), "
             "update_asana_task (single update), "
             "batch_update_asana_tasks (multiple updates in parallel — use this for 2+ tasks), "
             "delete_asana_task (delete one task), "
@@ -649,11 +736,15 @@ def my_bot_chat():
             "- DEPARTURE SYNONYMS: 'Departure task', 'Lease departure', 'Post lease inspection', "
             "'Move-out inspection', 'Guest departure', 'Checkout task' — all mean the same thing: "
             "a guest or tenant leaving. Both arrivals AND departures concern Madeline.\n"
-            "- COMMENTS: When fetching comments, skip Madeline's own comments in the summary — "
-            "she already knows what she wrote. Show comments from others, and flag any comment "
-            "that comes after one of hers as a reply to her (↩ replied to you). "
-            "Always include the task link so she can open Asana directly.\n\n"
+            "- COMMENTS: When the user asks about comments across multiple tasks, use get_comments_batch "
+            "with ALL relevant tasks in a single call — never loop get_task_comments one task at a time "
+            "and never ask 'want me to continue with the next batch?' Just do all of them. "
+            "If there are more than 20 tasks, split into two get_comments_batch calls back-to-back without asking. "
+            "The tool skips tasks with no outside comments automatically, so results are concise.\n\n"
             "RULES — follow these exactly:\n"
+            "- NEVER modify, paraphrase, abbreviate, or invent task names or property names. "
+            "Always copy them character-for-character exactly as they appear in Asana data. "
+            "If a name looks odd or unfamiliar, report it exactly as-is — do not 'correct' it.\n"
             "- DEFAULT SOURCE IS ASANA. When the user asks about tasks, always use Asana tools. "
             "Only use fetch_breezeway_tasks if the user explicitly says 'Breezeway' or asks about "
             "cleaning jobs, inspections, or maintenance schedules by property.\n"
@@ -666,6 +757,9 @@ def my_bot_chat():
             "- Before any write (update, batch, comment): show CONFIRM_ACTION: <what you will do> "
             "and wait for the user to confirm. After confirmation, call the tool immediately.\n"
             "- Never guess task GIDs — always call get_my_asana_tasks first.\n"
+            "- If get_comments_batch returns 404 errors on multiple tasks, the GIDs are stale — "
+            "call get_my_asana_tasks again to get fresh GIDs, then retry. Do not tell the user "
+            "the tasks are 'corrupted or deleted' unless re-fetching also fails.\n"
             "- If a tool returns an error, tell the user exactly what it says.\n"
             "- Be concise. Use bullet points. Do not pad responses."
         )
@@ -704,6 +798,11 @@ def my_bot_chat():
                                 block.input.get("task_gid", ""),
                                 block.input.get("task_name", ""),
                             )
+                        elif block.name == "get_comments_batch":
+                            tasks_in = block.input.get("tasks", [])
+                            n = len(tasks_in)
+                            yield sse({"type": "status", "text": f"Checking comments on {n} tasks in parallel…"})
+                            result = _exec_get_comments_batch(tasks_in)
                         elif block.name == "get_my_asana_tasks":
                             yield sse({"type": "status", "text": "Fetching your Asana tasks…"})
                             result = _exec_get_tasks(
@@ -769,6 +868,11 @@ def my_bot_chat():
                     history_additions.append({"role": "user", "content": tool_results_history})
                 else:
                     break
+            else:
+                # Loop exhausted all turns still in tool_use — tell the user honestly
+                yield sse({"type": "delta", "text":
+                    "\n\n⚠️ Hit the turn limit before finishing — some tasks weren't checked. "
+                    "Try asking about a smaller batch (e.g. 'check comments on my overdue tasks only')."})
 
             yield sse({"type": "done", "history_additions": history_additions})
         except Exception as e:

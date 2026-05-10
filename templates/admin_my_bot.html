@@ -528,13 +528,19 @@ function _setStreaming(on) {
   const sendBtn = document.getElementById("sendBtn");
   const stopBtn = document.getElementById("stopBtn");
   sendBtn.disabled = on;
-  sendBtn.style.display = on ? "none" : "";
-  stopBtn.style.display = on ? "" : "none";
+  sendBtn.style.display = on ? "none" : "inline-block";
+  stopBtn.style.display = on ? "inline-block" : "none";
+  stopBtn.textContent = "✕ stop";
+  stopBtn.disabled = false;
   if (!on) _abortController = null;
 }
 
 function stopStreaming() {
-  if (_abortController) _abortController.abort();
+  if (!_abortController) return;
+  const stopBtn = document.getElementById("stopBtn");
+  stopBtn.textContent = "stopping…";
+  stopBtn.disabled = true;
+  _abortController.abort();
 }
 
 function _showErr(msg) {
