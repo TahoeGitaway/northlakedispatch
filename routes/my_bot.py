@@ -578,22 +578,37 @@ def my_bot_chat():
         return f"Task '{label}' updated successfully."
 
     def _exec_get_comments(task_gid, task_name):
+        MY_NAME = "Madeline Gall"
+        task_url = f"https://app.asana.com/0/0/{task_gid}"
         stories, err = _asana_request("GET", f"/tasks/{task_gid}/stories",
                                       {"opt_fields": "type,text,created_by.name,created_at"})
         if err:
             return f"Error fetching comments for '{task_name}': {err}"
-        if not stories:
-            return f"No comments found on '{task_name}'."
-        comments = [s for s in (stories if isinstance(stories, list) else [])
-                    if s.get("type") == "comment"]
-        if not comments:
-            return f"No comments on '{task_name}' (task has activity but no written comments)."
-        lines = [f"Comments on '{task_name}' ({len(comments)} total):"]
-        for c in comments:
+        all_comments = [s for s in (stories if isinstance(stories, list) else [])
+                        if s.get("type") == "comment"]
+        if not all_comments:
+            return f"No comments on '{task_name}'.\nTask link: {task_url}"
+
+        # Mark comments that are replies to the user (come after a Madeline comment)
+        lines = [f"Comments on '{task_name}' — {task_url}"]
+        last_was_mine = False
+        shown = 0
+        for c in all_comments:
             author = (c.get("created_by") or {}).get("name", "Unknown")
             when   = (c.get("created_at") or "")[:10]
             text   = (c.get("text") or "").strip()
-            lines.append(f"\n[{author} — {when}]\n{text}")
+            if author == MY_NAME:
+                last_was_mine = True
+                continue  # skip own comments in display
+            prefix = "↩ replied to you" if last_was_mine else ""
+            label  = f"[{author} — {when}]{' · ' + prefix if prefix else ''}"
+            lines.append(f"\n{label}\n{text}")
+            last_was_mine = False
+            shown += 1
+
+        if shown == 0:
+            return (f"No comments from others on '{task_name}' "
+                    f"(only your own comments exist).\nTask link: {task_url}")
         return "\n".join(lines)
 
     def _trunc_for_history(content, limit=800):
@@ -625,6 +640,19 @@ def my_bot_chat():
             "batch_delete_asana_tasks (delete multiple tasks in parallel — use for 2+), "
             "draft_asana_comment (suggest a comment for the user to edit and post).\n"
             "2. BREEZEWAY — fetch_breezeway_tasks (property cleaning/inspection/maintenance tasks).\n\n"
+            "CONTEXT — understand this about how tasks are structured:\n"
+            "- TASK TREE: Parent tasks = property/house names. Children tasks = work assigned to org members. "
+            "Any task assigned to the user (you are talking to Madeline Gall) concerns her, "
+            "whether it's an arrival task, departure task, inspection, or anything else at a property.\n"
+            "- ARRIVAL SYNONYMS: 'Lease walk thru', 'Lease arrival', 'Arrival task', 'Walk thru', "
+            "'Move-in inspection', 'Guest arrival' — all mean the same thing: a guest or tenant arriving.\n"
+            "- DEPARTURE SYNONYMS: 'Departure task', 'Lease departure', 'Post lease inspection', "
+            "'Move-out inspection', 'Guest departure', 'Checkout task' — all mean the same thing: "
+            "a guest or tenant leaving. Both arrivals AND departures concern Madeline.\n"
+            "- COMMENTS: When fetching comments, skip Madeline's own comments in the summary — "
+            "she already knows what she wrote. Show comments from others, and flag any comment "
+            "that comes after one of hers as a reply to her (↩ replied to you). "
+            "Always include the task link so she can open Asana directly.\n\n"
             "RULES — follow these exactly:\n"
             "- DEFAULT SOURCE IS ASANA. When the user asks about tasks, always use Asana tools. "
             "Only use fetch_breezeway_tasks if the user explicitly says 'Breezeway' or asks about "
@@ -730,9 +758,12 @@ def my_bot_chat():
                         tool_results.append({
                             "type": "tool_result", "tool_use_id": block.id, "content": result,
                         })
+                        # Only truncate Breezeway results — Asana results are kept full
+                        # because the bot frequently needs GIDs/details in follow-up turns.
+                        history_content = _trunc_for_history(result) if block.name == "fetch_breezeway_tasks" else result
                         tool_results_history.append({
                             "type": "tool_result", "tool_use_id": block.id,
-                            "content": _trunc_for_history(result),
+                            "content": history_content,
                         })
                     trimmed.append({"role": "user", "content": tool_results})
                     history_additions.append({"role": "user", "content": tool_results_history})
