@@ -507,15 +507,14 @@ async function loadBriefing(force = false) {
       (data.routes || []).forEach(r => {
         const div = document.createElement("div");
         div.className = "text-sm leading-snug";
-        const name = r.assigned_to || r.name;
-        const parts = [];
-        if (r.stops)    parts.push(`${r.stops} stop${r.stops !== 1 ? "s" : ""}`);
-        if (r.priority) parts.push(`${r.priority} priority`);
-        if (r.notes)    parts.push(r.notes);
-        const summary = parts.length ? parts.join(", ") : r.name;
-        div.innerHTML = `<span style="font-weight:600;color:#1f2937;">${name}</span>`
-          + ` <span style="color:#6b7280;">— ${summary}</span>`
-          + ` <a href="/?load=${r.id}" style="color:#6366f1;">(link)</a>`;
+        const tech = r.assigned_to
+          ? `<strong class="text-gray-900">${r.assigned_to}</strong> — `
+          : "";
+        const notesHtml = r.notes
+          ? `<span class="text-gray-600">, ${r.notes}</span>`
+          : "";
+        const linkHtml = `<a href="/?load=${r.id}" class="text-indigo-500 hover:underline ml-1">(link)</a>`;
+        div.innerHTML = `${tech}${r.name}${notesHtml} ${linkHtml}`;
         listEl.appendChild(div);
       });
 
@@ -551,15 +550,10 @@ async function peekBriefing() {
       (data.routes || []).forEach(r => {
         const div = document.createElement("div");
         div.className = "text-sm leading-snug";
-        const name = r.assigned_to || r.name;
-        const parts = [];
-        if (r.stops)    parts.push(`${r.stops} stop${r.stops !== 1 ? "s" : ""}`);
-        if (r.priority) parts.push(`${r.priority} priority`);
-        if (r.notes)    parts.push(r.notes);
-        const summary = parts.length ? parts.join(", ") : r.name;
-        div.innerHTML = `<span style="font-weight:600;color:#1f2937;">${name}</span>`
-          + ` <span style="color:#6b7280;">— ${summary}</span>`
-          + ` <a href="/?load=${r.id}" style="color:#6366f1;">(link)</a>`;
+        const tech = r.assigned_to ? `<strong class="text-gray-900">${r.assigned_to}</strong> — ` : "";
+        const notesHtml = r.notes ? `<span class="text-gray-600">, ${r.notes}</span>` : "";
+        const linkHtml = `<a href="/?load=${r.id}" class="text-indigo-500 hover:underline ml-1">(link)</a>`;
+        div.innerHTML = `${tech}${r.name}${notesHtml} ${linkHtml}`;
         listEl.appendChild(div);
       });
       document.getElementById("briefingCard").classList.remove("hidden");
