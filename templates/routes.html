@@ -803,9 +803,9 @@ function selectDay(ds) {
     if (route.total_duration) metaHtml += `<span>⏱ ${(route.total_duration/3600).toFixed(1)} hrs</span>`;
     if (route.distance)       metaHtml += `<span>🛣 ${(route.distance/1609).toFixed(1)} mi</span>`;
     if (route.updated_at && route.updated_at !== route.created_at) {
-      const ts = new Date(route.updated_at).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"});
+      const ts = new Date(route.updated_at).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/Los_Angeles"});
       const editor = route.last_edited_by_name || "unknown";
-      metaHtml += `<span class="text-amber-600">edited ${ts} by ${editor}</span>`;
+      metaHtml += `<span class="text-amber-600">edited ${ts} PT by ${editor}</span>`;
     }
     meta.innerHTML = metaHtml;
     info.appendChild(meta);

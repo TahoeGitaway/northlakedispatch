@@ -516,16 +516,17 @@ function renderSchedule() {
 
     // ── DRIVE TIMES VIEW ──
     if (viewMode === 'drive') {
-      let driveMin = 0;
+      let driveMin = null;
       // Walk back past lunch/gap sentinels to find the real previous matrix index
       let prevMatrixIdx = 0; // default: depot
       for (let j = si - 1; j >= 0; j--) {
         const s = optimizedSchedule[j];
         if (!s.isLunch && !s.isGap) { prevMatrixIdx = s.matrix_index; break; }
       }
-      if (stop.matrix_index != null && durationMatrix[prevMatrixIdx] != null) {
+      if (durationMatrix.length > 0 && stop.matrix_index != null && durationMatrix[prevMatrixIdx] != null) {
         driveMin = Math.round((durationMatrix[prevMatrixIdx][stop.matrix_index] || 0) / 60);
       }
+      const driveLabel = driveMin === null ? 'drive time unknown' : (driveMin < 1 ? '&lt;1 min' : `${driveMin} min`) + ' drive';
 
       li.className = "p-2 border-l-4 border-l-indigo-300 border border-gray-100 rounded bg-white hover:bg-indigo-50 transition-colors";
       li.innerHTML = `
@@ -542,7 +543,7 @@ function renderSchedule() {
           </div>
         </div>
         <div class="text-xs text-gray-400 mt-0.5">
-          🚗 ${driveMin < 1 ? '< 1' : driveMin} min drive${stop.arrival
+          🚗 ${driveLabel}${stop.arrival
             ? (stop.priority_checkin
                 ? ' &nbsp;·&nbsp; <span style="background:#ede9fe;color:#6d28d9;font-weight:700;padding:1px 6px;border-radius:999px;font-size:0.6rem;">CHECK-IN by 12PM</span>'
                 : ' &nbsp;·&nbsp; <span style="background:#dcfce7;color:#15803d;font-weight:700;padding:1px 6px;border-radius:999px;font-size:0.6rem;">CHECK-IN</span>')
@@ -557,7 +558,7 @@ function renderSchedule() {
     const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
 
     // Drive time from previous real stop (or depot) to this stop
-    let driveMin = 0;
+    let driveMin = null;
     const prevStop = si > 0 ? optimizedSchedule[si - 1] : null;
     const fromIdx  = (() => {
       for (let j = si - 1; j >= 0; j--) {
@@ -580,10 +581,11 @@ function renderSchedule() {
       const driveEl = document.createElement("div");
       driveEl.className = "flex items-center gap-2 px-1 py-0.5";
       const prevWasLunch = prevStop && prevStop.isLunch;
+      const connLabel = driveMin === null ? 'time unknown' : (driveMin < 1 ? '&lt;1 min' : `${driveMin} min`);
       driveEl.innerHTML = `
         <div class="flex-1 border-t border-dashed border-gray-200"></div>
         <span class="text-xs text-gray-400 font-medium shrink-0">
-          🚗 ${driveMin < 1 ? '&lt;1' : driveMin} min${prevWasLunch ? ' (after lunch)' : ''}
+          🚗 ${connLabel}${prevWasLunch ? ' (after lunch)' : ''}
         </span>
         <div class="flex-1 border-t border-dashed border-gray-200"></div>`;
       list.appendChild(driveEl);

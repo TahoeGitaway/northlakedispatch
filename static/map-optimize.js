@@ -506,7 +506,7 @@ async function recalcDriveTimes() {
         stops:             real.map(s => ({ name:s.name, lat:s.lat, lng:s.lng, arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes })),
         start:             startLocation,
         end:               endLocation,
-        startTime:         minutesToHHMM(startMinutes),
+        startTime:         minutesToHHMM24(startMinutes),
         use_google_matrix: true,
         preserve_order:    true,
       })
