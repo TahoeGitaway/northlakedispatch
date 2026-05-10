@@ -561,12 +561,20 @@ def my_bot_chat():
         label = new_name or task_name
         return f"Task '{label}' updated successfully."
 
+    def _trunc_for_history(content, limit=800):
+        if not isinstance(content, str) or len(content) <= limit:
+            return content
+        cut = content[:limit].rfind('\n')
+        if cut < limit // 2:
+            cut = limit
+        return content[:cut] + "\n[…truncated — bot will re-fetch if needed]"
+
     def generate():
         def sse(obj):
             return f"data: {json.dumps(obj)}\n\n"
 
         ai_client  = _anthropic.Anthropic(api_key=key)
-        trimmed    = _safe_trim(messages, 20)
+        trimmed    = _safe_trim(messages, 8)
         history_additions = []
         reply_text = ""
         from datetime import date as _today_cls
@@ -600,7 +608,7 @@ def my_bot_chat():
                 turn_text    = ""
                 asst_content = []
                 with ai_client.messages.stream(
-                    model="claude-sonnet-4-6", max_tokens=4096,
+                    model="claude-haiku-4-5-20251001", max_tokens=1024,
                     system=system_prompt, messages=trimmed, tools=tools,
                 ) as stream:
                     for chunk in stream.text_stream:
@@ -618,7 +626,8 @@ def my_bot_chat():
                     trimmed.append({"role": "assistant", "content": asst_content})
                     history_additions.append({"role": "assistant", "content": asst_content})
 
-                    tool_results = []
+                    tool_results         = []
+                    tool_results_history = []
                     for block in final_msg.content:
                         if block.type != "tool_use":
                             continue
@@ -676,9 +685,12 @@ def my_bot_chat():
                         tool_results.append({
                             "type": "tool_result", "tool_use_id": block.id, "content": result,
                         })
-                    tool_msg = {"role": "user", "content": tool_results}
-                    trimmed.append(tool_msg)
-                    history_additions.append(tool_msg)
+                        tool_results_history.append({
+                            "type": "tool_result", "tool_use_id": block.id,
+                            "content": _trunc_for_history(result),
+                        })
+                    trimmed.append({"role": "user", "content": tool_results})
+                    history_additions.append({"role": "user", "content": tool_results_history})
                 else:
                     break
 

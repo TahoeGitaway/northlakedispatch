@@ -1556,9 +1556,17 @@ def chatbot_chat():
             "for any other date range the user asks about (next week, this Friday, June, etc.)."
         )
 
+        def _trunc_for_history(content, limit=800):
+            if not isinstance(content, str) or len(content) <= limit:
+                return content
+            cut = content[:limit].rfind('\n')
+            if cut < limit // 2:
+                cut = limit
+            return content[:cut] + "\n[…truncated — bot will re-fetch if needed]"
+
         # ── Claude streaming ──
         ai_client         = anthropic.Anthropic(api_key=key)
-        trimmed           = _safe_trim(messages, 30)
+        trimmed           = _safe_trim(messages, 12)
         history_additions = []
         reply_text        = ""
 
@@ -1568,8 +1576,8 @@ def chatbot_chat():
                 asst_content = []
 
                 with ai_client.messages.stream(
-                    model      = "claude-sonnet-4-6",
-                    max_tokens = 2000,
+                    model      = "claude-haiku-4-5-20251001",
+                    max_tokens = 1500,
                     system     = system_prompt,
                     messages   = trimmed,
                     tools      = tools,
@@ -1592,10 +1600,11 @@ def chatbot_chat():
                     trimmed.append({"role": "assistant", "content": asst_content})
                     history_additions.append({"role": "assistant", "content": asst_content})
 
-                    tool_results  = []
-                    tool_blocks   = [b for b in final_msg.content if b.type == "tool_use"]
-                    tool_total    = len(tool_blocks)
-                    tool_idx      = 0
+                    tool_results         = []
+                    tool_results_history = []
+                    tool_blocks          = [b for b in final_msg.content if b.type == "tool_use"]
+                    tool_total           = len(tool_blocks)
+                    tool_idx             = 0
                     for block in final_msg.content:
                         if block.type == "tool_use":
                             tool_idx += 1
@@ -1633,9 +1642,13 @@ def chatbot_chat():
                                 "tool_use_id": block.id,
                                 "content":     result,
                             })
-                    tool_msg = {"role": "user", "content": tool_results}
-                    trimmed.append(tool_msg)
-                    history_additions.append(tool_msg)
+                            tool_results_history.append({
+                                "type":        "tool_result",
+                                "tool_use_id": block.id,
+                                "content":     _trunc_for_history(result),
+                            })
+                    trimmed.append({"role": "user", "content": tool_results})
+                    history_additions.append({"role": "user", "content": tool_results_history})
                 else:
                     break
 
