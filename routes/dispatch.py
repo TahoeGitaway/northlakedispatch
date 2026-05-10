@@ -23,6 +23,31 @@ dispatch_bp = Blueprint("dispatch", __name__)
 GOOGLE_MAPS_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
 
+# ── Breezeway import helper ───────────────────────────────────────
+
+def _match_local_property(bw_name: str, db_props: dict):
+    """Fuzzy-match a Breezeway property name to a local DB property row.
+    db_props: {lower_name: row_dict}. Returns row_dict or None.
+    """
+    from difflib import get_close_matches
+    if not bw_name:
+        return None
+    key = bw_name.lower().strip()
+    if key in db_props:
+        return db_props[key]
+    for dk, row in db_props.items():
+        if key in dk or dk in key:
+            return row
+    kwords = set(key.split())
+    for dk, row in db_props.items():
+        if kwords and kwords.issubset(set(dk.split())):
+            return row
+    hits = get_close_matches(key, list(db_props.keys()), n=1, cutoff=0.6)
+    if hits:
+        return db_props[hits[0]]
+    return None
+
+
 def _haversine_matrix(locations):
     """Fallback NxN drive-time matrix (seconds) when Google Maps API is unavailable."""
     n   = len(locations)
@@ -893,3 +918,110 @@ def view_route(route_id):
         route_polyline   = json.dumps(route_polyline or []),
         error            = None,
     )
+
+
+# ── Breezeway import endpoint ─────────────────────────────────────
+
+@dispatch_bp.route("/api/bw-import", methods=["POST"])
+@login_required
+def bw_import():
+    """Fetch Breezeway tasks for a given date/assignee and return matched local properties."""
+    from routes.briefing import (
+        _get_breezeway_token, _fetch_bw_endpoint, _fetch_bw_tasks,
+        _get_property_name, _ensure_property_cache,
+    )
+
+    body     = request.get_json() or {}
+    date_str = (body.get("date") or "").strip()
+    assignee = (body.get("assignee") or "").strip().lower()
+
+    if not date_str:
+        return jsonify({"error": "date is required"}), 400
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+
+    # Try the known-good task endpoint with several date-param conventions
+    results = []
+    err     = ""
+    for date_params in [
+        {"scheduled_date": f"{date_str},{date_str}"},
+        {"start_date": date_str, "end_date": date_str},
+        {"date": date_str},
+    ]:
+        r, e, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task/", date_params)
+        if status == 200:
+            results = r
+            break
+        err = e or err
+
+    if not results and err:
+        # Last-resort: let _fetch_bw_tasks try all known paths
+        results, err = _fetch_bw_tasks(token, {}, [
+            {"scheduled_date": f"{date_str},{date_str}"},
+            {"start_date": date_str, "end_date": date_str},
+        ])
+        if err and not results:
+            return jsonify({"error": f"Breezeway task fetch failed: {err}"}), 502
+
+    # Filter by assignee (partial, case-insensitive)
+    if assignee and results:
+        filtered = []
+        for t in results:
+            for a in (t.get("assignments") or []):
+                names = [
+                    a.get("name", ""),
+                    a.get("full_name", ""),
+                    f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip(),
+                ]
+                if any(assignee in n.lower() for n in names if n):
+                    filtered.append(t)
+                    break
+        results = filtered
+
+    if not results:
+        return jsonify({"matched": [], "unmatched": [],
+                        "message": "No Breezeway tasks found for that date/assignee."})
+
+    # Resolve unique property names from task results
+    _ensure_property_cache()
+    seen_ids  = set()
+    bw_names  = []
+    for t in results:
+        home_id = t.get("home_id") or t.get("property_id")
+        if home_id:
+            if home_id in seen_ids:
+                continue
+            seen_ids.add(home_id)
+            bw_names.append(_get_property_name(home_id))
+        else:
+            prop = (t.get("property_name") or "").strip()
+            if prop and prop not in bw_names:
+                bw_names.append(prop)
+
+    # Load local DB properties for matching
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        'SELECT "Property Name", "Latitude", "Longitude" FROM properties '
+        'WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL'
+    )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    db_props = {r["Property Name"].lower().strip(): dict(r) for r in rows}
+
+    matched   = []
+    unmatched = []
+    for bw_name in bw_names:
+        row = _match_local_property(bw_name, db_props)
+        if row:
+            matched.append({
+                "name": row["Property Name"],
+                "lat":  float(row["Latitude"]),
+                "lng":  float(row["Longitude"]),
+            })
+        else:
+            unmatched.append(bw_name)
+
+    return jsonify({"matched": matched, "unmatched": unmatched})

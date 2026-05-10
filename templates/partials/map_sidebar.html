@@ -128,6 +128,38 @@
       <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
     </div>
 
+    <!-- BREEZEWAY IMPORT -->
+    <div id="bwImportWrap" class="rounded-lg border border-indigo-100 overflow-hidden">
+      <button onclick="toggleBwImport()"
+              class="w-full flex items-center justify-between gap-2 px-3 py-2
+                     bg-indigo-50 hover:bg-indigo-100 transition-colors text-left">
+        <span class="text-sm font-medium text-indigo-700">📥 Import from Breezeway</span>
+        <span id="bwImportChevron" class="text-indigo-400 text-xs">▼</span>
+      </button>
+      <div id="bwImportPanel" class="hidden border-t border-indigo-100 p-3 bg-white space-y-2">
+        <div class="flex gap-2">
+          <div class="flex-1 min-w-0">
+            <label class="text-xs font-medium text-gray-500 block mb-1">Date</label>
+            <input id="bwImportDate" type="date"
+                   class="w-full border rounded-lg px-2 py-1.5 text-sm
+                          focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          </div>
+          <div class="flex-1 min-w-0">
+            <label class="text-xs font-medium text-gray-500 block mb-1">Assigned to</label>
+            <input id="bwImportAssignee" type="text" placeholder="e.g. Sarah"
+                   class="w-full border rounded-lg px-2 py-1.5 text-sm
+                          focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          </div>
+        </div>
+        <button id="bwImportBtn" onclick="runBwImport()"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 text-white
+                       text-sm font-medium py-1.5 rounded-lg transition-colors">
+          Import Stops
+        </button>
+        <div id="bwImportResult" class="hidden text-xs rounded-lg p-2 leading-relaxed"></div>
+      </div>
+    </div>
+
     <!-- PRE-OPT: Property search -->
     <div id="preOptSearch" class="relative">
       <input id="searchBox" placeholder="Add property…"
@@ -190,8 +222,9 @@
         + Add Stops &amp; Re-optimize
       </button>
       <button id="recalcTimesBtn" onclick="recalcDriveTimes()"
-              class="hidden w-full bg-teal-600 hover:bg-teal-700 text-white px-4 py-2
-                     rounded-lg font-medium transition-colors text-sm">
+              class="hidden w-full bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-2
+                     rounded-lg font-medium transition-colors text-sm
+                     flex items-center justify-center gap-2">
         🗺 Recalc Drive Times
       </button>
       <button id="changeStartBtn" onclick="toggleChangeStartForm()"

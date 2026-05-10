@@ -10,10 +10,10 @@ const TAHOE_BOUNDS = L.latLngBounds(
 );
 
 const map = L.map('map', {
-  minZoom: 10,
+  minZoom: 11,
   maxBounds: TAHOE_BOUNDS,
   maxBoundsViscosity: 0.8,
-}).setView([39.3279, -120.1833], 11);
+}).setView([39.3279, -120.1833], 12);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
   maxZoom: 19,
@@ -49,7 +49,7 @@ async function redrawRouteOnMap(precomputedPolyline = null) {
   if (precomputedPolyline && precomputedPolyline.length > 1) {
     routeLayer = L.polyline(precomputedPolyline, { color:"#6366f1", weight:5 }).addTo(map);
     map.invalidateSize();
-    map.fitBounds(routeLayer.getBounds(), { padding: [60, 60] });
+    map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 14 });
   } else {
     // Draw dashed straight-line fallback immediately while fetching real geometry
     const latlngs = allPoints.map(s => [s.lat, s.lng]);
@@ -57,7 +57,7 @@ async function redrawRouteOnMap(precomputedPolyline = null) {
       color:"#94a3b8", weight:3, dashArray:"8,6", opacity:0.6
     }).addTo(map);
     map.invalidateSize();
-    map.fitBounds(routeLayer.getBounds(), { padding: [60, 60] });
+    map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 14 });
   }
 
   // ── Add markers now (no geometry dependency) ──

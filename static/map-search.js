@@ -667,3 +667,79 @@ function reOptimize() {
   closeAddMore();
   optimizeRoute();
 }
+
+/* ── BREEZEWAY IMPORT ── */
+function toggleBwImport() {
+  const panel = document.getElementById("bwImportPanel");
+  const isHidden = panel.classList.toggle("hidden");
+  document.getElementById("bwImportChevron").textContent = isHidden ? "▼" : "▲";
+  if (!isHidden) {
+    // Auto-fill from Route Date and Assigned To fields
+    const dateVal     = document.getElementById("routeDateField").value;
+    const assigneeVal = document.getElementById("assignedToField").value.trim();
+    if (dateVal)     document.getElementById("bwImportDate").value     = dateVal;
+    if (assigneeVal) document.getElementById("bwImportAssignee").value = assigneeVal;
+    document.getElementById(assigneeVal ? "bwImportDate" : "bwImportAssignee").focus();
+  }
+}
+
+async function runBwImport() {
+  const date     = document.getElementById("bwImportDate").value;
+  const assignee = document.getElementById("bwImportAssignee").value.trim();
+  const resultEl = document.getElementById("bwImportResult");
+  const btn      = document.getElementById("bwImportBtn");
+
+  if (!date) {
+    _bwImportMsg("Please select a date.", "red");
+    return;
+  }
+
+  btn.disabled    = true;
+  btn.textContent = "Importing…";
+  resultEl.classList.add("hidden");
+
+  try {
+    const res  = await fetch("/api/bw-import", {
+      method:  "POST",
+      headers: {"Content-Type": "application/json"},
+      body:    JSON.stringify({date, assignee}),
+    });
+    const data = await res.json();
+
+    if (data.error) { _bwImportMsg(data.error, "red"); return; }
+    if (data.message) { _bwImportMsg(data.message, "gray"); return; }
+
+    let added = 0;
+    for (const p of (data.matched || [])) {
+      if (!selectedStops.find(s => s.name === p.name)) {
+        addStop(p, false, false);
+        added++;
+      }
+    }
+
+    let msg   = added === 0 ? "All properties already in the list." : `Added ${added} stop${added !== 1 ? "s" : ""}.`;
+    let color = "green";
+
+    const unmatched = data.unmatched || [];
+    if (unmatched.length) {
+      msg  += ` Not found in your property list: ${unmatched.join(", ")}.`;
+      color = added > 0 ? "amber" : "red";
+    }
+
+    _bwImportMsg(msg, color);
+  } catch (_) {
+    _bwImportMsg("Network error — could not reach server.", "red");
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = "Import Stops";
+  }
+}
+
+function _bwImportMsg(text, color) {
+  const el = document.getElementById("bwImportResult");
+  const bg = {green:"bg-green-50 text-green-700", amber:"bg-amber-50 text-amber-700",
+              red:"bg-red-50 text-red-700", gray:"bg-gray-50 text-gray-600"}[color] || "bg-gray-50 text-gray-600";
+  el.className = `text-xs rounded-lg p-2 leading-relaxed ${bg}`;
+  el.textContent = text;
+  el.classList.remove("hidden");
+}

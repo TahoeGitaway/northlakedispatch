@@ -253,11 +253,13 @@ function renderStops() {
     countEl.textContent = "";
     document.getElementById("preOptSection").classList.add("hidden");
     document.getElementById("preOptSearch").classList.add("hidden");
+    document.getElementById("bwImportWrap").classList.add("hidden");
     return;
   }
 
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
+  document.getElementById("bwImportWrap").classList.remove("hidden");
   container.innerHTML = "";
   countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
 
@@ -370,6 +372,7 @@ function restartRoute() {
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
+  document.getElementById("bwImportWrap").classList.remove("hidden");
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
   document.getElementById("workInSection").classList.add("hidden");
