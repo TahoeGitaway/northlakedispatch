@@ -129,18 +129,15 @@
     </div>
 
     <!-- BREEZEWAY IMPORT -->
-    <div id="bwImportWrap" style="border-radius:8px; border:1px solid #c7d2fe; overflow:hidden;">
+    <div id="bwImportWrap" class="rounded-lg border border-indigo-100 overflow-hidden">
       <button onclick="toggleBwImport()"
-              style="width:100%; display:flex; align-items:center; justify-content:space-between;
-                     gap:8px; padding:9px 12px; background:#e0e7ff; cursor:pointer;
-                     text-align:left; border:none; font-family:inherit;"
-              onmouseover="this.style.background='#c7d2fe'"
-              onmouseout="this.style.background='#e0e7ff'">
-        <span style="font-size:0.875rem; font-weight:600; color:#3730a3;">📥 Import from Breezeway</span>
-        <span id="bwImportChevron" style="color:#6366f1; font-size:0.7rem; font-weight:700;">▼</span>
+              class="w-full flex items-center justify-between gap-2 px-3 py-2.5
+                     bg-indigo-50 hover:bg-indigo-100 transition-colors text-left">
+        <span class="text-sm font-medium text-indigo-700">📥 Import from Breezeway</span>
+        <span id="bwImportChevron" class="text-indigo-400 text-xs">▼</span>
       </button>
-      <div id="bwImportPanel" class="hidden" style="border-top:1px solid #c7d2fe; padding:12px; background:#fff;">
-        <div class="flex gap-2" style="margin-bottom:8px;">
+      <div id="bwImportPanel" class="hidden border-t border-indigo-100 p-3 bg-white space-y-2">
+        <div class="flex gap-2">
           <div class="flex-1 min-w-0">
             <label class="text-xs font-medium text-gray-500 block mb-1">Date</label>
             <input id="bwImportDate" type="date"
@@ -159,7 +156,7 @@
                        text-sm font-medium py-1.5 rounded-lg transition-colors">
           Import Stops
         </button>
-        <div id="bwImportResult" class="hidden text-xs rounded-lg p-2 leading-relaxed" style="margin-top:8px;"></div>
+        <div id="bwImportResult" class="hidden text-xs rounded-lg p-2 leading-relaxed mt-1"></div>
       </div>
     </div>
 
