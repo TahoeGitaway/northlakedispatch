@@ -146,16 +146,26 @@ def poll_asana_notifications():
         "assignee":   "me",
         "workspace":  ws,
         "completed":  "false",
-        "opt_fields": "gid,name",
+        "opt_fields": "gid,name,parent.name",
     })
     if err or not tasks_data:
         return
     tasks = tasks_data if isinstance(tasks_data, list) else []
 
+    # Ensure parent_name column exists (safe to run every time)
+    try:
+        conn0 = get_db(); cur0 = get_cursor(conn0)
+        cur0.execute("ALTER TABLE asana_notifications ADD COLUMN IF NOT EXISTS parent_name TEXT")
+        conn0.commit(); cur0.close(); conn0.close()
+    except Exception:
+        pass
+
     new_notifications = []
     for task in tasks:
-        tgid  = task.get("gid")
-        tname = task.get("name", "Unnamed task")
+        tgid   = task.get("gid")
+        tname  = task.get("name", "Unnamed task")
+        parent = task.get("parent") or {}
+        pname  = parent.get("name", "") if isinstance(parent, dict) else ""
         if not tgid:
             continue
         stories_data, serr = _asana_request("GET", f"/tasks/{tgid}/stories", {
@@ -173,17 +183,17 @@ def poll_asana_notifications():
             if last_checked and created_at and created_at <= last_checked:
                 continue
             item_key = f"{tgid}::{sgid}"
-            new_notifications.append((item_key, tgid, tname, sgid, commenter, comment_text, created_at))
+            new_notifications.append((item_key, tgid, tname, pname, sgid, commenter, comment_text, created_at))
 
     if new_notifications:
         conn2 = get_db(); cur2 = get_cursor(conn2)
-        for (key, tgid, tname, sgid, commenter, text, cat) in new_notifications:
+        for (key, tgid, tname, pname, sgid, commenter, text, cat) in new_notifications:
             cur2.execute(
                 """INSERT INTO asana_notifications
-                   (item_key, task_gid, task_name, story_gid, commenter, comment_text, asana_created_at, created_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                   (item_key, task_gid, task_name, parent_name, story_gid, commenter, comment_text, asana_created_at, created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (item_key) DO NOTHING""",
-                (key, tgid, tname, sgid, commenter, text, cat, now_str),
+                (key, tgid, tname, pname, sgid, commenter, text, cat, now_str),
             )
         conn2.commit(); cur2.close(); conn2.close()
 
@@ -253,6 +263,29 @@ def my_bot_chat():
     messages = data.get("messages", [])
 
     tools = [
+        {
+            "name": "get_my_notifications",
+            "description": (
+                "Read Asana comment notifications from the database — comments from others "
+                "on tasks assigned to you, polled every 30 minutes. Returns unread notifications "
+                "by default. Filter by property_name to see only notifications about a specific house. "
+                "Each result includes the task GID so you can immediately call get_task_comments, "
+                "update_asana_task, or draft_asana_comment on it."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "property_name": {
+                        "type": "string",
+                        "description": "Optional: only return notifications where task name contains this property name",
+                    },
+                    "include_dismissed": {
+                        "type": "boolean",
+                        "description": "If true, include dismissed notifications too (default false = unread only)",
+                    },
+                },
+            },
+        },
         {
             "name": "get_my_asana_tasks",
             "description": (
@@ -440,6 +473,60 @@ def my_bot_chat():
             },
         },
     ]
+
+    def _exec_get_notifications(property_name=None, include_dismissed=False):
+        conn = get_db(); cur = get_cursor(conn)
+        pf = (property_name or "").strip().lower()
+        if pf:
+            # Match against parent_name first (reliable), fall back to task_name
+            if include_dismissed:
+                cur.execute(
+                    "SELECT task_gid, task_name, parent_name, commenter, comment_text, asana_created_at, dismissed_at "
+                    "FROM asana_notifications "
+                    "WHERE (LOWER(parent_name) LIKE %s OR LOWER(task_name) LIKE %s) "
+                    "ORDER BY asana_created_at DESC LIMIT 50",
+                    (f"%{pf}%", f"%{pf}%"),
+                )
+            else:
+                cur.execute(
+                    "SELECT task_gid, task_name, parent_name, commenter, comment_text, asana_created_at, dismissed_at "
+                    "FROM asana_notifications "
+                    "WHERE dismissed_at IS NULL "
+                    "AND (LOWER(parent_name) LIKE %s OR LOWER(task_name) LIKE %s) "
+                    "ORDER BY asana_created_at DESC LIMIT 50",
+                    (f"%{pf}%", f"%{pf}%"),
+                )
+        else:
+            if include_dismissed:
+                cur.execute(
+                    "SELECT task_gid, task_name, parent_name, commenter, comment_text, asana_created_at, dismissed_at "
+                    "FROM asana_notifications ORDER BY asana_created_at DESC LIMIT 50"
+                )
+            else:
+                cur.execute(
+                    "SELECT task_gid, task_name, parent_name, commenter, comment_text, asana_created_at, dismissed_at "
+                    "FROM asana_notifications WHERE dismissed_at IS NULL "
+                    "ORDER BY asana_created_at DESC LIMIT 50"
+                )
+        rows = cur.fetchall(); cur.close(); conn.rollback(); conn.close()
+        if not rows:
+            label = f" about '{property_name}'" if pf else ""
+            return f"No {'unread ' if not include_dismissed else ''}notifications{label}."
+        scope = "All" if include_dismissed else "Unread"
+        prop_label = f" for '{property_name}'" if pf else ""
+        lines = [f"{scope} notifications{prop_label} ({len(rows)}):"]
+        for r in rows:
+            prop  = r.get("parent_name") or ""
+            task  = r["task_name"]
+            label = f"{prop} — {task}" if prop and prop.lower() != task.lower() else task
+            when  = (r.get("asana_created_at") or "")[:10]
+            dismissed = " [dismissed]" if r.get("dismissed_at") else ""
+            lines.append(
+                f"\n📩 [{r['task_gid']}] {label}{dismissed}\n"
+                f"  {r['commenter']} — {when}\n"
+                f"  {r['comment_text']}"
+            )
+        return "\n".join(lines)
 
     def _exec_get_tasks(filter_val="incomplete", project_filter=None):
         ws = _get_asana_workspace()
@@ -718,7 +805,10 @@ def my_bot_chat():
             f"You are a personal assistant for the admin of North Lake Dispatch, a vacation rental operations platform. "
             f"Today is {today_str}.\n\n"
             "TOOLS:\n"
-            "1. ASANA — get_my_asana_tasks (fetch tasks), "
+            "1. NOTIFICATIONS — get_my_notifications: reads unread Asana comment notifications "
+            "from the local database (instant, no API call). Filter by property_name to scope to one house. "
+            "Returns task GIDs so you can immediately act (reply, update, etc.).\n"
+            "2. ASANA — get_my_asana_tasks (fetch tasks), "
             "get_task_comments (comments on ONE task), "
             "get_comments_batch (comments on MULTIPLE tasks in parallel — ALWAYS use this for 2+ tasks), "
             "update_asana_task (single update), "
@@ -726,7 +816,14 @@ def my_bot_chat():
             "delete_asana_task (delete one task), "
             "batch_delete_asana_tasks (delete multiple tasks in parallel — use for 2+), "
             "draft_asana_comment (suggest a comment for the user to edit and post).\n"
-            "2. BREEZEWAY — fetch_breezeway_tasks (property cleaning/inspection/maintenance tasks).\n\n"
+            "3. BREEZEWAY — fetch_breezeway_tasks (property cleaning/inspection/maintenance tasks).\n\n"
+            "PROPERTY CONTEXT — when the user asks 'what do we know about [house]' or asks for a summary of a house:\n"
+            "Run ALL of these in parallel (call them in one turn):\n"
+            "  a) get_my_notifications(property_name='[house]') — unread comments on tasks for that house\n"
+            "  b) get_my_asana_tasks — then filter results to tasks whose parent.name matches the house, "
+            "then call get_comments_batch on those tasks to get full comment history\n"
+            "  c) fetch_breezeway_tasks for the house (current date through +14 days) — cleaning/maintenance schedule\n"
+            "Combine all results into one summary. Do not ask which source to check — check all of them.\n\n"
             "CONTEXT — understand this about how tasks are structured:\n"
             "- TASK TREE: Parent tasks = property/house names. Children tasks = work assigned to org members. "
             "Any task assigned to the user (you are talking to Madeline Gall) concerns her, "
@@ -792,7 +889,15 @@ def my_bot_chat():
                     for block in final_msg.content:
                         if block.type != "tool_use":
                             continue
-                        if block.name == "get_task_comments":
+                        if block.name == "get_my_notifications":
+                            prop = block.input.get("property_name") or ""
+                            label = f" for '{prop}'" if prop else ""
+                            yield sse({"type": "status", "text": f"Reading notifications{label}…"})
+                            result = _exec_get_notifications(
+                                prop,
+                                block.input.get("include_dismissed", False),
+                            )
+                        elif block.name == "get_task_comments":
                             yield sse({"type": "status", "text": f"Fetching comments on '{block.input.get('task_name', 'task')}'…"})
                             result = _exec_get_comments(
                                 block.input.get("task_gid", ""),
