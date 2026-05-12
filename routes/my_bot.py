@@ -541,7 +541,7 @@ def my_bot_chat():
             return "Could not find user task list GID."
 
         params = {
-            "opt_fields": "name,gid,due_on,completed,notes,projects.name,parent.name,parent.gid",
+            "opt_fields": "name,gid,due_on,start_on,completed,notes,projects.name,parent.name,parent.gid,parent.due_on,parent.start_on",
             "limit":      100,
         }
         if filter_val == "incomplete":
@@ -571,13 +571,21 @@ def my_bot_chat():
             return "No tasks found."
         lines = [f"Found {len(tasks)} task(s):"]
         for t in tasks:
-            projects   = ", ".join(p.get("name", "") for p in (t.get("projects") or []))
-            parent     = (t.get("parent") or {}).get("name", "")
-            status     = "✓ done" if t.get("completed") else "open"
-            due        = t.get("due_on") or "no due date"
+            projects = ", ".join(p.get("name", "") for p in (t.get("projects") or []))
+            parent   = t.get("parent") or {}
+            pname    = parent.get("name", "")
+            pstart   = parent.get("start_on", "")
+            pdue     = parent.get("due_on", "")
+            status   = "✓ done" if t.get("completed") else "open"
+            due      = t.get("due_on") or "no due date"
             line = f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}'
-            if parent:
-                line += f' | parent task: {parent}'
+            if pname:
+                lease_dates = ""
+                if pstart and pdue:
+                    lease_dates = f" [{pstart} → {pdue}]"
+                elif pdue:
+                    lease_dates = f" [ends {pdue}]"
+                line += f' | property: {pname}{lease_dates}'
             lines.append(line)
             if t.get("notes"):
                 lines.append(f'  Notes: {t["notes"]}')
