@@ -654,4 +654,5 @@ function renderSchedule() {
     list.appendChild(li);
     num++;
   });
+  if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
 }

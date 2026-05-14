@@ -766,70 +766,171 @@ function _bwImportMsg(text, color) {
 }
 
 // Stored multi-employee data for tab switching
-let _bwByAssignee = null;
-let _bwActiveDate = null;
+let _bwByAssignee     = null;
+let _bwActiveDate     = null;
+let _bwTasksByPropName = {};  // {propertyName: [{task_name, assignees}]} — keyed for sync
 
-let _bwSidebarMinimized = false;
+let _bwSidebarMinimized = true;  // starts minimized
 
 function bwSidebarMinimize() {
   _bwSidebarMinimized = !_bwSidebarMinimized;
-  const sidebar  = document.getElementById("bwTaskSidebar");
-  const tabs     = document.getElementById("bwTaskTabs");
-  const content  = document.getElementById("bwTaskSidebarContent");
-  const header   = document.getElementById("bwTaskSidebarHeader");
-  const chevron  = document.getElementById("bwSidebarChevron");
+  const sidebar = document.getElementById("bwTaskSidebar");
+  const chevron = document.getElementById("bwSidebarChevron");
+  const header  = document.getElementById("bwTaskSidebarHeader");
+  const tabs    = document.getElementById("bwTaskTabs");
+  const content = document.getElementById("bwTaskSidebarContent");
   if (_bwSidebarMinimized) {
-    sidebar.style.width  = "2.5rem";
-    tabs.style.display   = "none";
-    content.style.display = "none";
+    sidebar.style.width   = "2.5rem";
     header.style.display  = "none";
-    chevron.textContent  = "‹";
-    chevron.title        = "Expand";
+    tabs.style.display    = "none";
+    content.style.display = "none";
+    chevron.textContent   = "‹";
+    chevron.title         = "Expand";
   } else {
     sidebar.style.width   = "18rem";
-    if (_bwByAssignee) tabs.style.display = "";
-    content.style.display = "";
     header.style.display  = "";
+    content.style.display = "";
     chevron.textContent   = "›";
     chevron.title         = "Minimize";
+    // Show tabs only when there's tabbed content (saved routes or BW import)
+    if (document.querySelectorAll("#bwTaskTabs button").length > 0) {
+      tabs.style.display = "";
+    }
+    // Load routes if not already loaded
+    if (!_dailyRoutesLoaded) _loadDailyRoutes();
   }
 }
 
 
-// Single-employee sidebar (no tabs)
+/* ── DAILY ROUTES PANEL ─────────────────────────────────────────── */
+
+let _dailyRoutesLoaded = false;
+let _dailyRoutesList   = [];   // [{id, name, assigned_to, route_date}, ...]
+let _activeRouteTab    = null; // currently active route id or BW employee name
+
+// Called on page load — wire up the date picker and load today's routes
+(function initDailyRoutes() {
+  const dateEl = document.getElementById("dailyRoutesDate");
+  if (!dateEl) return;
+  const today = new Date().toISOString().slice(0, 10);
+  dateEl.value = today;
+  dateEl.addEventListener("change", () => {
+    _dailyRoutesLoaded = false;
+    _loadDailyRoutes();
+  });
+})();
+
+async function _loadDailyRoutes() {
+  const dateEl = document.getElementById("dailyRoutesDate");
+  const date   = dateEl ? dateEl.value : new Date().toISOString().slice(0, 10);
+  try {
+    const res  = await fetch(`/api/routes-for-date?date=${date}`);
+    const data = await res.json();
+    _dailyRoutesList   = data.routes || [];
+    _dailyRoutesLoaded = true;
+    _renderDailyRouteTabs();
+  } catch (_) {}
+}
+
+function _renderDailyRouteTabs() {
+  const tabsEl  = document.getElementById("bwTaskTabs");
+  const content = document.getElementById("bwTaskSidebarContent");
+
+  // Clear any BW-import tabs state
+  _bwByAssignee = null;
+
+  tabsEl.innerHTML = "";
+
+  if (!_dailyRoutesList.length) {
+    tabsEl.style.display = "none";
+    content.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">No routes saved for this date.</div>`;
+    return;
+  }
+
+  tabsEl.style.display = "";
+  for (const r of _dailyRoutesList) {
+    const label = r.assigned_to || r.name;
+    const btn = document.createElement("button");
+    btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
+    btn.textContent = label;
+    btn.dataset.routeId = r.id;
+    btn.addEventListener("click", () => _selectDailyRouteTab(r.id, label));
+    tabsEl.appendChild(btn);
+  }
+
+  // Auto-select first
+  if (_dailyRoutesList.length) {
+    const first = _dailyRoutesList[0];
+    _selectDailyRouteTab(first.id, first.assigned_to || first.name);
+  }
+}
+
+function _selectDailyRouteTab(routeId, label) {
+  _activeRouteTab = routeId;
+
+  // Update tab styles
+  const tabsEl = document.getElementById("bwTaskTabs");
+  for (const btn of tabsEl.querySelectorAll("button")) {
+    const active = String(btn.dataset.routeId) === String(routeId);
+    btn.className = active
+      ? "px-3 py-2.5 text-xs font-medium border-b-2 border-indigo-500 text-indigo-700 whitespace-nowrap cursor-pointer bg-transparent shrink-0"
+      : "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
+  }
+
+  // Show loading state in content
+  const content = document.getElementById("bwTaskSidebarContent");
+  content.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">Loading…</div>`;
+
+  // Load the route onto the map using the shared loader
+  loadRouteById(routeId).then(() => {
+    // After load, show stop list in the panel
+    content.innerHTML = "";
+    const stops = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
+    if (!stops.length) {
+      content.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">No stops.</div>`;
+      return;
+    }
+    stops.forEach((s, i) => {
+      const row = document.createElement("div");
+      row.className = "flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0";
+      const num = document.createElement("span");
+      num.className = "text-xs text-gray-400 font-medium w-4 shrink-0 pt-px";
+      num.textContent = i + 1;
+      const name = document.createElement("span");
+      name.className = "text-xs text-gray-700 leading-snug";
+      name.textContent = s.name;
+      if (s.arrival) name.className += " font-medium text-green-700";
+      row.appendChild(num);
+      row.appendChild(name);
+      content.appendChild(row);
+    });
+  }).catch(() => {
+    content.innerHTML = `<div class="text-xs text-red-400 text-center py-4">Failed to load.</div>`;
+  });
+}
+
+/* ── BREEZEWAY TASK OVERLAY (after import) ─────────────────────── */
+
+// Single-employee: show task content without tabs
 function _bwShowTaskSidebar(date, matched) {
   if (!matched.length) return;
   _bwByAssignee = null;
   _bwActiveDate = date;
-
-  const sidebar = document.getElementById("bwTaskSidebar");
-  const tabsEl  = document.getElementById("bwTaskTabs");
-  const dateEl  = document.getElementById("bwTaskSidebarDate");
-
-  const d = new Date(date + "T00:00:00");
-  dateEl.textContent = d.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"});
-  tabsEl.innerHTML = "";
-  tabsEl.classList.add("hidden");
-
-  _bwRenderTaskContent(matched);
-  sidebar.classList.remove("hidden");
+  _bwTasksByPropName = {};
+  for (const p of matched) _bwTasksByPropName[p.name] = p.tasks || [];
+  _syncSidebarToSchedule();
+  _expandSidebarIfMinimized();
 }
 
-// Multi-employee sidebar with tabs
+// Multi-employee: replace tabs with employee tabs
 function _bwShowTaskSidebarMulti(date, byAssignee) {
   _bwByAssignee = byAssignee;
   _bwActiveDate = date;
 
-  const sidebar = document.getElementById("bwTaskSidebar");
-  const tabsEl  = document.getElementById("bwTaskTabs");
-  const dateEl  = document.getElementById("bwTaskSidebarDate");
-
-  const d = new Date(date + "T00:00:00");
-  dateEl.textContent = d.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"});
-
-  // Build tabs
+  const tabsEl = document.getElementById("bwTaskTabs");
   tabsEl.innerHTML = "";
-  tabsEl.classList.remove("hidden");
+  tabsEl.style.display = "";
+
   for (const name of Object.keys(byAssignee)) {
     const btn = document.createElement("button");
     btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
@@ -839,26 +940,37 @@ function _bwShowTaskSidebarMulti(date, byAssignee) {
     tabsEl.appendChild(btn);
   }
 
-  // Auto-select first tab
   const firstName = Object.keys(byAssignee)[0];
   if (firstName) _bwSelectTab(firstName);
 
-  sidebar.classList.remove("hidden");
+  _expandSidebarIfMinimized();
+}
+
+function _expandSidebarIfMinimized() {
+  if (_bwSidebarMinimized) {
+    _bwSidebarMinimized = false;
+    const sidebar = document.getElementById("bwTaskSidebar");
+    const chevron = document.getElementById("bwSidebarChevron");
+    const header  = document.getElementById("bwTaskSidebarHeader");
+    const content = document.getElementById("bwTaskSidebarContent");
+    sidebar.style.width   = "18rem";
+    header.style.display  = "";
+    content.style.display = "";
+    chevron.textContent   = "›";
+    chevron.title         = "Minimize";
+  }
 }
 
 function _bwSelectTab(name) {
+  _activeRouteTab = name;
   const tabsEl = document.getElementById("bwTaskTabs");
-
-  // Update tab active styles
   for (const btn of tabsEl.querySelectorAll("button")) {
-    if (btn.dataset.employee === name) {
-      btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-indigo-500 text-indigo-700 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
-    } else {
-      btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
-    }
+    const active = btn.dataset.employee === name;
+    btn.className = active
+      ? "px-3 py-2.5 text-xs font-medium border-b-2 border-indigo-500 text-indigo-700 whitespace-nowrap cursor-pointer bg-transparent shrink-0"
+      : "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
   }
 
-  // Swap stops
   const data = _bwByAssignee[name] || {};
   clearRouteMarkers();
   if (typeof routeLayer !== "undefined" && routeLayer) {
@@ -869,16 +981,16 @@ function _bwSelectTab(name) {
   optimizedSchedule = [];
   isOptimized       = false;
   durationMatrix    = [];
+
+  // Build prop→tasks map for sidebar sync
+  _bwTasksByPropName = {};
+  for (const p of (data.matched || [])) _bwTasksByPropName[p.name] = p.tasks || [];
+
   renderStops();
-  for (const p of (data.matched || [])) {
-    addStop(p, !!p.arrival, false);
-  }
+  for (const p of (data.matched || [])) addStop(p, !!p.arrival, false);
   _bwPlaceMarkers();
-
-  // Keep route fields in sync with the active tab
   document.getElementById("assignedToField").value = name;
-
-  _bwRenderTaskContent(data.matched || []);
+  _syncSidebarToSchedule();
 }
 
 function _bwPlaceMarkers() {
@@ -894,6 +1006,83 @@ function _bwPlaceMarkers() {
     bounds.push([stop.lat, stop.lng]);
   }
   if (bounds.length) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
+  _syncSidebarToSchedule();
+}
+
+function _syncSidebarToSchedule() {
+  const content = document.getElementById("bwTaskSidebarContent");
+  if (!content || _bwSidebarMinimized) return;
+
+  // Determine current stop order
+  const stops = isOptimized
+    ? optimizedSchedule.filter(s => !s.isLunch && !s.isGap)
+    : selectedStops;
+
+  const hasBwTasks = Object.keys(_bwTasksByPropName).length > 0;
+
+  if (!stops.length) {
+    if (hasBwTasks) content.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">No stops yet.</div>`;
+    return;
+  }
+
+  // Daily-routes mode (no BW tasks): keep stop list in sync with schedule order
+  if (!hasBwTasks) {
+    if (typeof _activeRouteTab !== "number") return;
+    content.innerHTML = "";
+    stops.forEach((s, i) => {
+      const row = document.createElement("div");
+      row.className = "flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0";
+      const num = document.createElement("span");
+      num.className = "text-xs text-gray-400 font-medium w-4 shrink-0 pt-px";
+      num.textContent = i + 1;
+      const name = document.createElement("span");
+      name.className = "text-xs leading-snug " + (s.arrival ? "font-medium text-green-700" : "text-gray-700");
+      name.textContent = s.name;
+      row.appendChild(num); row.appendChild(name);
+      content.appendChild(row);
+    });
+    return;
+  }
+
+  // BW-tasks mode: show stops in current schedule order with their tasks
+  content.innerHTML = "";
+  stops.forEach((s, i) => {
+    const tasks = _bwTasksByPropName[s.name] || [];
+
+    const card = document.createElement("div");
+    card.className = "flex gap-2 py-1.5 border-b border-gray-100 last:border-0";
+
+    const num = document.createElement("span");
+    num.className = "text-xs text-gray-400 font-medium w-4 shrink-0 pt-0.5";
+    num.textContent = i + 1;
+
+    const body = document.createElement("div");
+    body.className = "flex-1 min-w-0";
+
+    const propName = document.createElement("div");
+    propName.className = "text-xs font-semibold truncate " + (s.arrival ? "text-green-700" : "text-gray-800");
+    propName.textContent = s.name;
+    body.appendChild(propName);
+
+    for (const t of tasks) {
+      const taskRow = document.createElement("div");
+      taskRow.className = "flex items-baseline gap-1 mt-0.5";
+      const tname = document.createElement("span");
+      tname.className = "text-xs text-gray-600";
+      tname.textContent = t.task_name;
+      taskRow.appendChild(tname);
+      if (t.assignees && t.assignees.length) {
+        const asgn = document.createElement("span");
+        asgn.className = "text-xs text-gray-400";
+        asgn.textContent = "· " + t.assignees.join(", ");
+        taskRow.appendChild(asgn);
+      }
+      body.appendChild(taskRow);
+    }
+
+    card.appendChild(num); card.appendChild(body);
+    content.appendChild(card);
+  });
 }
 
 function _bwRenderTaskContent(matched) {
@@ -901,10 +1090,7 @@ function _bwRenderTaskContent(matched) {
   content.innerHTML = "";
 
   if (!matched.length) {
-    const empty = document.createElement("div");
-    empty.className = "text-xs text-gray-400 px-1 py-3 text-center";
-    empty.textContent = "No stops found.";
-    content.appendChild(empty);
+    content.innerHTML = `<div class="text-xs text-gray-400 px-1 py-3 text-center">No stops found.</div>`;
     return;
   }
 
@@ -920,22 +1106,18 @@ function _bwRenderTaskContent(matched) {
     for (const t of (p.tasks || [])) {
       const row   = document.createElement("div");
       row.className = "mb-1";
-
       const tname = document.createElement("div");
       tname.className = "text-xs font-medium text-gray-700";
       tname.textContent = t.task_name;
       row.appendChild(tname);
-
       if (t.assignees && t.assignees.length) {
         const asgn = document.createElement("div");
         asgn.className = "text-xs text-gray-500 pl-2";
         asgn.textContent = t.assignees.join(", ");
         row.appendChild(asgn);
       }
-
       card.appendChild(row);
     }
-
     content.appendChild(card);
   }
 }

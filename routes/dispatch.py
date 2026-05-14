@@ -922,6 +922,25 @@ def view_route(route_id):
 
 # ── Breezeway import endpoint ─────────────────────────────────────
 
+@dispatch_bp.route("/api/routes-for-date")
+@login_required
+def routes_for_date():
+    date_str = (request.args.get("date") or "").strip()
+    if not date_str:
+        return jsonify({"routes": []})
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("""
+        SELECT id, name, assigned_to, route_date
+        FROM saved_routes
+        WHERE route_date = %s
+        ORDER BY assigned_to ASC, name ASC
+    """, (date_str,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify({"routes": [dict(r) for r in rows]})
+
+
 @dispatch_bp.route("/api/bw-import", methods=["POST"])
 @login_required
 def bw_import():

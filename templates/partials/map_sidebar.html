@@ -404,20 +404,28 @@
 
   <div id="map" class="flex-1"></div>
 
-  <!-- Right sidebar: Breezeway task summary (shown after import) -->
-  <div id="bwTaskSidebar" class="hidden bg-white border-l border-gray-200 flex flex-col shrink-0 transition-all" style="height:100%;width:18rem">
-    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
-      <div id="bwTaskSidebarHeader">
-        <div class="text-sm font-semibold text-gray-800">Breezeway Tasks</div>
-        <div id="bwTaskSidebarDate" class="text-xs text-gray-400 mt-0.5"></div>
+  <!-- Right panel: Daily routes + Breezeway tasks (always present) -->
+  <div id="bwTaskSidebar" class="bg-white border-l border-gray-200 flex flex-col shrink-0" style="height:100%;width:2.5rem">
+
+    <!-- Header — always visible -->
+    <div class="border-b border-gray-200 flex items-center shrink-0" style="min-height:2.75rem">
+      <button onclick="bwSidebarMinimize()" id="bwSidebarChevron" title="Expand"
+              class="w-full h-full flex items-center justify-center text-gray-400 hover:text-gray-700
+                     border-none bg-transparent cursor-pointer text-base py-3">‹</button>
+      <div id="bwTaskSidebarHeader" class="hidden flex-1 min-w-0 px-3 py-2.5">
+        <div class="text-sm font-semibold text-gray-800 leading-tight">Daily Routes</div>
+        <input id="dailyRoutesDate" type="date"
+               class="mt-1 w-full border border-gray-200 rounded text-xs px-1.5 py-0.5
+                      focus:outline-none focus:ring-1 focus:ring-indigo-400 text-gray-600">
       </div>
-      <button onclick="bwSidebarMinimize()"
-              id="bwSidebarChevron"
-              class="text-gray-400 hover:text-gray-600 leading-none cursor-pointer border-none bg-transparent text-base">›</button>
     </div>
-    <!-- Tab bar — only visible in multi-employee mode -->
+
+    <!-- Route tabs — one per employee saved for the selected date -->
     <div id="bwTaskTabs" class="hidden border-b border-gray-200 overflow-x-auto shrink-0 flex"></div>
+
+    <!-- Content area -->
     <div id="bwTaskSidebarContent" class="overflow-y-auto px-3 py-2 space-y-2" style="flex:1 1 0;min-height:0"></div>
+
   </div>
 
 </div>
