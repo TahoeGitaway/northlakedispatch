@@ -1019,14 +1019,6 @@ def bw_import():
         return jsonify({"matched": [], "unmatched": [],
                         "message": "No Breezeway tasks found for that date."})
 
-    # Fetch same-day check-ins once; build a set of property_ids with arrivals
-    from routes.briefing import _fetch_breezeway_checkins, _classify_reservation
-    checkin_pids = {
-        str(r.get("property_id"))
-        for r in _fetch_breezeway_checkins(date_str)
-        if _classify_reservation(r) != "block"
-    }
-
     # Load DB properties once
     conn = get_db()
     cur  = get_cursor(conn)
@@ -1037,6 +1029,20 @@ def bw_import():
     rows = cur.fetchall()
     cur.close(); conn.close()
     db_props = {r["Property Name"].lower().strip(): dict(r) for r in rows}
+
+    # Fetch same-day check-ins; match to local DB property names via fuzzy matching
+    # (ID-based matching is unreliable across Breezeway API endpoints)
+    from routes.briefing import (
+        _fetch_breezeway_checkins, _classify_reservation, _get_property_name
+    )
+    checkin_db_names = set()
+    for r in _fetch_breezeway_checkins(date_str):
+        if _classify_reservation(r) == "block":
+            continue
+        bw_name = _get_property_name(r.get("property_id"))
+        row = _match_local_property(bw_name, db_props)
+        if row:
+            checkin_db_names.add(row["Property Name"])
 
     def _filter_by_assignee(tasks, asgn_lower):
         filtered = []
@@ -1088,13 +1094,12 @@ def bw_import():
         for bw_name in bw_names:
             row = _match_local_property(bw_name, db_props)
             if row:
-                pid = bw_name_homeid.get(bw_name, "")
                 matched.append({
                     "name":    row["Property Name"],
                     "lat":     float(row["Latitude"]),
                     "lng":     float(row["Longitude"]),
                     "tasks":   bw_name_tasks.get(bw_name, []),
-                    "arrival": pid in checkin_pids,
+                    "arrival": row["Property Name"] in checkin_db_names,
                 })
             else:
                 unmatched.append(bw_name)
