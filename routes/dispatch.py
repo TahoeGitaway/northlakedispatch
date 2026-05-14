@@ -927,9 +927,10 @@ def view_route(route_id):
 def bw_import():
     """Fetch Breezeway tasks for a given date/assignee and return matched local properties."""
     from routes.briefing import (
-        _get_breezeway_token, _fetch_bw_endpoint, _fetch_bw_tasks,
-        _get_property_name, _ensure_property_cache,
+        _get_breezeway_token, _fetch_bw_endpoint,
+        _get_property_name, _ensure_property_cache, _get_live_ref_cache,
     )
+    from concurrent.futures import ThreadPoolExecutor
 
     body     = request.get_json() or {}
     date_str = (body.get("date") or "").strip()
@@ -942,28 +943,39 @@ def bw_import():
     if not token:
         return jsonify({"error": "Could not authenticate with Breezeway"}), 503
 
-    # Try the known-good task endpoint with several date-param conventions
-    results = []
-    err     = ""
-    for date_params in [
-        {"scheduled_date": f"{date_str},{date_str}"},
-        {"start_date": date_str, "end_date": date_str},
-        {"date": date_str},
-    ]:
-        r, e, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task/", date_params)
-        if status == 200:
-            results = r
-            break
-        err = e or err
+    # /public/inventory/v1/task requires reference_property_id — fetch per-property in parallel
+    _ensure_property_cache()
+    ref_cache = _get_live_ref_cache()   # {bw_property_id: reference_property_id}
 
-    if not results and err:
-        # Last-resort: let _fetch_bw_tasks try all known paths
-        results, err = _fetch_bw_tasks(token, {}, [
+    if not ref_cache:
+        return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
+
+    def _tasks_for_ref(ref_id):
+        """Fetch tasks for one reference_property_id, trying date-param formats."""
+        for dp in [
             {"scheduled_date": f"{date_str},{date_str}"},
             {"start_date": date_str, "end_date": date_str},
-        ])
-        if err and not results:
-            return jsonify({"error": f"Breezeway task fetch failed: {err}"}), 502
+            {"date": date_str},
+        ]:
+            r, _, status = _fetch_bw_endpoint(
+                token, "/public/inventory/v1/task",
+                {"reference_property_id": ref_id, **dp},
+            )
+            if status == 200:
+                return r
+        return []
+
+    # Build unique set of ref IDs to query (prefer explicit ref_id, fall back to bw_pid)
+    seen_refs = {}
+    for bw_pid, ref_id in ref_cache.items():
+        use = ref_id or bw_pid
+        if use and use not in seen_refs:
+            seen_refs[use] = bw_pid
+
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for tasks in executor.map(_tasks_for_ref, list(seen_refs.keys())):
+            results.extend(tasks)
 
     # Filter by assignee (partial, case-insensitive)
     if assignee and results:
