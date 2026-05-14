@@ -692,10 +692,9 @@ async function runBwImport() {
     return;
   }
 
-  btn.disabled         = true;
-  btn.textContent      = "Importing…";
-  btn.style.background = "#6366f1";
-  resultEl.style.display = "none";
+  btn.disabled    = true;
+  btn.textContent = "Importing…";
+  resultEl.classList.add("hidden");
 
   try {
     const res  = await fetch("/api/bw-import", {
@@ -729,20 +728,21 @@ async function runBwImport() {
   } catch (_) {
     _bwImportMsg("Network error — could not reach server.", "red");
   } finally {
-    btn.disabled         = false;
-    btn.textContent      = "Import Stops";
-    btn.style.background = "#4f46e5";
+    btn.disabled      = false;
+    btn.textContent   = "Import Stops";
+    btn.style.cssText = "";
   }
 }
 
 function _bwImportMsg(text, color) {
   const el = document.getElementById("bwImportResult");
-  const styles = {
+  const styleMap = {
     green: "background:#f0fdf4; color:#15803d;",
     amber: "background:#fffbeb; color:#b45309;",
     red:   "background:#fef2f2; color:#b91c1c;",
     gray:  "background:#f9fafb; color:#4b5563;",
-  }[color] || "background:#f9fafb; color:#4b5563;";
-  el.style.cssText = `display:block; margin-top:6px; padding:6px 10px; font-size:0.75rem; border-radius:8px; line-height:1.5; ${styles}`;
+  };
+  el.style.cssText = styleMap[color] || styleMap.gray;
   el.textContent = text;
+  el.classList.remove("hidden");
 }
