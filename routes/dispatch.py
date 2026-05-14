@@ -457,12 +457,20 @@ def _solve_route(
     def time_callback(from_index, to_index):
         fn = manager.IndexToNode(from_index)
         tn = manager.IndexToNode(to_index)
-        return int((duration_matrix[fn][tn] or 0) + (service_times_sec[fn] or 0))
+        drive = float(duration_matrix[fn][tn] or 0)
+        if math.isnan(drive): drive = 0.0
+        svc = float(service_times_sec[fn] or 0)
+        if math.isnan(svc): svc = 0.0
+        return max(0, int(drive + svc))
 
     transit_cb = routing.RegisterTransitCallback(time_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_cb)
 
-    horizon = 24 * 60 * 60
+    # Horizon must exceed worst-case route time. 86 400 s (24 h) handles most
+    # days, but 8+ properties with 3-hour cleans hits 86 400 s of service alone.
+    # Scale up so OR-Tools can always find a feasible solution.
+    total_svc = sum(int(t or 0) for t in service_times_sec)
+    horizon = max(86400, total_svc * 2 + 7200)
     routing.AddDimension(transit_cb, horizon, horizon, True, "Time")
     time_dim = routing.GetDimensionOrDie("Time")
 

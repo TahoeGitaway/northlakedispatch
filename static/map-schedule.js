@@ -554,6 +554,7 @@ function renderSchedule() {
         </div>`;
       li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
       li.addEventListener("mouseleave", () => { const m=markers[stop.name]; if(m) m.closePopup(); });
+      li.addEventListener("click", e => { if(e.target.closest("button,select")) return; const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
       list.appendChild(li); num++; return;
     }
 
@@ -650,6 +651,7 @@ function renderSchedule() {
 
     li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
     li.addEventListener("mouseleave", () => { const m=markers[stop.name]; if(m) m.closePopup(); });
+    li.addEventListener("click", e => { if(e.target.closest("button,select")) return; const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });
     wireDragEvents(li, si);
     list.appendChild(li);
     num++;

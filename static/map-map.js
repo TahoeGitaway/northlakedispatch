@@ -45,22 +45,23 @@ async function redrawRouteOnMap(precomputedPolyline = null) {
 
   const allPoints = [startLocation, ...real];
 
-  // ── If Google Maps geometry was pre-computed (e.g. from /optimize response), draw it now ──
-  if (precomputedPolyline && precomputedPolyline.length > 1) {
-    routeLayer = L.polyline(precomputedPolyline, { color:"#6366f1", weight:5 }).addTo(map);
-    map.invalidateSize();
-    map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 14 });
-  } else {
-    // Draw dashed straight-line fallback immediately while fetching real geometry
-    const latlngs = allPoints.map(s => [s.lat, s.lng]);
-    routeLayer = L.polyline(latlngs, {
-      color:"#94a3b8", weight:3, dashArray:"8,6", opacity:0.6
-    }).addTo(map);
-    map.invalidateSize();
-    map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 14 });
-  }
+  // ── Draw route polyline (wrapped so a bad polyline never blocks marker rendering) ──
+  try {
+    if (precomputedPolyline && precomputedPolyline.length > 1) {
+      routeLayer = L.polyline(precomputedPolyline, { color:"#6366f1", weight:5 }).addTo(map);
+      map.invalidateSize();
+      map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 14 });
+    } else {
+      const latlngs = allPoints.map(s => [s.lat, s.lng]);
+      routeLayer = L.polyline(latlngs, {
+        color:"#94a3b8", weight:3, dashArray:"8,6", opacity:0.6
+      }).addTo(map);
+      map.invalidateSize();
+      map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 14 });
+    }
+  } catch(_) {}
 
-  // ── Add markers now (no geometry dependency) ──
+  // ── Add markers (always runs, even if polyline above threw) ──
   let num = 1;
   real.forEach(stop => {
     const dep = minutesToHHMM(stop.eta_minutes + stop.serviceMinutes);
