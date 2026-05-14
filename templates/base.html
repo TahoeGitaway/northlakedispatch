@@ -163,10 +163,13 @@
 
     async function dismissPriAlert(key, rowEl) {
       rowEl.style.opacity = "0.4";
-      await fetch("/api/pri-alert/dismiss", {
-        method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({key}),
-      });
+      try {
+        const res = await fetch("/api/pri-alert/dismiss", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({key}),
+        });
+        if (!res.ok) { rowEl.style.opacity = "1"; return; }
+      } catch { rowEl.style.opacity = "1"; return; }
       rowEl.remove();
       const banner = document.getElementById("priAlertBanner");
       if (!banner.querySelector("[onclick]")) banner.classList.add("hidden");

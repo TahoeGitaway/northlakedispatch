@@ -928,7 +928,8 @@ def bw_import():
     """Fetch Breezeway tasks for a given date/assignee and return matched local properties."""
     from routes.briefing import (
         _get_breezeway_token, _fetch_bw_endpoint,
-        _get_property_name, _ensure_property_cache, _get_live_ref_cache,
+        _get_property_name, _ensure_property_cache,
+        _get_live_property_cache, _get_live_ref_cache,
     )
     from concurrent.futures import ThreadPoolExecutor
 
@@ -943,15 +944,25 @@ def bw_import():
     if not token:
         return jsonify({"error": "Could not authenticate with Breezeway"}), 503
 
-    # /public/inventory/v1/task requires reference_property_id — fetch per-property in parallel
+    # /public/inventory/v1/task requires reference_property_id — fetch per-property in parallel.
+    # Try: (1) explicit reference_property_id from property cache, (2) raw bw property id.
     _ensure_property_cache()
-    ref_cache = _get_live_ref_cache()   # {bw_property_id: reference_property_id}
+    prop_cache = _get_live_property_cache()  # {bw_pid: name} — ALL properties
+    ref_cache  = _get_live_ref_cache()       # {bw_pid: reference_property_id} — only those with one
 
-    if not ref_cache:
+    if not prop_cache:
         return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
 
+    # For each property, build a prioritized list of IDs to try as reference_property_id
+    # ref_cache value (external ref ID) first, then the raw bw_pid
+    pid_candidates = {}  # ref_value -> bw_pid
+    for bw_pid in prop_cache:
+        ref_id = ref_cache.get(bw_pid)
+        candidate = ref_id if ref_id else str(bw_pid)
+        if candidate not in pid_candidates:
+            pid_candidates[candidate] = bw_pid
+
     def _tasks_for_ref(ref_id):
-        """Fetch tasks for one reference_property_id, trying date-param formats."""
         for dp in [
             {"scheduled_date": f"{date_str},{date_str}"},
             {"start_date": date_str, "end_date": date_str},
@@ -965,16 +976,9 @@ def bw_import():
                 return r
         return []
 
-    # Build unique set of ref IDs to query (prefer explicit ref_id, fall back to bw_pid)
-    seen_refs = {}
-    for bw_pid, ref_id in ref_cache.items():
-        use = ref_id or bw_pid
-        if use and use not in seen_refs:
-            seen_refs[use] = bw_pid
-
     results = []
     with ThreadPoolExecutor(max_workers=8) as executor:
-        for tasks in executor.map(_tasks_for_ref, list(seen_refs.keys())):
+        for tasks in executor.map(_tasks_for_ref, list(pid_candidates.keys())):
             results.extend(tasks)
 
     # Filter by assignee (partial, case-insensitive)
