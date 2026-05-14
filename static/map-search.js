@@ -716,7 +716,7 @@ async function runBwImport() {
     if (data.by_assignee) {
       // Multi-employee: load first employee's stops, show tabbed sidebar
       _bwShowTaskSidebarMulti(date, data.by_assignee);
-      const first = Object.values(data.by_assignee)[0] || {};
+      document.getElementById("routeDateField").value = date;
       _bwImportMsg(
         `Loaded ${Object.keys(data.by_assignee).length} employees — tab to switch routes.`,
         "green"
@@ -739,6 +739,9 @@ async function runBwImport() {
       }
       _bwImportMsg(msg, color);
       _bwShowTaskSidebar(date, data.matched || []);
+      _bwPlaceMarkers();
+      document.getElementById("routeDateField").value  = date;
+      document.getElementById("assignedToField").value = assignees[0] || "";
     }
   } catch (_) {
     _bwImportMsg("Network error — could not reach server.", "red");
@@ -765,6 +768,33 @@ function _bwImportMsg(text, color) {
 // Stored multi-employee data for tab switching
 let _bwByAssignee = null;
 let _bwActiveDate = null;
+
+let _bwSidebarMinimized = false;
+
+function bwSidebarMinimize() {
+  _bwSidebarMinimized = !_bwSidebarMinimized;
+  const sidebar  = document.getElementById("bwTaskSidebar");
+  const tabs     = document.getElementById("bwTaskTabs");
+  const content  = document.getElementById("bwTaskSidebarContent");
+  const header   = document.getElementById("bwTaskSidebarHeader");
+  const chevron  = document.getElementById("bwSidebarChevron");
+  if (_bwSidebarMinimized) {
+    sidebar.style.width  = "2.5rem";
+    tabs.style.display   = "none";
+    content.style.display = "none";
+    header.style.display  = "none";
+    chevron.textContent  = "‹";
+    chevron.title        = "Expand";
+  } else {
+    sidebar.style.width   = "18rem";
+    if (_bwByAssignee) tabs.style.display = "";
+    content.style.display = "";
+    header.style.display  = "";
+    chevron.textContent   = "›";
+    chevron.title         = "Minimize";
+  }
+}
+
 
 // Single-employee sidebar (no tabs)
 function _bwShowTaskSidebar(date, matched) {
@@ -828,23 +858,42 @@ function _bwSelectTab(name) {
     }
   }
 
-  // Swap stops on the map
+  // Swap stops
   const data = _bwByAssignee[name] || {};
   clearRouteMarkers();
   if (typeof routeLayer !== "undefined" && routeLayer) {
     map.removeLayer(routeLayer);
     routeLayer = null;
   }
-  selectedStops    = [];
+  selectedStops     = [];
   optimizedSchedule = [];
-  isOptimized      = false;
-  durationMatrix   = [];
+  isOptimized       = false;
+  durationMatrix    = [];
   renderStops();
   for (const p of (data.matched || [])) {
     addStop(p, !!p.arrival, false);
   }
+  _bwPlaceMarkers();
+
+  // Keep route fields in sync with the active tab
+  document.getElementById("assignedToField").value = name;
 
   _bwRenderTaskContent(data.matched || []);
+}
+
+function _bwPlaceMarkers() {
+  clearRouteMarkers();
+  const bounds = [];
+  for (const stop of selectedStops) {
+    if (!stop.lat || !stop.lng) continue;
+    const m = L.marker([stop.lat, stop.lng], { icon: pickStopIcon(stop) })
+      .addTo(map)
+      .bindPopup(`<b>${stop.name}</b>${stop.arrival ? "<br><span style='color:#16a34a;font-weight:600'>Check-in</span>" : ""}`);
+    activeRouteMarkers.push(m);
+    markers[stop.name] = m;
+    bounds.push([stop.lat, stop.lng]);
+  }
+  if (bounds.length) map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
 }
 
 function _bwRenderTaskContent(matched) {

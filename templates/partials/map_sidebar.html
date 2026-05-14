@@ -405,14 +405,15 @@
   <div id="map" class="flex-1"></div>
 
   <!-- Right sidebar: Breezeway task summary (shown after import) -->
-  <div id="bwTaskSidebar" class="hidden w-72 bg-white border-l border-gray-200 flex flex-col shrink-0" style="height:100%">
+  <div id="bwTaskSidebar" class="hidden bg-white border-l border-gray-200 flex flex-col shrink-0 transition-all" style="height:100%;width:18rem">
     <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
-      <div>
+      <div id="bwTaskSidebarHeader">
         <div class="text-sm font-semibold text-gray-800">Breezeway Tasks</div>
         <div id="bwTaskSidebarDate" class="text-xs text-gray-400 mt-0.5"></div>
       </div>
-      <button onclick="document.getElementById('bwTaskSidebar').classList.add('hidden')"
-              class="text-gray-400 hover:text-gray-600 text-xl leading-none cursor-pointer border-none bg-transparent">×</button>
+      <button onclick="bwSidebarMinimize()"
+              id="bwSidebarChevron"
+              class="text-gray-400 hover:text-gray-600 leading-none cursor-pointer border-none bg-transparent text-base">›</button>
     </div>
     <!-- Tab bar — only visible in multi-employee mode -->
     <div id="bwTaskTabs" class="hidden border-b border-gray-200 overflow-x-auto shrink-0 flex"></div>
