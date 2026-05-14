@@ -207,11 +207,12 @@ function toggleSchedulePriority(id) {
 }
 
 function setServiceMinutes(id, val) {
+  let found = false;
   [selectedStops, optimizedSchedule].forEach(arr => {
     const s = arr.find(s => s._id === id);
-    if (s) s.serviceMinutes = val;
+    if (s) { s.serviceMinutes = val; found = true; }
   });
-  if (isOptimized) { recalculateTimes(); renderSchedule(); }
+  if (found && optimizedSchedule.length) { recalculateTimes(); renderSchedule(); }
 }
 
 function setGapMinutes(id, val) {

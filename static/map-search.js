@@ -982,6 +982,12 @@ function _bwSelectTab(name) {
   isOptimized       = false;
   durationMatrix    = [];
 
+  // Hide stale post-opt DOM so old schedule cards don't linger
+  document.getElementById("scheduleSection").classList.add("hidden");
+  document.getElementById("workInSection").classList.add("hidden");
+  document.getElementById("recalcTimesBtn").classList.add("hidden");
+  document.getElementById("changeStartBtn").classList.add("hidden");
+
   // Build prop→tasks map for sidebar sync
   _bwTasksByPropName = {};
   for (const p of (data.matched || [])) _bwTasksByPropName[p.name] = p.tasks || [];
