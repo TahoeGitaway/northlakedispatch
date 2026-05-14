@@ -142,12 +142,15 @@
                           focus:outline-none focus:ring-2 focus:ring-indigo-400">
           </div>
           <div class="flex-1 min-w-0">
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Assigned to</label>
-            <input id="bwImportAssignee" type="text" placeholder="Sarah, John…"
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+              Employee(s)
+            </label>
+            <input id="bwImportAssignee" type="text" placeholder="e.g. Sarah"
                    class="w-full border border-gray-300 rounded-lg text-sm px-2 py-1.5
                           focus:outline-none focus:ring-2 focus:ring-indigo-400">
           </div>
         </div>
+        <p class="text-xs text-gray-400 -mt-0.5">Separate multiple names with a comma to load each employee's stops in tabs.</p>
         <button id="bwImportBtn" onclick="runBwImport()"
                 class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium
                        py-2 px-3 rounded-lg transition-colors border-none cursor-pointer">

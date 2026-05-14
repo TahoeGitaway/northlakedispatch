@@ -989,6 +989,14 @@ def bw_import():
         return jsonify({"matched": [], "unmatched": [],
                         "message": "No Breezeway tasks found for that date."})
 
+    # Fetch same-day check-ins once; build a set of property_ids with arrivals
+    from routes.briefing import _fetch_breezeway_checkins, _classify_reservation
+    checkin_pids = {
+        str(r.get("property_id"))
+        for r in _fetch_breezeway_checkins(date_str)
+        if _classify_reservation(r) != "block"
+    }
+
     # Load DB properties once
     conn = get_db()
     cur  = get_cursor(conn)
@@ -1015,9 +1023,10 @@ def bw_import():
         return filtered
 
     def _matched_for(tasks_subset):
-        seen_ids      = set()
-        bw_names      = []
-        bw_name_tasks = {}
+        seen_ids       = set()
+        bw_names       = []
+        bw_name_tasks  = {}
+        bw_name_homeid = {}  # bw_name -> str(property_id) for arrival lookup
         for t in tasks_subset:
             home_id = t.get("home_id") or t.get("property_id")
             if home_id:
@@ -1025,6 +1034,7 @@ def bw_import():
                 if home_id not in seen_ids:
                     seen_ids.add(home_id)
                     bw_names.append(bw_name)
+                    bw_name_homeid[bw_name] = str(home_id)
             else:
                 bw_name = (t.get("property_name") or "").strip()
                 if bw_name and bw_name not in bw_names:
@@ -1048,11 +1058,13 @@ def bw_import():
         for bw_name in bw_names:
             row = _match_local_property(bw_name, db_props)
             if row:
+                pid = bw_name_homeid.get(bw_name, "")
                 matched.append({
-                    "name":  row["Property Name"],
-                    "lat":   float(row["Latitude"]),
-                    "lng":   float(row["Longitude"]),
-                    "tasks": bw_name_tasks.get(bw_name, []),
+                    "name":    row["Property Name"],
+                    "lat":     float(row["Latitude"]),
+                    "lng":     float(row["Longitude"]),
+                    "tasks":   bw_name_tasks.get(bw_name, []),
+                    "arrival": pid in checkin_pids,
                 })
             else:
                 unmatched.append(bw_name)

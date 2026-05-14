@@ -726,7 +726,7 @@ async function runBwImport() {
       let added = 0;
       for (const p of (data.matched || [])) {
         if (!selectedStops.find(s => s.name === p.name)) {
-          addStop(p, false, false);
+          addStop(p, !!p.arrival, false);
           added++;
         }
       }
@@ -841,7 +841,7 @@ function _bwSelectTab(name) {
   durationMatrix   = [];
   renderStops();
   for (const p of (data.matched || [])) {
-    addStop(p, false, false);
+    addStop(p, !!p.arrival, false);
   }
 
   _bwRenderTaskContent(data.matched || []);
