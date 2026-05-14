@@ -1027,7 +1027,6 @@ function _syncSidebarToSchedule() {
 
   // Daily-routes mode (no BW tasks): keep stop list in sync with schedule order
   if (!hasBwTasks) {
-    if (typeof _activeRouteTab !== "number") return;
     content.innerHTML = "";
     stops.forEach((s, i) => {
       const row = document.createElement("div");

@@ -103,13 +103,16 @@ def _google_distance_matrix(locations):
     mat = [[0.0] * n for _ in range(n)]
     # API limits: 25 origins, 25 destinations, 100 elements (origins×dests) per request.
     MAX_ORIG = 25
+    MAX_DEST = 25
     MAX_ELEM = 100
     try:
         for orig_start in range(0, n, MAX_ORIG):
             orig_end   = min(orig_start + MAX_ORIG, n)
             orig_count = orig_end - orig_start
             orig_pipe  = "|".join(f"{loc['lat']},{loc['lng']}" for loc in locations[orig_start:orig_end])
-            dest_batch = max(1, MAX_ELEM // orig_count)
+            # Cap at MAX_DEST — tail batches with few origins would otherwise
+            # exceed Google's 25-destination-per-request hard limit.
+            dest_batch = max(1, min(MAX_DEST, MAX_ELEM // orig_count))
 
             for dest_start in range(0, n, dest_batch):
                 dest_end  = min(dest_start + dest_batch, n)
