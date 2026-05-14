@@ -925,7 +925,7 @@ def view_route(route_id):
 @dispatch_bp.route("/api/bw-import", methods=["POST"])
 @login_required
 def bw_import():
-    """Fetch Breezeway tasks for a given date/assignee and return matched local properties."""
+    """Fetch Breezeway tasks for a date; group by assignee when multiple are requested."""
     from routes.briefing import (
         _get_breezeway_token, _fetch_bw_endpoint,
         _get_property_name, _ensure_property_cache,
@@ -935,7 +935,14 @@ def bw_import():
 
     body     = request.get_json() or {}
     date_str = (body.get("date") or "").strip()
-    assignee = (body.get("assignee") or "").strip().lower()
+
+    # Accept "assignees" (list) or legacy "assignee" (single string)
+    raw = body.get("assignees") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not raw and body.get("assignee"):
+        raw = [body["assignee"]]
+    assignees = [a.strip() for a in raw if a.strip()]
 
     if not date_str:
         return jsonify({"error": "date is required"}), 400
@@ -944,18 +951,14 @@ def bw_import():
     if not token:
         return jsonify({"error": "Could not authenticate with Breezeway"}), 503
 
-    # /public/inventory/v1/task requires reference_property_id — fetch per-property in parallel.
-    # Try: (1) explicit reference_property_id from property cache, (2) raw bw property id.
     _ensure_property_cache()
-    prop_cache = _get_live_property_cache()  # {bw_pid: name} — ALL properties
-    ref_cache  = _get_live_ref_cache()       # {bw_pid: reference_property_id} — only those with one
+    prop_cache = _get_live_property_cache()
+    ref_cache  = _get_live_ref_cache()
 
     if not prop_cache:
         return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
 
-    # For each property, build a prioritized list of IDs to try as reference_property_id
-    # ref_cache value (external ref ID) first, then the raw bw_pid
-    pid_candidates = {}  # ref_value -> bw_pid
+    pid_candidates = {}
     for bw_pid in prop_cache:
         ref_id = ref_cache.get(bw_pid)
         candidate = ref_id if ref_id else str(bw_pid)
@@ -976,64 +979,17 @@ def bw_import():
                 return r
         return []
 
-    results = []
+    # Single parallel fetch for the whole day — reused across all assignees
+    all_results = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         for tasks in executor.map(_tasks_for_ref, list(pid_candidates.keys())):
-            results.extend(tasks)
+            all_results.extend(tasks)
 
-    # Filter by assignee (partial, case-insensitive)
-    if assignee and results:
-        filtered = []
-        for t in results:
-            for a in (t.get("assignments") or []):
-                names = [
-                    a.get("name", ""),
-                    a.get("full_name", ""),
-                    f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip(),
-                ]
-                if any(assignee in n.lower() for n in names if n):
-                    filtered.append(t)
-                    break
-        results = filtered
-
-    if not results:
+    if not all_results:
         return jsonify({"matched": [], "unmatched": [],
-                        "message": "No Breezeway tasks found for that date/assignee."})
+                        "message": "No Breezeway tasks found for that date."})
 
-    # Resolve property names and collect task details per property
-    _ensure_property_cache()
-    seen_ids      = set()
-    bw_names      = []
-    bw_name_tasks = {}  # bw_name -> [{"task_name": ..., "assignees": [...]}]
-
-    for t in results:
-        home_id = t.get("home_id") or t.get("property_id")
-        if home_id:
-            bw_name = _get_property_name(home_id)
-            if home_id not in seen_ids:
-                seen_ids.add(home_id)
-                bw_names.append(bw_name)
-        else:
-            bw_name = (t.get("property_name") or "").strip()
-            if bw_name and bw_name not in bw_names:
-                bw_names.append(bw_name)
-
-        if bw_name:
-            task_name = (
-                t.get("name") or t.get("task_name") or
-                t.get("task_type") or t.get("type") or "Task"
-            ).strip()
-            assignees = []
-            for a in (t.get("assignments") or []):
-                n = (a.get("full_name") or a.get("name") or
-                     f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
-                if n:
-                    assignees.append(n)
-            bw_name_tasks.setdefault(bw_name, []).append(
-                {"task_name": task_name, "assignees": assignees}
-            )
-
-    # Load local DB properties for matching
+    # Load DB properties once
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
@@ -1044,18 +1000,74 @@ def bw_import():
     cur.close(); conn.close()
     db_props = {r["Property Name"].lower().strip(): dict(r) for r in rows}
 
-    matched   = []
-    unmatched = []
-    for bw_name in bw_names:
-        row = _match_local_property(bw_name, db_props)
-        if row:
-            matched.append({
-                "name":  row["Property Name"],
-                "lat":   float(row["Latitude"]),
-                "lng":   float(row["Longitude"]),
-                "tasks": bw_name_tasks.get(bw_name, []),
-            })
-        else:
-            unmatched.append(bw_name)
+    def _filter_by_assignee(tasks, asgn_lower):
+        filtered = []
+        for t in tasks:
+            for a in (t.get("assignments") or []):
+                names = [
+                    a.get("name", ""),
+                    a.get("full_name", ""),
+                    f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip(),
+                ]
+                if any(asgn_lower in n.lower() for n in names if n):
+                    filtered.append(t)
+                    break
+        return filtered
 
+    def _matched_for(tasks_subset):
+        seen_ids      = set()
+        bw_names      = []
+        bw_name_tasks = {}
+        for t in tasks_subset:
+            home_id = t.get("home_id") or t.get("property_id")
+            if home_id:
+                bw_name = _get_property_name(home_id)
+                if home_id not in seen_ids:
+                    seen_ids.add(home_id)
+                    bw_names.append(bw_name)
+            else:
+                bw_name = (t.get("property_name") or "").strip()
+                if bw_name and bw_name not in bw_names:
+                    bw_names.append(bw_name)
+            if bw_name:
+                task_name = (
+                    t.get("name") or t.get("task_name") or
+                    t.get("task_type") or t.get("type") or "Task"
+                ).strip()
+                asgn_list = []
+                for a in (t.get("assignments") or []):
+                    n = (a.get("full_name") or a.get("name") or
+                         f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
+                    if n:
+                        asgn_list.append(n)
+                bw_name_tasks.setdefault(bw_name, []).append(
+                    {"task_name": task_name, "assignees": asgn_list}
+                )
+        matched   = []
+        unmatched = []
+        for bw_name in bw_names:
+            row = _match_local_property(bw_name, db_props)
+            if row:
+                matched.append({
+                    "name":  row["Property Name"],
+                    "lat":   float(row["Latitude"]),
+                    "lng":   float(row["Longitude"]),
+                    "tasks": bw_name_tasks.get(bw_name, []),
+                })
+            else:
+                unmatched.append(bw_name)
+        return matched, unmatched
+
+    if len(assignees) > 1:
+        by_assignee = {}
+        for asgn in assignees:
+            matched, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
+            by_assignee[asgn] = {"matched": matched, "unmatched": unmatched}
+        return jsonify({"by_assignee": by_assignee})
+
+    subset = _filter_by_assignee(all_results, assignees[0].lower()) if assignees else all_results
+    matched, unmatched = _matched_for(subset)
+    if not matched and not unmatched:
+        return jsonify({"matched": [], "unmatched": [],
+                        "message": "No Breezeway tasks found for that date/assignee."})
     return jsonify({"matched": matched, "unmatched": unmatched})

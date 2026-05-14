@@ -682,15 +682,21 @@ async function runBwImport() {
     if (routeAssignee) assigneeInput.value = routeAssignee;
   }
 
-  const date     = dateInput.value;
-  const assignee = assigneeInput.value.trim();
-  const resultEl = document.getElementById("bwImportResult");
-  const btn      = document.getElementById("bwImportBtn");
+  const date      = dateInput.value;
+  const rawNames  = assigneeInput.value.trim();
+  const resultEl  = document.getElementById("bwImportResult");
+  const btn       = document.getElementById("bwImportBtn");
 
   if (!date) {
     _bwImportMsg("Please select a date.", "red");
     return;
   }
+
+  // Parse comma-separated names into list
+  const assignees = rawNames ? rawNames.split(",").map(s => s.trim()).filter(Boolean) : [];
+  const payload   = assignees.length > 1
+    ? {date, assignees}
+    : {date, assignee: assignees[0] || ""};
 
   btn.disabled    = true;
   btn.textContent = "Importing…";
@@ -700,32 +706,40 @@ async function runBwImport() {
     const res  = await fetch("/api/bw-import", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
-      body:    JSON.stringify({date, assignee}),
+      body:    JSON.stringify(payload),
     });
     const data = await res.json();
 
-    if (data.error) { _bwImportMsg(data.error, "red"); return; }
+    if (data.error)   { _bwImportMsg(data.error,   "red");  return; }
     if (data.message) { _bwImportMsg(data.message, "gray"); return; }
 
-    let added = 0;
-    for (const p of (data.matched || [])) {
-      if (!selectedStops.find(s => s.name === p.name)) {
-        addStop(p, false, false);
-        added++;
+    if (data.by_assignee) {
+      // Multi-employee: load first employee's stops, show tabbed sidebar
+      _bwShowTaskSidebarMulti(date, data.by_assignee);
+      const first = Object.values(data.by_assignee)[0] || {};
+      _bwImportMsg(
+        `Loaded ${Object.keys(data.by_assignee).length} employees — tab to switch routes.`,
+        "green"
+      );
+    } else {
+      // Single employee
+      let added = 0;
+      for (const p of (data.matched || [])) {
+        if (!selectedStops.find(s => s.name === p.name)) {
+          addStop(p, false, false);
+          added++;
+        }
       }
+      let msg   = added === 0 ? "All properties already in the list." : `Added ${added} stop${added !== 1 ? "s" : ""}.`;
+      let color = "green";
+      const unmatched = data.unmatched || [];
+      if (unmatched.length) {
+        msg  += ` Not found: ${unmatched.join(", ")}.`;
+        color = added > 0 ? "amber" : "red";
+      }
+      _bwImportMsg(msg, color);
+      _bwShowTaskSidebar(date, data.matched || []);
     }
-
-    let msg   = added === 0 ? "All properties already in the list." : `Added ${added} stop${added !== 1 ? "s" : ""}.`;
-    let color = "green";
-
-    const unmatched = data.unmatched || [];
-    if (unmatched.length) {
-      msg  += ` Not found in your property list: ${unmatched.join(", ")}.`;
-      color = added > 0 ? "amber" : "red";
-    }
-
-    _bwImportMsg(msg, color);
-    _bwShowTaskSidebar(date, data.matched || []);
   } catch (_) {
     _bwImportMsg("Network error — could not reach server.", "red");
   } finally {
@@ -748,16 +762,103 @@ function _bwImportMsg(text, color) {
   el.classList.remove("hidden");
 }
 
+// Stored multi-employee data for tab switching
+let _bwByAssignee = null;
+let _bwActiveDate = null;
+
+// Single-employee sidebar (no tabs)
 function _bwShowTaskSidebar(date, matched) {
   if (!matched.length) return;
+  _bwByAssignee = null;
+  _bwActiveDate = date;
+
   const sidebar = document.getElementById("bwTaskSidebar");
-  const content = document.getElementById("bwTaskSidebarContent");
+  const tabsEl  = document.getElementById("bwTaskTabs");
+  const dateEl  = document.getElementById("bwTaskSidebarDate");
+
+  const d = new Date(date + "T00:00:00");
+  dateEl.textContent = d.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"});
+  tabsEl.innerHTML = "";
+  tabsEl.classList.add("hidden");
+
+  _bwRenderTaskContent(matched);
+  sidebar.classList.remove("hidden");
+}
+
+// Multi-employee sidebar with tabs
+function _bwShowTaskSidebarMulti(date, byAssignee) {
+  _bwByAssignee = byAssignee;
+  _bwActiveDate = date;
+
+  const sidebar = document.getElementById("bwTaskSidebar");
+  const tabsEl  = document.getElementById("bwTaskTabs");
   const dateEl  = document.getElementById("bwTaskSidebarDate");
 
   const d = new Date(date + "T00:00:00");
   dateEl.textContent = d.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"});
 
+  // Build tabs
+  tabsEl.innerHTML = "";
+  tabsEl.classList.remove("hidden");
+  for (const name of Object.keys(byAssignee)) {
+    const btn = document.createElement("button");
+    btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
+    btn.textContent = name;
+    btn.dataset.employee = name;
+    btn.addEventListener("click", () => _bwSelectTab(name));
+    tabsEl.appendChild(btn);
+  }
+
+  // Auto-select first tab
+  const firstName = Object.keys(byAssignee)[0];
+  if (firstName) _bwSelectTab(firstName);
+
+  sidebar.classList.remove("hidden");
+}
+
+function _bwSelectTab(name) {
+  const tabsEl = document.getElementById("bwTaskTabs");
+
+  // Update tab active styles
+  for (const btn of tabsEl.querySelectorAll("button")) {
+    if (btn.dataset.employee === name) {
+      btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-indigo-500 text-indigo-700 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
+    } else {
+      btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
+    }
+  }
+
+  // Swap stops on the map
+  const data = _bwByAssignee[name] || {};
+  clearRouteMarkers();
+  if (typeof routeLayer !== "undefined" && routeLayer) {
+    map.removeLayer(routeLayer);
+    routeLayer = null;
+  }
+  selectedStops    = [];
+  optimizedSchedule = [];
+  isOptimized      = false;
+  durationMatrix   = [];
+  renderStops();
+  for (const p of (data.matched || [])) {
+    addStop(p, false, false);
+  }
+
+  _bwRenderTaskContent(data.matched || []);
+}
+
+function _bwRenderTaskContent(matched) {
+  const content = document.getElementById("bwTaskSidebarContent");
   content.innerHTML = "";
+
+  if (!matched.length) {
+    const empty = document.createElement("div");
+    empty.className = "text-xs text-gray-400 px-1 py-3 text-center";
+    empty.textContent = "No stops found.";
+    content.appendChild(empty);
+    return;
+  }
+
   for (const p of matched) {
     const card = document.createElement("div");
     card.className = "rounded-lg border border-gray-100 bg-gray-50 px-3 py-2";
@@ -768,7 +869,7 @@ function _bwShowTaskSidebar(date, matched) {
     card.appendChild(title);
 
     for (const t of (p.tasks || [])) {
-      const row = document.createElement("div");
+      const row   = document.createElement("div");
       row.className = "mb-1";
 
       const tname = document.createElement("div");
@@ -788,6 +889,4 @@ function _bwShowTaskSidebar(date, matched) {
 
     content.appendChild(card);
   }
-
-  sidebar.classList.remove("hidden");
 }

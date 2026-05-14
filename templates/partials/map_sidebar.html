@@ -143,7 +143,7 @@
           </div>
           <div class="flex-1 min-w-0">
             <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Assigned to</label>
-            <input id="bwImportAssignee" type="text" placeholder="e.g. Sarah"
+            <input id="bwImportAssignee" type="text" placeholder="Sarah, John…"
                    class="w-full border border-gray-300 rounded-lg text-sm px-2 py-1.5
                           focus:outline-none focus:ring-2 focus:ring-indigo-400">
           </div>
@@ -404,11 +404,15 @@
   <!-- Right sidebar: Breezeway task summary (shown after import) -->
   <div id="bwTaskSidebar" class="hidden w-72 bg-white border-l border-gray-200 flex flex-col shrink-0" style="height:100%">
     <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
-      <span class="text-sm font-semibold text-gray-800">Breezeway Tasks</span>
+      <div>
+        <div class="text-sm font-semibold text-gray-800">Breezeway Tasks</div>
+        <div id="bwTaskSidebarDate" class="text-xs text-gray-400 mt-0.5"></div>
+      </div>
       <button onclick="document.getElementById('bwTaskSidebar').classList.add('hidden')"
               class="text-gray-400 hover:text-gray-600 text-xl leading-none cursor-pointer border-none bg-transparent">×</button>
     </div>
-    <div id="bwTaskSidebarDate" class="px-4 py-1.5 text-xs text-gray-500 border-b border-gray-100 shrink-0"></div>
+    <!-- Tab bar — only visible in multi-employee mode -->
+    <div id="bwTaskTabs" class="hidden border-b border-gray-200 overflow-x-auto shrink-0 flex"></div>
     <div id="bwTaskSidebarContent" class="overflow-y-auto px-3 py-2 space-y-2" style="flex:1 1 0;min-height:0"></div>
   </div>
 
