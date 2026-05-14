@@ -190,7 +190,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
 
 /* ── SAVE MODAL ── */
 function openSaveModal() {
-  if (!optimizedSchedule.filter(s => !s.isLunch).length) { alert("Optimize a route first."); return; }
+  if (!optimizedSchedule.filter(s => !s.isLunch).length) { alert("Optimize the route first to generate a schedule before saving."); return; }
   document.getElementById("saveError").classList.add("hidden");
   document.getElementById("saveSuccess").classList.add("hidden");
 
@@ -541,8 +541,9 @@ async function recalcDriveTimes() {
 
 /* ── GOOGLE MAPS EXPORT ── */
 function exportToGoogleMaps() {
-  const real = optimizedSchedule.filter(s => !s.isLunch && s.lat);
-  if (!real.length) { alert("Optimize route first."); return; }
+  let real = optimizedSchedule.filter(s => !s.isLunch && s.lat);
+  if (!real.length) real = selectedStops.filter(s => s.lat);
+  if (!real.length) { alert("Add stops first."); return; }
   if (real.length > 10)
     alert(`Note: Google Maps displays up to 10 waypoints. All ${real.length} stops are included but Google may truncate the display.`);
   const coords = [
