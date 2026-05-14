@@ -337,20 +337,7 @@ async function submitUpdateRoute() {
 })();
 
 /* ── LOAD ROUTE ── */
-(async function checkLoadParam() {
-  const params = new URLSearchParams(window.location.search);
-  const loadId = params.get("load");
-  if (!loadId) {
-    const dateParam = params.get("date");
-    if (dateParam) {
-      window.history.replaceState({}, "", window.location.pathname);
-      document.getElementById("routeDateField").value = dateParam;
-      document.getElementById("saveRouteDate").value  = dateParam;
-    }
-    return;
-  }
-  window.history.replaceState({}, "", window.location.pathname);
-
+async function loadRouteById(loadId) {
   const overlay  = document.getElementById("routeLoadOverlay");
   const errorBar = document.getElementById("routeLoadError");
   const errorMsg = document.getElementById("routeLoadErrorMsg");
@@ -389,7 +376,6 @@ async function submitUpdateRoute() {
 
     isOptimized = true;
 
-    // Use saved start_time if present; fall back to inferring from first stop's eta
     if (data.start_time) {
       startMinutes = hhmmToMinutes(data.start_time);
     } else if (optimizedSchedule.length > 0 && optimizedSchedule[0].eta_minutes != null) {
@@ -399,9 +385,6 @@ async function submitUpdateRoute() {
     }
     document.getElementById("startTime").value = minutesToHHMM24(startMinutes);
 
-    // Build drive-time matrix directly from saved eta_minutes — no API call needed.
-    // These values were computed from the Google Maps matrix when the route was first
-    // optimized, so drive-time pills are exact and the route loads instantly.
     {
       const n = optimizedSchedule.length + 1;
       durationMatrix = Array.from({length: n}, () => Array(n).fill(0));
@@ -437,9 +420,9 @@ async function submitUpdateRoute() {
     document.getElementById("recalcTimesBtn").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.add("hidden");
     document.getElementById("updateRouteBtn").classList.remove("hidden");
-    document.getElementById("saveRouteName").value   = data.name;
-    document.getElementById("saveAssignedTo").value  = data.assigned_to || "";
-    document.getElementById("saveRouteDate").value   = data.route_date;
+    document.getElementById("saveRouteName").value    = data.name;
+    document.getElementById("saveAssignedTo").value   = data.assigned_to || "";
+    document.getElementById("saveRouteDate").value    = data.route_date;
     document.getElementById("routeNameField").value   = data.name;
     document.getElementById("assignedToField").value  = data.assigned_to || "";
     document.getElementById("routeDateField").value   = data.route_date;
@@ -452,7 +435,6 @@ async function submitUpdateRoute() {
       if (sidebarTeam) sidebarTeam.value = data.team_id;
     }
 
-    // Restore saved start/end locations — fall back to defaults if not saved
     if (data.start_location) {
       startLocation = data.start_location;
     } else {
@@ -480,6 +462,22 @@ async function submitUpdateRoute() {
       : "Could not load route. Check your connection and try again.";
     showLoadError(msg);
   }
+}
+
+(async function checkLoadParam() {
+  const params = new URLSearchParams(window.location.search);
+  const loadId = params.get("load");
+  if (!loadId) {
+    const dateParam = params.get("date");
+    if (dateParam) {
+      window.history.replaceState({}, "", window.location.pathname);
+      document.getElementById("routeDateField").value = dateParam;
+      document.getElementById("saveRouteDate").value  = dateParam;
+    }
+    return;
+  }
+  window.history.replaceState({}, "", window.location.pathname);
+  await loadRouteById(loadId);
 })();
 
 document.getElementById("saveModal").addEventListener("click", function(e) {
@@ -518,6 +516,11 @@ async function recalcDriveTimes() {
     if (data.error) { alert(data.error); return; }
 
     durationMatrix = data.duration_matrix || durationMatrix;
+    // Recalc sends stops in current schedule order; new matrix is indexed 1..n in that order.
+    // Reassign matrix_index so recalculateTimes() looks up the right cells.
+    optimizedSchedule.filter(s => !s.isLunch && !s.isGap).forEach((s, i) => {
+      s.matrix_index = i + 1;
+    });
     recalculateTimes();
     renderSchedule();
 
