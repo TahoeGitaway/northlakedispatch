@@ -410,8 +410,8 @@ function removeStop(id) {
   selectedStops     = selectedStops.filter(s => s._id !== id);
   optimizedSchedule = optimizedSchedule.filter(s => s._id !== id);
 
-  if (isOptimized) {
-    const real = optimizedSchedule.filter(s => !s.isLunch);
+  const real = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
+  if (optimizedSchedule.length > 0) {
     if (!real.length) { restartRoute(); return; }
     recalculateTimes(); renderSchedule(); redrawRouteOnMap();
   } else {
