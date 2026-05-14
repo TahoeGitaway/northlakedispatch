@@ -695,7 +695,7 @@ async function runBwImport() {
   btn.disabled         = true;
   btn.textContent      = "Importing…";
   btn.style.background = "#6366f1";
-  resultEl.classList.add("hidden");
+  resultEl.style.display = "none";
 
   try {
     const res  = await fetch("/api/bw-import", {
@@ -743,8 +743,6 @@ function _bwImportMsg(text, color) {
     red:   "background:#fef2f2; color:#b91c1c;",
     gray:  "background:#f9fafb; color:#4b5563;",
   }[color] || "background:#f9fafb; color:#4b5563;";
-  el.className = "text-xs rounded-lg leading-relaxed";
-  el.style.cssText = `padding:6px 10px; ${styles}`;
+  el.style.cssText = `display:block; margin-top:6px; padding:6px 10px; font-size:0.75rem; border-radius:8px; line-height:1.5; ${styles}`;
   el.textContent = text;
-  el.classList.remove("hidden");
 }

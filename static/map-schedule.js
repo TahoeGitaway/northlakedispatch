@@ -259,7 +259,7 @@ function renderStops() {
 
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
-  document.getElementById("bwImportWrap").style.display="";
+  document.getElementById("bwImportWrap").style.display="block";
   container.innerHTML = "";
   countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
 
@@ -372,7 +372,7 @@ function restartRoute() {
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
-  document.getElementById("bwImportWrap").style.display="";
+  document.getElementById("bwImportWrap").style.display="block";
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
   document.getElementById("workInSection").classList.add("hidden");
