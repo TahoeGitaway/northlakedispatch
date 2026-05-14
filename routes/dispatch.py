@@ -959,8 +959,9 @@ def bw_import():
     from routes.briefing import (
         _get_breezeway_token, _fetch_bw_endpoint,
         _get_property_name, _ensure_property_cache,
-        _get_live_property_cache,
+        _get_live_property_cache, _get_live_ref_cache,
     )
+    from concurrent.futures import ThreadPoolExecutor
 
     body     = request.get_json() or {}
     date_str = (body.get("date") or "").strip()
@@ -982,22 +983,37 @@ def bw_import():
 
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
+    ref_cache  = _get_live_ref_cache()
 
     if not prop_cache:
         return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
 
-    # Bulk fetch: one paginated call for the whole date instead of one call per property.
-    # This avoids timeouts that occurred when fetching tasks per-property (100+ API calls).
+    pid_candidates = {}
+    for bw_pid in prop_cache:
+        ref_id = ref_cache.get(bw_pid)
+        candidate = ref_id if ref_id else str(bw_pid)
+        if candidate not in pid_candidates:
+            pid_candidates[candidate] = bw_pid
+
+    def _tasks_for_ref(ref_id):
+        for dp in [
+            {"scheduled_date": f"{date_str},{date_str}"},
+            {"start_date": date_str, "end_date": date_str},
+            {"date": date_str},
+        ]:
+            r, _, status = _fetch_bw_endpoint(
+                token, "/public/inventory/v1/task",
+                {"reference_property_id": ref_id, **dp},
+            )
+            if status == 200:
+                return r
+        return []
+
+    # Fetch tasks for all properties in parallel (25 workers to stay within timeout)
     all_results = []
-    for dp in [
-        {"scheduled_date": f"{date_str},{date_str}"},
-        {"start_date": date_str, "end_date": date_str},
-        {"date": date_str},
-    ]:
-        r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task", dp)
-        if status == 200:
-            all_results = r
-            break
+    with ThreadPoolExecutor(max_workers=25) as executor:
+        for tasks in executor.map(_tasks_for_ref, list(pid_candidates.keys())):
+            all_results.extend(tasks)
 
     if not all_results:
         return jsonify({"matched": [], "unmatched": [],
