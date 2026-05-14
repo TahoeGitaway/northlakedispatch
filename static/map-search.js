@@ -725,6 +725,7 @@ async function runBwImport() {
     }
 
     _bwImportMsg(msg, color);
+    _bwShowTaskSidebar(date, data.matched || []);
   } catch (_) {
     _bwImportMsg("Network error — could not reach server.", "red");
   } finally {
@@ -745,4 +746,48 @@ function _bwImportMsg(text, color) {
   el.style.cssText = styleMap[color] || styleMap.gray;
   el.textContent = text;
   el.classList.remove("hidden");
+}
+
+function _bwShowTaskSidebar(date, matched) {
+  if (!matched.length) return;
+  const sidebar = document.getElementById("bwTaskSidebar");
+  const content = document.getElementById("bwTaskSidebarContent");
+  const dateEl  = document.getElementById("bwTaskSidebarDate");
+
+  const d = new Date(date + "T00:00:00");
+  dateEl.textContent = d.toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"});
+
+  content.innerHTML = "";
+  for (const p of matched) {
+    const card = document.createElement("div");
+    card.className = "rounded-lg border border-gray-100 bg-gray-50 px-3 py-2";
+
+    const title = document.createElement("div");
+    title.className = "text-xs font-semibold text-gray-800 mb-1.5 truncate";
+    title.textContent = p.name;
+    card.appendChild(title);
+
+    for (const t of (p.tasks || [])) {
+      const row = document.createElement("div");
+      row.className = "mb-1";
+
+      const tname = document.createElement("div");
+      tname.className = "text-xs font-medium text-gray-700";
+      tname.textContent = t.task_name;
+      row.appendChild(tname);
+
+      if (t.assignees && t.assignees.length) {
+        const asgn = document.createElement("div");
+        asgn.className = "text-xs text-gray-500 pl-2";
+        asgn.textContent = t.assignees.join(", ");
+        row.appendChild(asgn);
+      }
+
+      card.appendChild(row);
+    }
+
+    content.appendChild(card);
+  }
+
+  sidebar.classList.remove("hidden");
 }

@@ -400,4 +400,16 @@
   </div><!-- /sidebar -->
 
   <div id="map" class="flex-1"></div>
+
+  <!-- Right sidebar: Breezeway task summary (shown after import) -->
+  <div id="bwTaskSidebar" class="hidden w-72 bg-white border-l border-gray-200 flex flex-col shrink-0" style="height:100%">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between shrink-0">
+      <span class="text-sm font-semibold text-gray-800">Breezeway Tasks</span>
+      <button onclick="document.getElementById('bwTaskSidebar').classList.add('hidden')"
+              class="text-gray-400 hover:text-gray-600 text-xl leading-none cursor-pointer border-none bg-transparent">×</button>
+    </div>
+    <div id="bwTaskSidebarDate" class="px-4 py-1.5 text-xs text-gray-500 border-b border-gray-100 shrink-0"></div>
+    <div id="bwTaskSidebarContent" class="overflow-y-auto px-3 py-2 space-y-2" style="flex:1 1 0;min-height:0"></div>
+  </div>
+
 </div>

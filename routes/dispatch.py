@@ -1000,21 +1000,38 @@ def bw_import():
         return jsonify({"matched": [], "unmatched": [],
                         "message": "No Breezeway tasks found for that date/assignee."})
 
-    # Resolve unique property names from task results
+    # Resolve property names and collect task details per property
     _ensure_property_cache()
-    seen_ids  = set()
-    bw_names  = []
+    seen_ids      = set()
+    bw_names      = []
+    bw_name_tasks = {}  # bw_name -> [{"task_name": ..., "assignees": [...]}]
+
     for t in results:
         home_id = t.get("home_id") or t.get("property_id")
         if home_id:
-            if home_id in seen_ids:
-                continue
-            seen_ids.add(home_id)
-            bw_names.append(_get_property_name(home_id))
+            bw_name = _get_property_name(home_id)
+            if home_id not in seen_ids:
+                seen_ids.add(home_id)
+                bw_names.append(bw_name)
         else:
-            prop = (t.get("property_name") or "").strip()
-            if prop and prop not in bw_names:
-                bw_names.append(prop)
+            bw_name = (t.get("property_name") or "").strip()
+            if bw_name and bw_name not in bw_names:
+                bw_names.append(bw_name)
+
+        if bw_name:
+            task_name = (
+                t.get("name") or t.get("task_name") or
+                t.get("task_type") or t.get("type") or "Task"
+            ).strip()
+            assignees = []
+            for a in (t.get("assignments") or []):
+                n = (a.get("full_name") or a.get("name") or
+                     f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
+                if n:
+                    assignees.append(n)
+            bw_name_tasks.setdefault(bw_name, []).append(
+                {"task_name": task_name, "assignees": assignees}
+            )
 
     # Load local DB properties for matching
     conn = get_db()
@@ -1033,9 +1050,10 @@ def bw_import():
         row = _match_local_property(bw_name, db_props)
         if row:
             matched.append({
-                "name": row["Property Name"],
-                "lat":  float(row["Latitude"]),
-                "lng":  float(row["Longitude"]),
+                "name":  row["Property Name"],
+                "lat":   float(row["Latitude"]),
+                "lng":   float(row["Longitude"]),
+                "tasks": bw_name_tasks.get(bw_name, []),
             })
         else:
             unmatched.append(bw_name)
