@@ -796,14 +796,7 @@ function bwSidebarMinimize() {
     if (document.querySelectorAll("#bwTaskTabs button").length > 0) {
       tabs.style.display = "";
     }
-    // Sync date picker to the currently loaded route so the panel shows the right day
-    const routeDate = document.getElementById("routeDateField").value;
-    const dateEl    = document.getElementById("dailyRoutesDate");
-    if (routeDate && dateEl && dateEl.value !== routeDate) {
-      dateEl.value = routeDate;
-      _dailyRoutesLoaded = false;
-    }
-    // If a route is already active but sidebar content is blank, fill it in
+    // Fill stop list immediately if a route is already loaded
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
     // Load routes if not already loaded
     if (!_dailyRoutesLoaded) _loadDailyRoutes();
@@ -867,23 +860,10 @@ function _renderDailyRouteTabs() {
     tabsEl.appendChild(btn);
   }
 
-  // Auto-select: highlight the already-loaded route if it's in the list,
-  // otherwise select the first one (but don't load if a route is active).
-  if (_dailyRoutesList.length) {
-    const alreadyInList = currentRouteId && _dailyRoutesList.find(r => r.id === currentRouteId);
-    if (alreadyInList) {
-      // Just highlight the tab without re-loading the route
-      for (const btn of tabsEl.querySelectorAll("button")) {
-        const active = String(btn.dataset.routeId) === String(currentRouteId);
-        btn.className = active
-          ? "px-3 py-2.5 text-xs font-medium border-b-2 border-indigo-500 text-indigo-700 whitespace-nowrap cursor-pointer bg-transparent shrink-0"
-          : "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
-      }
-      _activeRouteTab = currentRouteId;
-    } else if (!currentRouteId) {
-      const first = _dailyRoutesList[0];
-      _selectDailyRouteTab(first.id, first.assigned_to || first.name);
-    }
+  // Auto-select first route only if no route is currently active
+  if (_dailyRoutesList.length && !currentRouteId) {
+    const first = _dailyRoutesList[0];
+    _selectDailyRouteTab(first.id, first.assigned_to || first.name);
   }
 }
 
