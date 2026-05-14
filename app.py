@@ -20,6 +20,7 @@ from db import get_db, get_cursor, User, init_db
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-in-production")
 app.permanent_session_lifetime = timedelta(hours=8)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # ── Flask-Login ───────────────────────────────────────────────────
 login_manager = LoginManager(app)
