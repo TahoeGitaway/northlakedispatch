@@ -933,7 +933,7 @@ function _selectDailyRouteTab(routeId, label) {
 // Single-employee: show task content without tabs
 function _bwShowTaskSidebar(date, matched) {
   if (!matched.length) return;
-  _bwByAssignee = null;
+  _bwByAssignee = "bw";   // truthy — prevents _loadDailyRoutes from clobbering BW state
   _bwActiveDate = date;
   _bwTasksByPropName = {};
   for (const p of matched) _bwTasksByPropName[p.name] = p.tasks || [];

@@ -369,6 +369,8 @@ function restartRoute() {
   selectedStops = []; optimizedSchedule = []; isOptimized = false;
   durationMatrix = []; startMinutes = 9 * 60; currentRouteId = null;
   lastStats = { total_duration:0, driving_duration:0, service_duration:0, distance:0 };
+  if (typeof _bwByAssignee !== "undefined") _bwByAssignee = null;
+  if (typeof _bwTasksByPropName !== "undefined") _bwTasksByPropName = {};
   clearRouteMarkers();
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   document.getElementById("preOptSection").classList.remove("hidden");
