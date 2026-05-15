@@ -29,7 +29,7 @@ function bwSyncTimes() {
                 + `\n\nContinue?`;
   if (!confirm(warning)) return;
 
-  const stops     = real.map(s => ({ name: s.name, eta_minutes: s.eta_minutes }));
+  const stops     = real.map(s => ({ name: s.name, eta_minutes: s.eta_minutes + (s.serviceMinutes || 0) }));
   const btn       = document.getElementById("bwSyncBtn");
   const resultDiv = document.getElementById("bwSyncResult");
 
