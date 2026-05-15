@@ -714,13 +714,30 @@ async function runBwImport() {
     if (data.message) { _bwImportMsg(data.message, "gray"); return; }
 
     if (data.by_assignee) {
-      // Multi-employee: load first employee's stops, show tabbed sidebar
-      _bwShowTaskSidebarMulti(date, data.by_assignee);
-      document.getElementById("routeDateField").value = date;
-      _bwImportMsg(
-        `Loaded ${Object.keys(data.by_assignee).length} employees — tab to switch routes.`,
-        "green"
-      );
+      const names = Object.keys(data.by_assignee);
+      const [firstName, ...rest] = names;
+      const firstData = data.by_assignee[firstName] || {};
+
+      // Load first employee into this window exactly like single-employee
+      let added = 0;
+      for (const p of (firstData.matched || [])) {
+        if (!selectedStops.find(s => s.name === p.name)) {
+          addStop(p, !!p.arrival, false);
+          added++;
+        }
+      }
+      _bwShowTaskSidebar(date, firstData.matched || []);
+      _bwPlaceMarkers();
+      document.getElementById("routeDateField").value  = date;
+      document.getElementById("assignedToField").value = firstName;
+
+      // Open a new window for each additional employee
+      for (const name of rest) {
+        window.open(`/map?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
+      }
+
+      const extra = rest.length ? ` Opened ${rest.length > 1 ? rest.length + " new windows" : "new window"} for: ${rest.join(", ")}.` : "";
+      _bwImportMsg(`Loaded ${firstName}: ${added} stop${added !== 1 ? "s" : ""}.${extra}`, "green");
     } else {
       // Single employee
       let added = 0;
@@ -924,30 +941,6 @@ function _bwShowTaskSidebar(date, matched) {
   _expandSidebarIfMinimized();
 }
 
-// Multi-employee: replace tabs with employee tabs
-function _bwShowTaskSidebarMulti(date, byAssignee) {
-  _bwByAssignee = byAssignee;
-  _bwActiveDate = date;
-
-  const tabsEl = document.getElementById("bwTaskTabs");
-  tabsEl.innerHTML = "";
-  tabsEl.style.display = "";
-
-  for (const name of Object.keys(byAssignee)) {
-    const btn = document.createElement("button");
-    btn.className = "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
-    btn.textContent = name;
-    btn.dataset.employee = name;
-    btn.addEventListener("click", () => _bwSelectTab(name));
-    tabsEl.appendChild(btn);
-  }
-
-  const firstName = Object.keys(byAssignee)[0];
-  if (firstName) _bwSelectTab(firstName);
-
-  _expandSidebarIfMinimized();
-}
-
 function _expandSidebarIfMinimized() {
   if (_bwSidebarMinimized) {
     _bwSidebarMinimized = false;
@@ -962,47 +955,6 @@ function _expandSidebarIfMinimized() {
     chevron.title         = "Minimize";
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
   }
-}
-
-function _bwSelectTab(name) {
-  _activeRouteTab = name;
-  const tabsEl = document.getElementById("bwTaskTabs");
-  for (const btn of tabsEl.querySelectorAll("button")) {
-    const active = btn.dataset.employee === name;
-    btn.className = active
-      ? "px-3 py-2.5 text-xs font-medium border-b-2 border-indigo-500 text-indigo-700 whitespace-nowrap cursor-pointer bg-transparent shrink-0"
-      : "px-3 py-2.5 text-xs font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-800 whitespace-nowrap cursor-pointer bg-transparent shrink-0";
-  }
-
-  const data = _bwByAssignee[name] || {};
-  clearRouteMarkers();
-  if (typeof routeLayer !== "undefined" && routeLayer) {
-    map.removeLayer(routeLayer);
-    routeLayer = null;
-  }
-  selectedStops     = [];
-  optimizedSchedule = [];
-  isOptimized       = false;
-  durationMatrix    = [];
-
-  // Hide stale post-opt DOM so old schedule cards don't linger
-  document.getElementById("scheduleSection").classList.add("hidden");
-  document.getElementById("workInSection").classList.add("hidden");
-  document.getElementById("recalcTimesBtn").classList.add("hidden");
-  document.getElementById("changeStartBtn").classList.add("hidden");
-  document.getElementById("saveRouteBtn").classList.add("hidden");
-  document.getElementById("updateRouteBtn").classList.add("hidden");
-  document.getElementById("bwSyncResult").classList.add("hidden");
-
-  // Build prop→tasks map for sidebar sync
-  _bwTasksByPropName = {};
-  for (const p of (data.matched || [])) _bwTasksByPropName[p.name] = p.tasks || [];
-
-  renderStops();
-  for (const p of (data.matched || [])) addStop(p, !!p.arrival, false);
-  _bwPlaceMarkers();
-  document.getElementById("assignedToField").value = name;
-  _syncSidebarToSchedule();
 }
 
 function _bwPlaceMarkers() {
@@ -1132,3 +1084,15 @@ function _bwRenderTaskContent(matched) {
     content.appendChild(card);
   }
 }
+
+// Auto-import when opened as a new window for a specific employee
+(function () {
+  const params   = new URLSearchParams(window.location.search);
+  const bwDate   = params.get("bw_date");
+  const bwAsgn   = params.get("bw_assignee");
+  if (!bwDate || !bwAsgn) return;
+  document.getElementById("bwImportDate").value     = bwDate;
+  document.getElementById("bwImportAssignee").value = bwAsgn;
+  // Wait for map to initialise before firing
+  window.addEventListener("load", () => runBwImport());
+})();
