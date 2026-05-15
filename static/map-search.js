@@ -992,6 +992,8 @@ function _bwSelectTab(name) {
   document.getElementById("changeStartBtn").classList.add("hidden");
   document.getElementById("saveRouteBtn").classList.add("hidden");
   document.getElementById("updateRouteBtn").classList.add("hidden");
+  document.getElementById("bwSyncBtn").classList.add("hidden");
+  document.getElementById("bwSyncResult").classList.add("hidden");
 
   // Build prop→tasks map for sidebar sync
   _bwTasksByPropName = {};
