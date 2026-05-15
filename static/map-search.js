@@ -695,16 +695,14 @@ async function runBwImport() {
   // Parse comma-separated names into list
   const assignees = rawNames ? rawNames.split(",").map(s => s.trim()).filter(Boolean) : [];
 
-  // Multiple employees: open one window per person RIGHT NOW (sync, before any await)
-  // so the browser's popup blocker doesn't interfere.
+  // Multiple employees: open one new window per extra person RIGHT NOW (sync, before any
+  // await) so the popup blocker can't interfere. First person loads in this window below.
   if (assignees.length > 1) {
-    for (const name of assignees) {
+    const [, ...rest] = assignees;
+    for (const name of rest) {
       window.open(`/?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
     }
-    _bwImportMsg(`Opened ${assignees.length} windows for: ${assignees.join(", ")}.`, "green");
-    btn.disabled    = false;
-    btn.textContent = "Import Stops";
-    return;
+    // fall through — load first employee in this window
   }
 
   btn.disabled    = true;
