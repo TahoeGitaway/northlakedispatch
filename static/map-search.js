@@ -694,9 +694,18 @@ async function runBwImport() {
 
   // Parse comma-separated names into list
   const assignees = rawNames ? rawNames.split(",").map(s => s.trim()).filter(Boolean) : [];
-  const payload   = assignees.length > 1
-    ? {date, assignees}
-    : {date, assignee: assignees[0] || ""};
+
+  // Multiple employees: open one window per person RIGHT NOW (sync, before any await)
+  // so the browser's popup blocker doesn't interfere.
+  if (assignees.length > 1) {
+    for (const name of assignees) {
+      window.open(`/map?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
+    }
+    _bwImportMsg(`Opened ${assignees.length} windows for: ${assignees.join(", ")}.`, "green");
+    btn.disabled    = false;
+    btn.textContent = "Import Stops";
+    return;
+  }
 
   btn.disabled    = true;
   btn.textContent = "Importing…";
@@ -706,39 +715,14 @@ async function runBwImport() {
     const res  = await fetch("/api/bw-import", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
-      body:    JSON.stringify(payload),
+      body:    JSON.stringify({date, assignee: assignees[0] || ""}),
     });
     const data = await res.json();
 
     if (data.error)   { _bwImportMsg(data.error,   "red");  return; }
     if (data.message) { _bwImportMsg(data.message, "gray"); return; }
 
-    if (data.by_assignee) {
-      const names = Object.keys(data.by_assignee);
-      const [firstName, ...rest] = names;
-      const firstData = data.by_assignee[firstName] || {};
-
-      // Load first employee into this window exactly like single-employee
-      let added = 0;
-      for (const p of (firstData.matched || [])) {
-        if (!selectedStops.find(s => s.name === p.name)) {
-          addStop(p, !!p.arrival, false);
-          added++;
-        }
-      }
-      _bwShowTaskSidebar(date, firstData.matched || []);
-      _bwPlaceMarkers();
-      document.getElementById("routeDateField").value  = date;
-      document.getElementById("assignedToField").value = firstName;
-
-      // Open a new window for each additional employee
-      for (const name of rest) {
-        window.open(`/map?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
-      }
-
-      const extra = rest.length ? ` Opened ${rest.length > 1 ? rest.length + " new windows" : "new window"} for: ${rest.join(", ")}.` : "";
-      _bwImportMsg(`Loaded ${firstName}: ${added} stop${added !== 1 ? "s" : ""}.${extra}`, "green");
-    } else {
+    {  // single employee
       // Single employee
       let added = 0;
       for (const p of (data.matched || [])) {
