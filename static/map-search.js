@@ -699,7 +699,7 @@ async function runBwImport() {
   // so the browser's popup blocker doesn't interfere.
   if (assignees.length > 1) {
     for (const name of assignees) {
-      window.open(`/map?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
+      window.open(`/?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
     }
     _bwImportMsg(`Opened ${assignees.length} windows for: ${assignees.join(", ")}.`, "green");
     btn.disabled    = false;
