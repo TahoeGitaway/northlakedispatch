@@ -1,26 +1,14 @@
 /*
  * map-bw-sync.js — Breezeway task time sync.
- * Reads the current optimizedSchedule and PATCHes matching Breezeway
- * task start_times to match route ETAs. Isolated: reads global state
- * (optimizedSchedule, routeDateField, assignedToField) but never writes it.
+ * Fetches the saved route from the server and PATCHes matching Breezeway
+ * task start_times to the saved ETAs. Only works after a route is saved.
  */
 
 function bwSyncTimes() {
-  const real = optimizedSchedule.filter(s => !s.isLunch && !s.isGap && s.lat);
-  if (!real.length) {
-    alert("Optimize the route first before syncing times to Breezeway.");
+  if (!currentRouteId) {
+    alert("Save the route first before syncing to Breezeway.");
     return;
   }
-
-  const date = (document.getElementById("routeDateField").value || "").trim();
-  if (!date) {
-    alert("Set a route date before syncing to Breezeway.");
-    return;
-  }
-
-  const assignee = (document.getElementById("assignedToField").value || "").trim();
-
-  const stops = real.map(s => ({ name: s.name, eta_minutes: s.eta_minutes }));
 
   const btn       = document.getElementById("bwSyncBtn");
   const resultDiv = document.getElementById("bwSyncResult");
@@ -28,42 +16,64 @@ function bwSyncTimes() {
   btn.disabled    = true;
   btn.textContent = "Syncing…";
   resultDiv.classList.remove("hidden");
-  resultDiv.innerHTML = '<span class="text-gray-500">Contacting Breezeway…</span>';
+  resultDiv.innerHTML = '<span class="text-gray-500">Loading saved route…</span>';
 
-  fetch("/api/bw-sync-times", {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({ date, assignee, stops }),
-  })
+  fetch(`/routes/${currentRouteId}`)
     .then(r => r.json())
-    .then(data => {
-      if (data.error) {
-        resultDiv.innerHTML = `<span class="text-red-600">Error: ${data.error}</span>`;
+    .then(route => {
+      const schedule = route.schedule || [];
+      const real     = schedule.filter(s => !s.isLunch && !s.isGap && s.lat);
+
+      if (!real.length) {
+        resultDiv.innerHTML = '<span class="text-red-600">No stops found in saved route.</span>';
+        btn.disabled    = false;
+        btn.textContent = "Sync Times to Breezeway";
         return;
       }
-      const s   = data.summary || {};
-      let html  = `<div class="font-semibold mb-1">`;
-      html += `${s.updated || 0} updated &nbsp;·&nbsp; ${s.skipped || 0} skipped`;
-      if (s.failed) html += ` &nbsp;·&nbsp; <span class="text-red-600">${s.failed} failed</span>`;
-      html += `</div>`;
 
-      for (const r of (data.results || [])) {
-        const color = r.status === "updated" ? "text-green-700"
-                    : r.status === "failed"  ? "text-red-600"
-                    : "text-gray-500";
-        const icon  = r.status === "updated" ? "&#10003;"
-                    : r.status === "failed"  ? "&#10007;"
-                    : "&ndash;";
-        html += `<div class="${color} text-xs leading-snug">`;
-        html += `${icon} <b>${r.name}</b>`;
-        if (r.time)   html += ` &rarr; ${r.time}`;
-        if (r.reason) html += ` <span class="text-gray-400">(${r.reason})</span>`;
-        html += `</div>`;
-      }
-      resultDiv.innerHTML = html;
+      const stops = real.map(s => ({ name: s.name, eta_minutes: s.eta_minutes }));
+
+      resultDiv.innerHTML = '<span class="text-gray-500">Contacting Breezeway…</span>';
+
+      return fetch("/api/bw-sync-times", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          date:     route.route_date,
+          assignee: route.assigned_to || "",
+          stops,
+        }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) {
+            resultDiv.innerHTML = `<span class="text-red-600">Error: ${data.error}</span>`;
+            return;
+          }
+          const s  = data.summary || {};
+          let html = `<div class="font-semibold mb-1">`;
+          html += `${s.updated || 0} updated &nbsp;·&nbsp; ${s.skipped || 0} skipped`;
+          if (s.failed) html += ` &nbsp;·&nbsp; <span class="text-red-600">${s.failed} failed</span>`;
+          html += `</div>`;
+
+          for (const r of (data.results || [])) {
+            const color = r.status === "updated" ? "text-green-700"
+                        : r.status === "failed"  ? "text-red-600"
+                        : "text-gray-500";
+            const icon  = r.status === "updated" ? "&#10003;"
+                        : r.status === "failed"  ? "&#10007;"
+                        : "&ndash;";
+            html += `<div class="${color} text-xs leading-snug">`;
+            html += `${icon} <b>${r.name}</b>`;
+            if (r.time)   html += ` &rarr; ${r.time}`;
+            if (r.reason) html += ` <span class="text-gray-400">(${r.reason})</span>`;
+            html += `</div>`;
+          }
+          resultDiv.innerHTML = html;
+        });
     })
     .catch(e => {
-      resultDiv.innerHTML = `<span class="text-red-600">Network error: ${e.message}</span>`;
+      resultDiv.innerHTML = `<span class="text-red-600">Error: ${e.message}</span>`;
     })
     .finally(() => {
       btn.disabled    = false;
