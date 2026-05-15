@@ -10,6 +10,13 @@ function bwSyncTimes() {
     return;
   }
 
+  const assignee = (document.getElementById("assignedToField").value || "").trim();
+  const date     = (document.getElementById("routeDateField").value || "").trim();
+  const warning  = `This will update start times on Breezeway tasks for ${assignee || "this route"} on ${date || "the route date"}.`
+                 + `\n\nOnly existing tasks assigned to "${assignee || "this employee"}" will be changed. Nothing will be created or deleted.`
+                 + `\n\nContinue?`;
+  if (!confirm(warning)) return;
+
   const btn       = document.getElementById("bwSyncBtn");
   const resultDiv = document.getElementById("bwSyncResult");
 
