@@ -227,6 +227,15 @@
                      flex items-center justify-center gap-2">
         🗺 Recalc Drive Times
       </button>
+      {% if current_user.is_admin %}
+      <button id="bwSyncBtn" onclick="bwSyncTimes()"
+              class="w-full bg-violet-600 hover:bg-violet-700 text-white px-3 py-2
+                     rounded-lg font-medium transition-colors text-sm
+                     flex items-center justify-center gap-2">
+        ⬆ Sync Times to Breezeway
+      </button>
+      <div id="bwSyncResult" class="hidden text-xs rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 space-y-0.5"></div>
+      {% endif %}
       <button id="changeStartBtn" onclick="toggleChangeStartForm()"
               class="hidden w-full bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2
                      rounded-lg font-medium transition-colors text-sm border border-gray-200">
