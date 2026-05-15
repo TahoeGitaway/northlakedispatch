@@ -695,13 +695,12 @@ async function runBwImport() {
   // Parse comma-separated names into list
   const assignees = rawNames ? rawNames.split(",").map(s => s.trim()).filter(Boolean) : [];
 
-  // Multiple employees: open one new window per extra person RIGHT NOW (sync, before any
-  // await) so the popup blocker can't interfere. First person loads in this window below.
+  // Multiple employees: open ONE new window with remaining names comma-separated.
+  // That window runs the same logic, peels off the next name, opens another window, etc.
+  // Browsers only allow one popup per user gesture — cascading handles any count.
   if (assignees.length > 1) {
     const [, ...rest] = assignees;
-    for (const name of rest) {
-      window.open(`/?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(name)}`, "_blank");
-    }
+    window.open(`/?bw_date=${encodeURIComponent(date)}&bw_assignee=${encodeURIComponent(rest.join(","))}`, "_blank");
     // fall through — load first employee in this window
   }
 
