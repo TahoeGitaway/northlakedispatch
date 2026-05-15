@@ -116,9 +116,7 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
     dt      = f"{date_str}T{start_time_hhmm}"  # e.g. "2026-05-17T11:29:00"
 
     for payload in [
-        {"scheduled_start": dt},
-        {"start_time": start_time_hhmm},
-        {"start_time": dt},
+        {"scheduled_time": start_time_hhmm},
     ]:
         try:
             r = requests.patch(url, headers=headers, json=payload, timeout=15)
