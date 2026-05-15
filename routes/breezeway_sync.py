@@ -18,6 +18,7 @@ BW_BASE = "https://api.breezeway.io"
 
 
 def _minutes_to_hhmm(minutes: int) -> str:
+    minutes = round(minutes / 15) * 15
     h = (minutes // 60) % 24
     m = minutes % 60
     return f"{h:02d}:{m:02d}:00"
