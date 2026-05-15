@@ -70,10 +70,17 @@ function bwSyncTimes() {
             const icon  = r.status === "updated" ? "&#10003;"
                         : r.status === "failed"  ? "&#10007;"
                         : "&ndash;";
-            html += `<div class="${color} text-xs leading-snug">`;
+            html += `<div class="${color} text-xs leading-snug mb-1">`;
             html += `${icon} <b>${r.name}</b>`;
-            if (r.time)   html += ` &rarr; ${r.time}`;
-            if (r.reason) html += ` <span class="text-gray-400">(${r.reason})</span>`;
+            if (r.time)       html += ` &rarr; ${r.time}`;
+            if (r.reason)     html += ` <span class="text-gray-400">(${r.reason})</span>`;
+            if (r.task_keys)  html += `<div class="text-gray-400 pl-3">fields: ${r.task_keys.join(", ")}</div>`;
+            for (const t of (r.tasks || [])) {
+              const tmsg = t.ok
+                ? `<span class="text-green-600">${t.msg}</span>`
+                : `<span class="text-red-600">FAIL: ${t.msg}</span>`;
+              html += `<div class="pl-3 text-gray-500">${t.task_name}: ${tmsg}</div>`;
+            }
             html += `</div>`;
           }
           resultDiv.innerHTML = html;

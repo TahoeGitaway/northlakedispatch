@@ -105,15 +105,20 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> list:
 def _patch_task_time(token: str, task_id: int, start_time: str) -> tuple[bool, str]:
     """PATCH a single task's start_time. Returns (success, message)."""
     try:
+        payload = {"start_time": start_time}
         r = requests.patch(
             f"{BW_BASE}/public/inventory/v1/task/{task_id}",
             headers={"Authorization": f"JWT {token}", "Content-Type": "application/json"},
-            json={"start_time": start_time},
+            json=payload,
             timeout=15,
         )
-        if r.status_code in (200, 201):
-            return True, f"updated to {start_time}"
-        return False, f"API returned {r.status_code}: {r.text[:120]}"
+        try:
+            resp_body = r.json()
+            # Return the actual start_time from the response so we can verify
+            actual = resp_body.get("start_time") or resp_body.get("scheduled_start") or "?"
+            return (r.status_code in (200, 201)), f"status={r.status_code} sent={start_time} got={actual} body_keys={list(resp_body.keys())[:8]}"
+        except Exception:
+            return (r.status_code in (200, 201)), f"status={r.status_code} sent={start_time} raw={r.text[:200]}"
     except Exception as e:
         return False, str(e)
 
@@ -190,6 +195,8 @@ def bw_sync_times():
             continue
 
         # Step 3: PATCH each task (usually just one per property per day)
+        # Debug: expose the keys of the first task so we can verify field names
+        first_task_keys = list(tasks[0].keys()) if tasks else []
         task_results = []
         for task in tasks:
             task_id   = task.get("id")
@@ -200,10 +207,11 @@ def bw_sync_times():
 
         all_ok = all(t["ok"] for t in task_results)
         results.append({
-            "name":    name,
-            "status":  "updated" if all_ok else ("partial" if any(t["ok"] for t in task_results) else "failed"),
-            "time":    start_time,
-            "tasks":   task_results,
+            "name":       name,
+            "status":     "updated" if all_ok else ("partial" if any(t["ok"] for t in task_results) else "failed"),
+            "time":       start_time,
+            "tasks":      task_results,
+            "task_keys":  first_task_keys,
         })
 
     updated = sum(1 for r in results if r["status"] == "updated")
