@@ -43,25 +43,6 @@
                 Misc
             </a>
 
-            {% if current_user.is_admin or my_bot_allowed %}
-            <div class="w-px h-5 bg-gray-200 mx-2"></div>
-            {% endif %}
-
-            {% if current_user.is_admin %}
-            <a href="{{ url_for('admin.chatbot_page') }}"
-               class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                      {% if request.endpoint == 'admin.chatbot_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:text-gray-900 hover:bg-gray-50{% endif %}">
-                Ops Bot
-            </a>
-            {% endif %}
-            {% if my_bot_allowed %}
-            <a href="{{ url_for('my_bot.my_bot_page') }}"
-               class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                      {% if request.endpoint == 'my_bot.my_bot_page' %}bg-violet-50 text-violet-700{% else %}text-gray-600 hover:text-gray-900 hover:bg-gray-50{% endif %}">
-                My Bot
-            </a>
-            {% endif %}
-
             {% if current_user.is_admin %}
             <div class="w-px h-5 bg-gray-200 mx-2"></div>
             <a href="{{ url_for('admin.admin_properties') }}"
