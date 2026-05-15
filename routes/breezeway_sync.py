@@ -23,6 +23,13 @@ def _minutes_to_hhmm(minutes: int) -> str:
     return f"{h:02d}:{m:02d}:00"
 
 
+def _minutes_to_datetime(minutes: int, date_str: str) -> str:
+    """Return ISO datetime string for Breezeway: 'YYYY-MM-DDTHH:MM:00'."""
+    h = (minutes // 60) % 24
+    m = minutes % 60
+    return f"{date_str}T{h:02d}:{m:02d}:00"
+
+
 def _get_token() -> str | None:
     from routes.briefing import _get_breezeway_token
     return _get_breezeway_token()
@@ -102,25 +109,33 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> list:
     return []
 
 
-def _patch_task_time(token: str, task_id: int, start_time: str) -> tuple[bool, str]:
-    """PATCH a single task's start_time. Returns (success, message)."""
-    try:
-        payload = {"start_time": start_time}
-        r = requests.patch(
-            f"{BW_BASE}/public/inventory/v1/task/{task_id}",
-            headers={"Authorization": f"JWT {token}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=15,
-        )
+def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: str) -> tuple[bool, str]:
+    """PATCH a task's start time. Tries scheduled_start (full datetime) first, then start_time."""
+    headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
+    url     = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
+    dt      = f"{date_str}T{start_time_hhmm}"  # e.g. "2026-05-17T11:29:00"
+
+    for payload in [
+        {"scheduled_start": dt},
+        {"start_time": start_time_hhmm},
+        {"start_time": dt},
+    ]:
         try:
-            resp_body = r.json()
-            # Return the actual start_time from the response so we can verify
-            actual = resp_body.get("start_time") or resp_body.get("scheduled_start") or "?"
-            return (r.status_code in (200, 201)), f"status={r.status_code} sent={start_time} got={actual} body_keys={list(resp_body.keys())[:8]}"
-        except Exception:
-            return (r.status_code in (200, 201)), f"status={r.status_code} sent={start_time} raw={r.text[:200]}"
-    except Exception as e:
-        return False, str(e)
+            r = requests.patch(url, headers=headers, json=payload, timeout=15)
+            try:
+                body = r.json()
+                got_start  = body.get("scheduled_start") or body.get("start_time") or "?"
+                body_keys  = list(body.keys())[:10]
+                msg = f"status={r.status_code} payload={list(payload.keys())[0]}={list(payload.values())[0]} echoed={got_start} keys={body_keys}"
+            except Exception:
+                msg = f"status={r.status_code} payload={payload} raw={r.text[:200]}"
+            if r.status_code in (200, 201):
+                return True, msg
+            # non-2xx: report and stop trying
+            return False, msg
+        except Exception as e:
+            return False, str(e)
+    return False, "all payload variants failed"
 
 
 @bw_sync_bp.route("/api/bw-sync-times", methods=["POST"])
@@ -201,7 +216,7 @@ def bw_sync_times():
         for task in tasks:
             task_id   = task.get("id")
             task_name = (task.get("name") or "task")[:40]
-            ok, msg   = _patch_task_time(token, task_id, start_time)
+            ok, msg   = _patch_task_time(token, task_id, start_time, date_str)
             task_results.append({"task_id": task_id, "task_name": task_name,
                                  "ok": ok, "msg": msg})
 
