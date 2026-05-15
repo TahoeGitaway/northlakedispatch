@@ -798,8 +798,8 @@ function bwSidebarMinimize() {
     }
     // Fill stop list immediately if a route is already loaded
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
-    // Load routes if not already loaded
-    if (!_dailyRoutesLoaded) _loadDailyRoutes();
+    // Load daily routes only when not in BW-task mode (avoid clobbering BW state)
+    if (!_dailyRoutesLoaded && !_bwByAssignee) _loadDailyRoutes();
   }
 }
 
@@ -960,6 +960,7 @@ function _expandSidebarIfMinimized() {
     content.style.display = "";
     chevron.textContent   = "›";
     chevron.title         = "Minimize";
+    if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
   }
 }
 
