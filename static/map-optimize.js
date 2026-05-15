@@ -163,7 +163,6 @@ async function optimizeRoute(useGoogleMatrix = false) {
     document.getElementById("addMoreBtn").classList.remove("hidden");
     document.getElementById("changeStartBtn").classList.remove("hidden");
     document.getElementById("recalcTimesBtn").classList.remove("hidden");
-    document.getElementById("bwSyncBtn").classList.remove("hidden");
     if (currentRouteId) {
       document.getElementById("saveRouteBtn").classList.add("hidden");
       document.getElementById("updateRouteBtn").classList.remove("hidden");
@@ -419,7 +418,6 @@ async function loadRouteById(loadId) {
     document.getElementById("addMoreBtn").classList.remove("hidden");
     document.getElementById("changeStartBtn").classList.remove("hidden");
     document.getElementById("recalcTimesBtn").classList.remove("hidden");
-    document.getElementById("bwSyncBtn").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.add("hidden");
     document.getElementById("updateRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value    = data.name;
