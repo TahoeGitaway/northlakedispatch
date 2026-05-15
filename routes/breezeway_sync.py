@@ -209,8 +209,8 @@ def bw_sync_times():
             continue
 
         # Step 3: PATCH each task (usually just one per property per day)
-        # Debug: expose the keys of the first task so we can verify field names
         first_task_keys = list(tasks[0].keys()) if tasks else []
+        first_linked_reso = tasks[0].get("linked_reservation") if tasks else None
         task_results = []
         for task in tasks:
             task_id   = task.get("id")
@@ -226,6 +226,7 @@ def bw_sync_times():
             "time":       start_time,
             "tasks":      task_results,
             "task_keys":  first_task_keys,
+            "linked_reso": first_linked_reso,
         })
 
     updated = sum(1 for r in results if r["status"] == "updated")

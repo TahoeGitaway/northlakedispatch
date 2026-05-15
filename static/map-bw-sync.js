@@ -67,6 +67,7 @@ function bwSyncTimes() {
         if (r.time)      html += ` &rarr; ${r.time}`;
         if (r.reason)    html += ` <span class="text-gray-400">(${r.reason})</span>`;
         if (r.task_keys) html += `<div class="text-gray-400 pl-3">fields: ${r.task_keys.join(", ")}</div>`;
+        if (r.linked_reso !== undefined) html += `<div class="text-gray-400 pl-3">linked_reso: ${JSON.stringify(r.linked_reso)}</div>`;
         for (const t of (r.tasks || [])) {
           const tmsg = t.ok
             ? `<span class="text-green-600">${t.msg}</span>`
