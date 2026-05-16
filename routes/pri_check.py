@@ -63,25 +63,27 @@ def pri_check():
         report_days = 60
     report_days = max(1, min(report_days, 60))
 
-    lookback_start = today - timedelta(days=30)
-    report_end     = today + timedelta(days=report_days)
-    far_end        = today + timedelta(days=150)
+    lookback_start    = today - timedelta(days=30)   # how far back to look for checkouts
+    reso_lookback     = today - timedelta(days=180)  # wider window for upcoming — catches long owner stays
+    report_end        = today + timedelta(days=report_days)
+    far_end           = today + timedelta(days=150)
 
     token = _get_breezeway_token()
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 500
 
-    lookback_str   = lookback_start.isoformat()
-    today_str      = today.isoformat()
-    report_end_str = report_end.isoformat()
-    far_end_str    = far_end.isoformat()
+    lookback_str      = lookback_start.isoformat()
+    reso_lookback_str = reso_lookback.isoformat()
+    today_str         = today.isoformat()
+    report_end_str    = report_end.isoformat()
+    far_end_str       = far_end.isoformat()
 
     raw_checkouts = _fetch_bw_reservations(token, {
         "checkout_date_ge": lookback_str,
         "checkout_date_le": report_end_str,
     })
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkin_date_ge": lookback_str,
+        "checkin_date_ge": reso_lookback_str,
         "checkin_date_le": far_end_str,
     })
 
