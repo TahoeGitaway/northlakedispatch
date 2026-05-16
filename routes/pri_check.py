@@ -183,17 +183,18 @@ def refresh_pri_banner_alerts(alert_days=3):
     if not token:
         return
 
-    today      = date_cls.today()
-    window_end = today + timedelta(days=alert_days)
-    far_end    = today + timedelta(days=150)
-    today_str  = today.isoformat()
+    today         = date_cls.today()
+    window_end    = today + timedelta(days=alert_days)
+    far_end       = today + timedelta(days=150)
+    reso_lookback = today - timedelta(days=30)
+    today_str     = today.isoformat()
 
     raw_checkouts = _fetch_bw_reservations(token, {
         "checkout_date_ge": today_str,
         "checkout_date_le": window_end.isoformat(),
     })
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkin_date_ge": today_str,
+        "checkin_date_ge": reso_lookback.isoformat(),
         "checkin_date_le": far_end.isoformat(),
     })
 
