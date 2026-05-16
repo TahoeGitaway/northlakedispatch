@@ -524,11 +524,6 @@ def _solve_route(
         secs = max(5, min(10, n_stops))     # 5-10 s; unconstrained TSP
     params.time_limit.FromSeconds(secs)
 
-    # For unconstrained pure-distance TSP, GLOBAL_CHEAPEST_ARC builds a much
-    # better initial tour than PATH_CHEAPEST_ARC, giving GLS a stronger start.
-    if not hard_deadline and not soft_deadline_penalty:
-        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.GLOBAL_CHEAPEST_ARC
-
     solution = routing.SolveWithParameters(params)
     if not solution:
         return None, None

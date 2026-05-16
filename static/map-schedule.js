@@ -384,7 +384,7 @@ function restartRoute() {
   document.getElementById("addMoreBtn").classList.add("hidden");
   document.getElementById("changeStartBtn").classList.add("hidden");
   document.getElementById("recalcTimesBtn").classList.add("hidden");
-  document.getElementById("bwSyncResult").classList.add("hidden");
+  document.getElementById("bwSyncResult")?.classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   document.getElementById("workInBox").value = "";
   document.getElementById("saveRouteName").value  = "";
