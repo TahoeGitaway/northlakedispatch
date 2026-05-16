@@ -174,6 +174,15 @@ def chatbot_chat():
                 "required": ["start_date", "end_date", "property_names"],
             },
         },
+        {
+            "name": "list_properties",
+            "description": (
+                "Return the full list of active property names from Breezeway. "
+                "Call this whenever the user asks about ALL properties, or when you need "
+                "property names to pass into fetch_task_data or fetch_tasks_multi."
+            ),
+            "input_schema": {"type": "object", "properties": {}},
+        },
     ]
 
     def _execute_fetch(start_str, end_str):
@@ -719,6 +728,16 @@ def chatbot_chat():
                                     names,
                                     block.input.get("status"),
                                 )
+                            elif block.name == "list_properties":
+                                yield sse({"type": "status", "text": "Loading property list from Breezeway…"})
+                                from routes.briefing import _ensure_property_cache, _get_live_property_cache
+                                _ensure_property_cache()
+                                cache = _get_live_property_cache()
+                                if cache:
+                                    names_list = sorted(cache.values())
+                                    result = f"{len(names_list)} active properties:\n" + "\n".join(f"- {n}" for n in names_list)
+                                else:
+                                    result = "Property list unavailable — Breezeway may not be configured."
                             else:
                                 result = f"Unknown tool: {block.name}"
                             tool_results.append({
