@@ -228,6 +228,7 @@ def init_db():
         dismissed_at TEXT,
         replied_at   TEXT
     )""")
+    cur.execute("ALTER TABLE asana_notifications ADD COLUMN IF NOT EXISTS parent_name TEXT")
 
     cur.execute("""CREATE TABLE IF NOT EXISTS asana_poll_state (
         id           SERIAL PRIMARY KEY,
