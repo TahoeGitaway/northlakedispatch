@@ -325,6 +325,91 @@ def api_pri_alert_dismiss():
     return jsonify({"ok": True})
 
 
+@pri_bp.route("/api/pri-debug")
+@login_required
+def pri_debug():
+    """
+    Diagnostic: show every Breezeway reservation for a named property,
+    plus what the PRI logic sees when it processes that property's checkouts.
+
+    Usage: /api/pri-debug?name=Ember+Ridge+Retreat
+    """
+    from routes.briefing import (
+        _get_breezeway_token, _fetch_bw_reservations,
+        _classify_reservation, _get_property_name,
+        _ensure_property_cache, _get_live_property_cache,
+    )
+
+    prop_name_query = (request.args.get("name") or "").strip().lower()
+    if not prop_name_query:
+        return jsonify({"error": "name param required"}), 400
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured"}), 500
+
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()  # {bw_id: bw_name}
+
+    # Find property id(s) matching the name
+    matched = {pid: name for pid, name in prop_cache.items()
+               if prop_name_query in name.lower()}
+    if not matched:
+        return jsonify({"error": f"No property matching '{prop_name_query}'",
+                        "all_names": list(prop_cache.values())}), 404
+
+    today     = date_cls.today()
+    far_end   = today + timedelta(days=150)
+    lookback  = today - timedelta(days=60)
+
+    # Fetch checkouts for this property (wide window)
+    raw_checkouts = _fetch_bw_reservations(token, {
+        "checkout_date_ge": lookback.isoformat(),
+        "checkout_date_le": far_end.isoformat(),
+    })
+    # Fetch upcoming using the SAME query the pri_check uses
+    raw_upcoming_new = _fetch_bw_reservations(token, {
+        "checkout_date_ge": today.isoformat(),
+        "checkin_date_le":  far_end.isoformat(),
+    })
+    # Also fetch using the OLD query to compare
+    raw_upcoming_old = _fetch_bw_reservations(token, {
+        "checkin_date_ge": lookback.isoformat(),
+        "checkin_date_le": far_end.isoformat(),
+    })
+
+    def summarise(resos, pids):
+        out = []
+        for r in resos:
+            if r.get("property_id") in pids:
+                out.append({
+                    "id":           r.get("id"),
+                    "checkin_date": r.get("checkin_date"),
+                    "checkout_date":r.get("checkout_date"),
+                    "type_stay":    r.get("type_stay"),
+                    "type_reservation": r.get("type_reservation"),
+                    "tags":         [t.get("name") for t in (r.get("tags") or [])],
+                    "classified_as": _classify_reservation(r),
+                    "all_keys":     list(r.keys()),
+                })
+        out.sort(key=lambda x: x.get("checkin_date") or "")
+        return out
+
+    pids = set(matched.keys())
+    return jsonify({
+        "matched_properties": matched,
+        "query_date": today.isoformat(),
+        "checkouts_in_window": summarise(raw_checkouts, pids),
+        "upcoming_new_query":  summarise(raw_upcoming_new, pids),
+        "upcoming_old_query":  summarise(raw_upcoming_old, pids),
+        "counts": {
+            "total_checkouts_fetched": len(raw_checkouts),
+            "total_upcoming_new_fetched": len(raw_upcoming_new),
+            "total_upcoming_old_fetched": len(raw_upcoming_old),
+        },
+    })
+
+
 @pri_bp.route("/api/cron/pri-check", methods=["POST"])
 def cron_pri_check():
     """Unauthenticated cron endpoint — secured by Bearer token in CRON_SECRET env var."""
