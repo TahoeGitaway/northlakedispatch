@@ -52,9 +52,9 @@
 
             {% if current_user.is_admin %}
             <div class="w-px h-5 bg-gray-200 mx-2"></div>
-            <a href="{{ url_for('admin.chatbot_page') }}"
+            <a href="{{ url_for('ops_bot.chatbot_page') }}"
                class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
-                      {% if request.endpoint == 'admin.chatbot_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
+                      {% if request.endpoint == 'ops_bot.chatbot_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
                 Ops Bot
             </a>
             <a href="{{ url_for('my_bot.my_bot_page') }}"
