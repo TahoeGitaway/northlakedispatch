@@ -11,7 +11,7 @@
         All Breezeway tasks containing "Spring Property Inspection" scheduled in 2026.
       </p>
     </div>
-    <button onclick="load()"
+    <button onclick="load(true)"
             class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1">
       ↺ Refresh
     </button>
@@ -87,14 +87,15 @@ function buildCard(t) {
   return card;
 }
 
-async function load() {
+async function load(forceRefresh) {
   document.getElementById("loading").classList.remove("hidden");
   document.getElementById("errorBox").classList.add("hidden");
   document.getElementById("results").classList.add("hidden");
   document.getElementById("summary").classList.add("hidden");
 
   try {
-    const res  = await fetch("/api/spi-status");
+    const url  = forceRefresh ? "/api/spi-status?refresh=1" : "/api/spi-status";
+    const res  = await fetch(url);
     const data = await res.json();
     document.getElementById("loading").classList.add("hidden");
 
