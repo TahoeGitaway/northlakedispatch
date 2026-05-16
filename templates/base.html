@@ -45,6 +45,17 @@
 
             {% if current_user.is_admin %}
             <div class="w-px h-5 bg-gray-200 mx-2"></div>
+            <a href="{{ url_for('admin.chatbot_page') }}"
+               class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
+                      {% if request.endpoint == 'admin.chatbot_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
+                Ops Bot
+            </a>
+            <a href="{{ url_for('my_bot.my_bot_page') }}"
+               class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
+                      {% if request.endpoint == 'my_bot.my_bot_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
+                My Bot
+            </a>
+            <div class="w-px h-5 bg-gray-200 mx-1"></div>
             <a href="{{ url_for('admin.admin_properties') }}"
                class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
                       {% if request.endpoint == 'admin.admin_properties' %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
@@ -59,6 +70,11 @@
                class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
                       {% if request.endpoint == 'admin.security_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
                 Security
+            </a>
+            <a href="{{ url_for('spi.spi_page') }}"
+               class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
+                      {% if request.endpoint == 'spi.spi_page' %}bg-green-50 text-green-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
+                SPI
             </a>
             {% endif %}
             {% endif %}
