@@ -168,13 +168,15 @@ def fetch_spi_data(force_refresh=False):
     spi_tasks: list = []
 
     # ── Strategy 1: global queries (13 calls covering all of 2026) ──
-    global_worked = True
+    global_worked = False
     global_raw: list = []
     for win_start, win_end in _2026_WINDOWS:
         chunk = _fetch_window_global(token, win_start, win_end)
         if chunk is None:
-            global_worked = False
+            global_raw = []
             break
+        if chunk:
+            global_worked = True  # at least one window returned real data
         global_raw.extend(chunk)
 
     if global_worked:
