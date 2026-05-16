@@ -254,15 +254,13 @@ function renderStops() {
     countEl.textContent = "";
     document.getElementById("preOptSection").classList.add("hidden");
     document.getElementById("preOptSearch").classList.add("hidden");
-    const _bwW = document.getElementById("bwImportWrap");
-    if (_bwW) _bwW.style.display = "none";
+    if (window.NLD?.isAdmin) document.getElementById("bwImportWrap").style.display = "none";
     return;
   }
 
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
-  const _bwW = document.getElementById("bwImportWrap");
-  if (_bwW) _bwW.style.display = "block";
+  if (window.NLD?.isAdmin) document.getElementById("bwImportWrap").style.display = "block";
   container.innerHTML = "";
   countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
 
@@ -377,7 +375,7 @@ function restartRoute() {
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
-  document.getElementById("bwImportWrap").style.display="block";
+  if (window.NLD?.isAdmin) document.getElementById("bwImportWrap").style.display="block";
   renderStops();
   document.getElementById("scheduleSection").classList.add("hidden");
   document.getElementById("workInSection").classList.add("hidden");
