@@ -884,31 +884,34 @@ def pri_check():
         report_days = 60
     report_days = max(1, min(report_days, 60))
 
-    lookback_start = today - timedelta(days=30)    # scan back 30 days for late-added owner stays
-    scan_end       = today + timedelta(days=60)    # always scan 60 days forward for vacancy calc
-    report_end     = today + timedelta(days=report_days)  # display cutoff
-    far_end        = today + timedelta(days=150)   # look further ahead to find what follows late checkouts
+    lookback_start   = today - timedelta(days=30)    # scan back 30 days for late-added owner stays
+    reso_lookback    = today - timedelta(days=180)   # look back 180 days for active owner/block stays
+    scan_end         = today + timedelta(days=60)    # always scan 60 days forward for vacancy calc
+    report_end       = today + timedelta(days=report_days)  # display cutoff
+    far_end          = today + timedelta(days=150)   # look further ahead to find what follows late checkouts
 
     token = _get_breezeway_token()
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 500
 
-    lookback_str   = lookback_start.isoformat()
-    today_str      = today.isoformat()
-    scan_end_str   = scan_end.isoformat()
-    report_end_str = report_end.isoformat()
-    far_end_str    = far_end.isoformat()
+    lookback_str      = lookback_start.isoformat()
+    reso_lookback_str = reso_lookback.isoformat()
+    today_str         = today.isoformat()
+    scan_end_str      = scan_end.isoformat()
+    report_end_str    = report_end.isoformat()
+    far_end_str       = far_end.isoformat()
 
     # Checkouts from 30 days ago through the forward window (catches last-minute owner additions)
     raw_checkouts = _fetch_bw_reservations(token, {
         "checkout_date_ge": lookback_str,
         "checkout_date_le": scan_end_str,
     })
-    # Reservations starting from 30 days ago through 150 days out — needed so we can find
-    # owner/block stays that may have already checked in after a recent guest checkout.
+    # Fetch all reservations that haven't ended yet (checkout >= today) plus upcoming ones.
+    # Using checkout_date_ge instead of checkin_date_ge ensures currently active stays
+    # (e.g. an owner in house since months ago) are always included regardless of checkin date.
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkin_date_ge": lookback_str,
-        "checkin_date_le": far_end_str,
+        "checkout_date_ge": today_str,
+        "checkin_date_le":  far_end_str,
     })
 
     # Filter checkouts to the display window (lookback through report_end)
