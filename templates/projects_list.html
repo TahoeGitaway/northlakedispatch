@@ -3,6 +3,24 @@
 {% block content %}
 <div class="max-w-3xl mx-auto px-6 py-8">
 
+  {% if current_user.is_admin %}
+  <div class="mb-6">
+    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Tools</div>
+    <div class="flex flex-wrap gap-2">
+      <a href="{{ url_for('spi.spi_page') }}"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-green-200
+                bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100 transition-colors">
+        🌿 Spring Property Inspections 2026
+      </a>
+      <a href="{{ url_for('admin.pri_check_page') }}"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200
+                bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors">
+        🔍 PRI Check
+      </a>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-gray-800">Projects</h2>
     <button onclick="document.getElementById('newProjectForm').classList.toggle('hidden')"
