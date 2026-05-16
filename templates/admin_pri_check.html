@@ -182,7 +182,7 @@ function orangeCard(p) {
   const co  = _fmtDate(p.checkout_date);
   const key = _vacancyKey(p);
   const vacLine = p.vacancy_days
-    ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">${p.vacancy_days}+-day vacancy (no booking in 60-day window)</div>` : "";
+    ? `<div style="font-size:0.7rem;color:#9ca3af;margin-top:2px;">No booking in 60 days from checkout</div>` : "";
   const card = _card("#fff7ed", "#fed7aa", `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
       <div style="min-width:0;">

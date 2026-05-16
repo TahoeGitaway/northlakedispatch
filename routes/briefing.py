@@ -965,13 +965,13 @@ def pri_check():
                 next_ci_date = ci_date
                 break
 
-        # No upcoming reservation in scan window → vacancy PRI
-        if not next_r or not next_ci_date:
-            vacancy_days = (scan_end - co_date).days
+        # No reservation within 60 days of this checkout → vacancy PRI
+        vacancy_cutoff = co_date + timedelta(days=60)
+        if not next_r or not next_ci_date or next_ci_date > vacancy_cutoff:
             no_booking.append({
                 "property":      prop_name,
                 "checkout_date": co_date_str,
-                "vacancy_days":  vacancy_days,
+                "vacancy_days":  60,
             })
             continue
 
