@@ -30,7 +30,7 @@ while _d <= _end:
     _d = _w + timedelta(days=1)
 
 # Simple cache: (timestamp, results)
-_spi_cache: dict = {"ts": 0, "data": None}
+_spi_cache: dict = {"ts": 0, "data": None}  # bust by hitting Refresh or redeploying
 _SPI_CACHE_TTL = 3600  # 1 hour
 
 
@@ -53,44 +53,32 @@ def _fetch_window_global(token, start, end):
     """Try to fetch ALL tasks in a date window without a property filter.
     Returns list on success, None if the API requires a property_id.
     """
-    from routes.briefing import _fetch_bw_endpoint
+    from routes.briefing import _fetch_bw_tasks
 
-    paths = [
-        "/public/work/v1/task",
-        "/public/inventory/v1/task",
-        "/public/work/v2/task",
-    ]
-    params = {"scheduled_date_ge": start, "scheduled_date_le": end}
-    for path in paths:
-        results, _err, sc = _fetch_bw_endpoint(token, path, params)
-        if sc == 200:
-            return results or []
-        if sc == 403:
-            return None  # needs property filter
-    return None
+    results, err = _fetch_bw_tasks(token, {"scheduled_date": f"{start},{end}"})
+    if "elevated API access" in (err or ""):
+        return None
+    return results  # empty list is valid; None means hard failure
 
 
 def _fetch_tasks_for_property(token, pid, ref_id, start, end):
     """Fetch tasks for one property over one date window. Returns list or []."""
-    from routes.briefing import _fetch_bw_endpoint
+    from routes.briefing import _fetch_bw_tasks
 
-    task_paths = [
-        "/public/work/v1/task",
-        "/public/inventory/v1/task",
-        "/public/work/v2/task",
-    ]
-    base = {"scheduled_date_ge": start, "scheduled_date_le": end}
+    date_range = f"{start},{end}"
     id_pairs = (
         [("reference_property_id", ref_id)] if ref_id else []
     ) + [("property_id", pid), ("home_id", pid)]
 
-    for path in task_paths:
-        for key, val in id_pairs:
-            results, _err, sc = _fetch_bw_endpoint(token, path, {**base, key: val})
-            if sc == 200:
-                return results or []
-            if sc == 403:
-                return []
+    for key, val in id_pairs:
+        results, err = _fetch_bw_tasks(token, {
+            "scheduled_date": date_range,
+            key: val,
+        })
+        if results:
+            return results
+        if "elevated API access" in (err or ""):
+            return []
     return []
 
 
