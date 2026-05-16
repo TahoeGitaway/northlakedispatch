@@ -358,55 +358,40 @@ def pri_debug():
         return jsonify({"error": f"No property matching '{prop_name_query}'",
                         "all_names": list(prop_cache.values())}), 404
 
-    today     = date_cls.today()
-    far_end   = today + timedelta(days=150)
-    lookback  = today - timedelta(days=60)
+    today    = date_cls.today()
+    far_end  = today + timedelta(days=150)
+    lookback = today - timedelta(days=60)
 
-    # Fetch checkouts for this property (wide window)
-    raw_checkouts = _fetch_bw_reservations(token, {
-        "checkout_date_ge": lookback.isoformat(),
-        "checkout_date_le": far_end.isoformat(),
-    })
-    # Fetch upcoming using the SAME query the pri_check uses
-    raw_upcoming_new = _fetch_bw_reservations(token, {
-        "checkout_date_ge": today.isoformat(),
-        "checkin_date_le":  far_end.isoformat(),
-    })
-    # Also fetch using the OLD query to compare
-    raw_upcoming_old = _fetch_bw_reservations(token, {
+    pids = set(matched.keys())
+
+    # Single query: all reservations for these properties, wide window, by checkin date
+    all_resos = _fetch_bw_reservations(token, {
         "checkin_date_ge": lookback.isoformat(),
         "checkin_date_le": far_end.isoformat(),
     })
 
-    def summarise(resos, pids):
-        out = []
-        for r in resos:
-            if r.get("property_id") in pids:
-                out.append({
-                    "id":           r.get("id"),
-                    "checkin_date": r.get("checkin_date"),
-                    "checkout_date":r.get("checkout_date"),
-                    "type_stay":    r.get("type_stay"),
-                    "type_reservation": r.get("type_reservation"),
-                    "tags":         [t.get("name") for t in (r.get("tags") or [])],
-                    "classified_as": _classify_reservation(r),
-                    "all_keys":     list(r.keys()),
-                })
-        out.sort(key=lambda x: x.get("checkin_date") or "")
-        return out
+    resos_for_prop = [r for r in all_resos if r.get("property_id") in pids]
+    resos_for_prop.sort(key=lambda r: r.get("checkin_date") or "")
 
-    pids = set(matched.keys())
+    summarised = []
+    for r in resos_for_prop:
+        summarised.append({
+            "checkin_date":     r.get("checkin_date"),
+            "checkout_date":    r.get("checkout_date"),
+            "classified_as":    _classify_reservation(r),
+            "type_stay":        r.get("type_stay"),
+            "type_reservation": r.get("type_reservation"),
+            "tags":             [t.get("name") for t in (r.get("tags") or [])],
+            "property_id":      r.get("property_id"),
+            "id":               r.get("id"),
+        })
+
     return jsonify({
-        "matched_properties": matched,
-        "query_date": today.isoformat(),
-        "checkouts_in_window": summarise(raw_checkouts, pids),
-        "upcoming_new_query":  summarise(raw_upcoming_new, pids),
-        "upcoming_old_query":  summarise(raw_upcoming_old, pids),
-        "counts": {
-            "total_checkouts_fetched": len(raw_checkouts),
-            "total_upcoming_new_fetched": len(raw_upcoming_new),
-            "total_upcoming_old_fetched": len(raw_upcoming_old),
-        },
+        "matched_properties":    matched,
+        "query_date":            today.isoformat(),
+        "reservations":          summarised,
+        "total_fetched_all_props": len(all_resos),
+        "found_for_this_prop":   len(summarised),
     })
 
 
