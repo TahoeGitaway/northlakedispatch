@@ -254,13 +254,15 @@ function renderStops() {
     countEl.textContent = "";
     document.getElementById("preOptSection").classList.add("hidden");
     document.getElementById("preOptSearch").classList.add("hidden");
-    document.getElementById("bwImportWrap").style.display="none";
+    const _bwW = document.getElementById("bwImportWrap");
+    if (_bwW) _bwW.style.display = "none";
     return;
   }
 
   document.getElementById("preOptSection").classList.remove("hidden");
   document.getElementById("preOptSearch").classList.remove("hidden");
-  document.getElementById("bwImportWrap").style.display="block";
+  const _bwW = document.getElementById("bwImportWrap");
+  if (_bwW) _bwW.style.display = "block";
   container.innerHTML = "";
   countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
 
