@@ -80,11 +80,9 @@ def pri_check():
         "checkout_date_ge": lookback_str,
         "checkout_date_le": report_end_str,
     })
-    # Use checkout_date_ge: today so currently active stays are always included
-    # regardless of how long ago they checked in.
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkout_date_ge": today_str,
-        "checkin_date_le":  far_end_str,
+        "checkin_date_ge": lookback_str,
+        "checkin_date_le": far_end_str,
     })
 
     checkouts = [
@@ -193,8 +191,8 @@ def refresh_pri_banner_alerts(alert_days=3):
         "checkout_date_le": window_end.isoformat(),
     })
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkout_date_ge": today_str,
-        "checkin_date_le":  far_end.isoformat(),
+        "checkin_date_ge": today_str,
+        "checkin_date_le": far_end.isoformat(),
     })
 
     checkouts = [
