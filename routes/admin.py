@@ -1909,7 +1909,7 @@ def pri_dismissals_clear():
 @login_required
 @admin_required
 def pri_alert_refresh():
-    from routes.briefing import refresh_pri_banner_alerts
+    from routes.pri_check import refresh_pri_banner_alerts
     try:
         refresh_pri_banner_alerts(alert_days=3)
         return jsonify({"ok": True})

@@ -47,6 +47,7 @@ from routes.admin          import admin_bp
 from routes.dispatch       import dispatch_bp
 from routes.carpet         import carpet_bp
 from routes.briefing       import briefing_bp
+from routes.pri_check      import pri_bp
 from routes.employee       import employee_bp
 from routes.projects       import projects_bp
 from routes.my_bot         import my_bot_bp
@@ -57,6 +58,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(dispatch_bp)
 app.register_blueprint(carpet_bp)
 app.register_blueprint(briefing_bp)
+app.register_blueprint(pri_bp)
 app.register_blueprint(employee_bp)
 app.register_blueprint(projects_bp)
 app.register_blueprint(my_bot_bp)
@@ -80,7 +82,7 @@ def inject_globals():
 def _scheduled_pri_check():
     with app.app_context():
         try:
-            from routes.briefing import refresh_pri_banner_alerts
+            from routes.pri_check import refresh_pri_banner_alerts
             refresh_pri_banner_alerts(alert_days=3)
         except Exception:
             pass
