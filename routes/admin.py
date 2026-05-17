@@ -911,7 +911,14 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
                         (a.get("name") or f"{a.get('first_name','')} {a.get('last_name','')}").strip()
                         for a in assignees if isinstance(a, dict)
                     ]
-                    lines.append(f"  • {title} | {sdate} {stime} | assigned: {', '.join(names_list) or 'unassigned'}")
+                    raw_status = (task.get("type_task_status") or task.get("status") or task.get("state") or "").lower().strip()
+                    if raw_status in ("complete", "completed", "done", "finished"):
+                        status_label = "✓ Complete"
+                    elif raw_status in ("in_progress", "in progress", "started"):
+                        status_label = "🔄 In Progress"
+                    else:
+                        status_label = "⏳ Pending"
+                    lines.append(f"  • [{status_label}] {title} | {sdate} {stime} | assigned: {', '.join(names_list) or 'unassigned'}")
                 return "\n".join(lines)
         return f"Could not retrieve tasks for '{name}'."
 
