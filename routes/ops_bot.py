@@ -619,6 +619,8 @@ def chatbot_chat():
             "- If asked about a specific property or reservation that isn't in the loaded data, say so clearly "
             "and suggest the staff member check Breezeway or Streamline directly.\n"
             "- Be concise and direct. Use bullet points for multi-part answers.\n"
+            "- NEVER TRUNCATE. Output the complete list no matter how long. Never use '---' or '...' "
+            "to cut off a list. If the user wants to stop reading they will click stop.\n"
             "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
             "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
             "Do not consider the action done until confirmed.\n"
@@ -686,7 +688,7 @@ def chatbot_chat():
 
                 with ai_client.messages.stream(
                     model      = "claude-haiku-4-5-20251001",
-                    max_tokens = 1500,
+                    max_tokens = 8192,
                     system     = system_prompt,
                     messages   = trimmed,
                     tools      = tools,
