@@ -866,7 +866,16 @@ def my_bot_chat():
             "call get_my_asana_tasks again to get fresh GIDs, then retry. Do not tell the user "
             "the tasks are 'corrupted or deleted' unless re-fetching also fails.\n"
             "- If a tool returns an error, tell the user exactly what it says.\n"
-            "- Be concise. Use bullet points. Do not pad responses."
+            "- Be concise. Do not pad responses.\n"
+            "- FORMATTING — when presenting lists of tasks or properties, always use this structure:\n"
+            "  **[House Name]**\n"
+            "    • [Month Day, Year] – [Month Day, Year]: [Task Name]\n"
+            "    • [Month Day, Year] – [Month Day, Year]: [Task Name]\n"
+            "  (blank line between each property)\n"
+            "  Write dates as full month name + day + year (e.g. 'May 17, 2026'). "
+            "  Never use YYYY-MM-DD format in displayed output. "
+            "  House name is bold on its own line. Tasks are indented bullet points beneath it. "
+            "  Always put a blank line between properties."
         )
 
         try:
