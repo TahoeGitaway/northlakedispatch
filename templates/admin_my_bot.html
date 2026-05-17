@@ -552,6 +552,82 @@ function _hideErr() {
   document.getElementById("myBotErrBar").style.display = "none";
 }
 
+/* ── Auto-check notifications on load ── */
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(() => autoCheckNotifications(), 400);
+});
+
+async function autoCheckNotifications() {
+  if (_streaming) return;
+  const text = "Check for any new notifications and summarize them. If there are none, just say so briefly.";
+  document.getElementById("emptyState")?.remove();
+  chatStarted = true;
+  conversationHistory.push({role:"user", content: text});
+  appendThinking();
+  _setStreaming(true);
+  _hideErr();
+
+  let botBubble = null, replyText = "";
+
+  function getOrCreateBubble() {
+    if (botBubble) return botBubble;
+    document.getElementById("thinking")?.remove();
+    const box = document.getElementById("chatMessages");
+    botBubble = document.createElement("div");
+    botBubble.className = "bubble-bot";
+    box.appendChild(botBubble);
+    return botBubble;
+  }
+
+  try {
+    _abortController = new AbortController();
+    const res = await fetch("/admin/my-bot/chat", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({messages: conversationHistory}),
+      signal: _abortController.signal,
+    });
+    if (!res.ok) {
+      document.getElementById("thinking")?.remove();
+      conversationHistory.pop(); _setStreaming(false); return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split("\n\n"); buf = lines.pop();
+      for (const line of lines) {
+        const raw = line.startsWith("data: ") ? line.slice(6) : line;
+        if (!raw) continue;
+        let evt; try { evt = JSON.parse(raw); } catch { continue; }
+        if (evt.type === "status") { showStatus(evt.text); }
+        else if (evt.type === "delta") {
+          document.getElementById("thinking")?.remove();
+          const bubble = getOrCreateBubble();
+          replyText += evt.text;
+          bubble.textContent = replyText;
+          scrollIfAtBottom();
+        } else if (evt.type === "done") {
+          document.getElementById("thinking")?.remove();
+          for (const msg of (evt.history_additions || [])) conversationHistory.push(msg);
+          const cleanReply = replyText.replace(/CONFIRM_ACTION:\s*.+/gi,"").trimEnd();
+          conversationHistory.push({role:"assistant", content: cleanReply || replyText});
+          if (botBubble && cleanReply) botBubble.textContent = cleanReply;
+          scrollIfAtBottom(); _setStreaming(false);
+        } else if (evt.type === "error") {
+          document.getElementById("thinking")?.remove();
+          conversationHistory.pop(); _setStreaming(false);
+        }
+      }
+    }
+  } catch (e) {
+    document.getElementById("thinking")?.remove();
+    conversationHistory.pop(); _setStreaming(false);
+  }
+}
+
 async function sendMessage(overrideText) {
   if (_streaming) return;
   const input  = document.getElementById("chatInput");
