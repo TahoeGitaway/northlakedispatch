@@ -878,6 +878,13 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
         cache  = _get_live_property_cache()
         nl     = name.lower().strip()
         rev    = {v.lower(): k for k, v in cache.items() if isinstance(v, str)}
+
+        def _norm(s):
+            return s.lower().replace(" ", "").replace("-", "").replace("'", "")
+
+        nl_norm  = _norm(nl)
+        norm_rev = {_norm(k): k for k in rev}
+
         if nl in rev:
             pid = rev[nl]
         else:
@@ -886,7 +893,10 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
                 [k for k in rev if k.startswith(nl)] or
                 [k for k in rev if nl in k] or
                 [k for k in rev if qw and qw.issubset(set(k.split()))] or
-                difflib.get_close_matches(nl, rev.keys(), n=3, cutoff=0.4)
+                difflib.get_close_matches(nl, rev.keys(), n=3, cutoff=0.4) or
+                [norm_rev[nk] for nk in norm_rev if nk.startswith(nl_norm)] or
+                [norm_rev[nk] for nk in norm_rev if nl_norm in nk] or
+                [norm_rev[nk] for nk in norm_rev if len(nk) > 4 and nk in nl_norm]
             )
             pid = rev[matches[0]] if matches else None
         if not pid:

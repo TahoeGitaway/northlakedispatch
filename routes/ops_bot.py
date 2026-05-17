@@ -289,6 +289,13 @@ def chatbot_chat():
         _property_cache = _get_live_property_cache()
         name_lower = property_name_filter.lower().strip()
         rev = {v.lower(): k for k, v in _property_cache.items() if isinstance(v, str)}
+
+        def _normalize(s):
+            return s.lower().replace(" ", "").replace("-", "").replace("'", "")
+
+        name_norm = _normalize(name_lower)
+        norm_rev  = {_normalize(k): k for k in rev}  # normalized → original key
+
         if name_lower in rev:
             pid = rev[name_lower]
             matched_prop_name = property_name_filter
@@ -300,7 +307,12 @@ def chatbot_chat():
             fuzzy_m   = (difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.6) or
                          difflib.get_close_matches(name_lower, rev.keys(), n=3, cutoff=0.4))
             reverse_m = [k for k in rev if len(k) > 4 and k in name_lower]
-            matches = prefix_m or substr_m or word_m or fuzzy_m or reverse_m
+            # Normalize both sides (strip spaces/hyphens) before comparing — catches "Pinecrest" vs "Pine Crest"
+            norm_prefix_m = [norm_rev[nk] for nk in norm_rev if nk.startswith(name_norm)]
+            norm_substr_m = [norm_rev[nk] for nk in norm_rev if name_norm in nk]
+            norm_reverse_m = [norm_rev[nk] for nk in norm_rev if len(nk) > 4 and nk in name_norm]
+            matches = (prefix_m or substr_m or word_m or fuzzy_m or reverse_m or
+                       norm_prefix_m or norm_substr_m or norm_reverse_m)
             if len(matches) > 1:
                 matches = sorted(matches, key=len)
             pid = rev[matches[0]] if matches else None
