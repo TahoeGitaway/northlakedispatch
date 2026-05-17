@@ -850,11 +850,16 @@ def my_bot_chat():
             "- NEVER modify, paraphrase, abbreviate, or invent task names or property names. "
             "Always copy them character-for-character exactly as they appear in Asana data. "
             "If a name looks odd or unfamiliar, report it exactly as-is — do not 'correct' it.\n"
-            "- DEFAULT SOURCE IS ASANA. When the user asks about tasks, always use Asana tools. "
+            "- DEFAULT SOURCE IS ASANA. When the user asks about tasks, ALWAYS call get_my_asana_tasks "
+            "immediately — do not ask which source to use, do not ask for clarification, just fetch. "
             "Only use fetch_breezeway_tasks if the user explicitly says 'Breezeway' or asks about "
             "cleaning jobs, inspections, or maintenance schedules by property.\n"
+            "- NEVER ASK CLARIFYING QUESTIONS when the intent is obvious. If the user asks about "
+            "tasks, overdue items, what's on their plate, or anything task-related — fetch from Asana "
+            "immediately. Never say 'which would you prefer' or 'shall I fetch from Asana?' Just do it.\n"
+            "- NEVER TRUNCATE. Output the complete list no matter how long. Never use '---' or '...' "
+            "to cut off a list. If the user wants to stop reading they will click stop.\n"
             "- NEVER say you are doing something without immediately calling the tool. "
-            "Saying 'I'll fire all updates now' and then not calling a tool is not allowed. "
             "Call the tool first, then describe what happened based on the results.\n"
             "- For 2 or more task updates: ALWAYS use batch_update_asana_tasks, never loop update_asana_task.\n"
             "- After any tool call, report the results honestly: how many succeeded, "
@@ -883,7 +888,7 @@ def my_bot_chat():
                 turn_text    = ""
                 asst_content = []
                 with ai_client.messages.stream(
-                    model="claude-haiku-4-5-20251001", max_tokens=1024,
+                    model="claude-haiku-4-5-20251001", max_tokens=4096,
                     system=system_prompt, messages=trimmed, tools=tools,
                 ) as stream:
                     for chunk in stream.text_stream:

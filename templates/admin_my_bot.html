@@ -559,7 +559,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function autoCheckNotifications() {
   if (_streaming) return;
-  const text = "Check for any new notifications and summarize them. If there are none, just say so briefly.";
+  const text = "Check my Asana tasks and notifications. Show me: (1) any overdue tasks, (2) any unread notifications. Fetch both now without asking.";
   document.getElementById("emptyState")?.remove();
   chatStarted = true;
   conversationHistory.push({role:"user", content: text});
