@@ -42,25 +42,56 @@ def _get_property_name(pid):
     return _get_live_property_cache().get(pid, str(pid))
 
 
-def _fetch_tasks_range(token: str, start: date, end: date) -> list:
-    """Fetch all Breezeway tasks in a date range."""
-    params = {
-        "scheduled_date": f"{start.isoformat()},{end.isoformat()}",
-        "limit": 200,
-    }
-    try:
-        r = requests.get(
-            f"{BW_BASE}/public/inventory/v1/task/",
-            headers={"Authorization": f"JWT {token}"},
-            params=params,
-            timeout=20,
-        )
-        if r.status_code == 200:
-            body = r.json()
-            return body.get("results", body.get("data", body if isinstance(body, list) else []))
-    except Exception:
-        pass
+def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
+    """Fetch Breezeway tasks for one property over a date range."""
+    date_range = f"{start.isoformat()},{end.isoformat()}"
+    id_pairs = []
+    if ref_id:
+        id_pairs.append(("reference_property_id", ref_id))
+    id_pairs += [("property_id", pid), ("home_id", pid)]
+    for key, val in id_pairs:
+        try:
+            r = requests.get(
+                f"{BW_BASE}/public/inventory/v1/task/",
+                headers={"Authorization": f"JWT {token}"},
+                params={"scheduled_date": date_range, key: val, "limit": 100},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                body = r.json()
+                results = body.get("results", body.get("data", body if isinstance(body, list) else []))
+                if results:
+                    return results
+        except Exception:
+            pass
     return []
+
+
+def _fetch_tasks_range(token: str, start: date, end: date) -> list:
+    """Fetch all Breezeway tasks across all properties in a date range."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from routes.briefing import _get_live_property_cache, _get_live_ref_cache, _ensure_property_cache
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()
+    ref_cache  = _get_live_ref_cache()
+
+    all_tasks = []
+    seen_ids: set = set()
+
+    def fetch_one(pid, ref_id):
+        return _fetch_tasks_for_property(token, pid, ref_id, start, end)
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = {ex.submit(fetch_one, pid, ref_cache.get(pid, "")): pid
+                   for pid in prop_cache}
+        for future in as_completed(futures):
+            for t in (future.result() or []):
+                tid = t.get("id")
+                if tid is None or tid not in seen_ids:
+                    if tid is not None:
+                        seen_ids.add(tid)
+                    all_tasks.append(t)
+    return all_tasks
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:

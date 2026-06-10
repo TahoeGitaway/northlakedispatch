@@ -240,9 +240,21 @@ def api_spi_status():
     total      = len(results)
     complete   = sum(1 for r in results if r["is_complete"])
     incomplete = total - complete
+
+    from routes.briefing import _get_breezeway_token, _get_live_property_cache, _ensure_property_cache
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()
+    tok = _get_breezeway_token()
+    debug = {
+        "token_ok": bool(tok),
+        "property_count": len(prop_cache),
+        "sample_props": list(prop_cache.values())[:5],
+    }
+
     return jsonify({
         "tasks":      results,
         "total":      total,
         "complete":   complete,
         "incomplete": incomplete,
+        "debug":      debug,
     })
