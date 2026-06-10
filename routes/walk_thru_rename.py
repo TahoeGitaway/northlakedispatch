@@ -184,7 +184,34 @@ def walk_thru_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    return jsonify({"proposals": proposals})
+
+    # Debug info — always returned so we can diagnose empty results
+    walk_thru_tasks = []
+    for t in tasks:
+        title = (t.get("title") or t.get("name") or "")
+        if isinstance(title, dict):
+            title = title.get("value") or title.get("name") or ""
+        if WALK_THRU_PATTERNS.search(title):
+            pid = str(t.get("property_id") or t.get("home_id") or "")
+            sched = t.get("scheduled_date") or ""
+            walk_thru_tasks.append({
+                "title": title,
+                "already_dated": bool(ALREADY_DATED.search(title)),
+                "pid": pid,
+                "sched": sched,
+                "has_arrival": pid in reso_by_prop,
+            })
+
+    debug = {
+        "total_tasks_fetched": len(tasks),
+        "total_reservations_fetched": len(reservations),
+        "reservation_pids": list(reso_by_prop.keys())[:10],
+        "walk_thru_matches": walk_thru_tasks,
+        "sample_task_keys": list(tasks[0].keys()) if tasks else [],
+        "sample_task": {k: tasks[0].get(k) for k in ["title", "name", "property_id", "home_id", "scheduled_date"]} if tasks else {},
+    }
+
+    return jsonify({"proposals": proposals, "debug": debug})
 
 
 @walk_thru_bp.route("/admin/walk-thru-rename/apply", methods=["POST"])

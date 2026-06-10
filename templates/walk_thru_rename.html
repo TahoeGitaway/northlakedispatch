@@ -112,6 +112,18 @@ async function runScan() {
 
     proposals = data.proposals || [];
     if (proposals.length === 0) {
+      const db = data.debug || {};
+      document.getElementById('emptyBox').innerHTML =
+        `No Walk Thru tasks found that need a date added.<br><br>` +
+        `<span style="font-family:monospace;font-size:0.75rem;color:#6b7280;">` +
+        `Tasks fetched: ${db.total_tasks_fetched ?? '?'} | ` +
+        `Reservations fetched: ${db.total_reservations_fetched ?? '?'} | ` +
+        `Walk Thru matches: ${(db.walk_thru_matches||[]).length}<br>` +
+        `Walk Thru tasks: ${JSON.stringify(db.walk_thru_matches||[])}<br>` +
+        `Sample task keys: ${JSON.stringify(db.sample_task_keys||[])}<br>` +
+        `Sample task: ${JSON.stringify(db.sample_task||{})}<br>` +
+        `Reservation pids (first 10): ${JSON.stringify(db.reservation_pids||[])}` +
+        `</span>`;
       document.getElementById('emptyBox').classList.remove('hidden');
       return;
     }
