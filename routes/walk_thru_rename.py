@@ -67,23 +67,18 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
     return []
 
 
-def _fetch_tasks_range(token: str, start: date, end: date) -> list:
-    """Fetch all Breezeway tasks across all properties in a date range."""
+def _fetch_tasks_for_pids(token: str, pids: list[str], start: date, end: date) -> list:
+    """Fetch tasks only for the given property IDs — much faster than all properties."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from routes.briefing import _get_live_property_cache, _get_live_ref_cache, _ensure_property_cache
-    _ensure_property_cache()
-    prop_cache = _get_live_property_cache()
-    ref_cache  = _get_live_ref_cache()
+    from routes.briefing import _get_live_ref_cache
+    ref_cache = _get_live_ref_cache()
 
     all_tasks = []
     seen_ids: set = set()
 
-    def fetch_one(pid, ref_id):
-        return _fetch_tasks_for_property(token, pid, ref_id, start, end)
-
     with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = {ex.submit(fetch_one, pid, ref_cache.get(pid, "")): pid
-                   for pid in prop_cache}
+        futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
+                   for pid in pids}
         for future in as_completed(futures):
             for t in (future.result() or []):
                 tid = t.get("id")
@@ -162,14 +157,14 @@ def walk_thru_scan():
     today = date.today()
     end   = today + timedelta(days=30)
 
-    tasks        = _fetch_tasks_range(token, today, end)
-    reservations = _fetch_reservations_range(token, today, end + timedelta(days=7))
+    # Step 1: fetch reservations — one call, get all arrivals in window
+    reservations = _fetch_reservations_range(token, today, end)
 
-    # Index reservations by property_id → sorted list of checkin dates
+    # Index by property_id → sorted checkin dates; collect only pids with arrivals
     reso_by_prop: dict[str, list[date]] = {}
     for r in reservations:
-        pid      = str(r.get("property_id") or r.get("home_id") or "")
-        checkin  = r.get("checkin_date") or ""
+        pid     = str(r.get("property_id") or r.get("home_id") or "")
+        checkin = r.get("checkin_date") or ""
         if pid and checkin:
             try:
                 d = date.fromisoformat(checkin[:10])
@@ -178,6 +173,10 @@ def walk_thru_scan():
                 pass
     for pid in reso_by_prop:
         reso_by_prop[pid].sort()
+
+    # Step 2: only fetch tasks for properties that actually have upcoming arrivals
+    arrival_pids = list(reso_by_prop.keys())
+    tasks = _fetch_tasks_for_pids(token, arrival_pids, today, end) if arrival_pids else []
 
     proposals = []
     for t in tasks:
