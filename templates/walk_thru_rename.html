@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}Walk Thru Rename — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-xl font-bold text-gray-800">Walk Thru Rename</h2>
+      <p class="text-xs text-gray-400 mt-0.5">
+        Finds Walk Thru tasks (today → +30 days) without a date in the name,
+        matches them to the next reservation arrival, and proposes a rename.
+      </p>
+    </div>
+    <button onclick="runScan()"
+            class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1">
+      ↺ Scan
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin"></div>
+    <span>Scanning Breezeway tasks and reservations…</span>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
+       style="background:#fef2f2; border:1px solid #fecaca;"></div>
+
+  <!-- Empty state -->
+  <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
+       style="background:#f9fafb; border:1px solid #e5e7eb;">
+    No Walk Thru tasks found that need a date added.
+  </div>
+
+  <!-- Table -->
+  <div id="tableWrap" class="hidden">
+    <div class="rounded-xl border border-gray-200 bg-white overflow-hidden mb-4">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-100 bg-gray-50">
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 w-8">
+              <input type="checkbox" id="selectAll" onchange="toggleAll(this.checked)"
+                     class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+            </th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Property</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Task Date</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Current Title</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Arrival</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Proposed Title</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <span id="selectedCount" class="text-xs text-gray-400"></span>
+      <button id="applyBtn" onclick="applyRenames()"
+              class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg
+                     hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+        Rename Selected
+      </button>
+    </div>
+  </div>
+
+  <!-- Apply results -->
+  <div id="resultsBox" class="hidden mt-6 space-y-2"></div>
+
+</div>
+
+<script>
+let proposals = [];
+
+function _fmtDate(ds) {
+  if (!ds) return '';
+  const d = new Date(ds + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function toggleAll(checked) {
+  document.querySelectorAll('.row-check').forEach(cb => cb.checked = checked);
+  updateCount();
+}
+
+function updateCount() {
+  const checked = document.querySelectorAll('.row-check:checked').length;
+  document.getElementById('selectedCount').textContent = `${checked} of ${proposals.length} selected`;
+  document.getElementById('applyBtn').disabled = checked === 0;
+}
+
+async function runScan() {
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('tableWrap').classList.add('hidden');
+  document.getElementById('emptyBox').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('resultsBox').classList.add('hidden');
+  document.getElementById('resultsBox').innerHTML = '';
+
+  try {
+    const resp = await fetch('/admin/walk-thru-rename/scan', { method: 'POST' });
+    const data = await resp.json();
+    document.getElementById('loading').classList.add('hidden');
+
+    if (data.error) {
+      const eb = document.getElementById('errorBox');
+      eb.textContent = data.error;
+      eb.classList.remove('hidden');
+      return;
+    }
+
+    proposals = data.proposals || [];
+    if (proposals.length === 0) {
+      document.getElementById('emptyBox').classList.remove('hidden');
+      return;
+    }
+
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+    proposals.forEach((p, i) => {
+      const tr = document.createElement('tr');
+      tr.className = 'border-b border-gray-50 hover:bg-gray-50';
+      tr.innerHTML = `
+        <td class="px-4 py-3">
+          <input type="checkbox" class="row-check rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                 data-index="${i}" checked onchange="updateCount()">
+        </td>
+        <td class="px-4 py-3 font-medium text-gray-800">${esc(p.property)}</td>
+        <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.task_date)}</td>
+        <td class="px-4 py-3 text-gray-500">${esc(p.current_title)}</td>
+        <td class="px-4 py-3 text-indigo-500 whitespace-nowrap font-medium">${_fmtDate(p.arrival_date)}</td>
+        <td class="px-4 py-3 font-semibold text-gray-800">${esc(p.proposed_title)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    document.getElementById('selectAll').checked = true;
+    updateCount();
+    document.getElementById('tableWrap').classList.remove('hidden');
+
+  } catch (e) {
+    document.getElementById('loading').classList.add('hidden');
+    const eb = document.getElementById('errorBox');
+    eb.textContent = 'Network error: ' + e.message;
+    eb.classList.remove('hidden');
+  }
+}
+
+async function applyRenames() {
+  const checked = [...document.querySelectorAll('.row-check:checked')];
+  const items = checked.map(cb => proposals[parseInt(cb.dataset.index)]);
+  if (!items.length) return;
+
+  document.getElementById('applyBtn').disabled = true;
+  document.getElementById('applyBtn').textContent = 'Renaming…';
+
+  try {
+    const resp = await fetch('/admin/walk-thru-rename/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const data = await resp.json();
+
+    const box = document.getElementById('resultsBox');
+    box.innerHTML = '';
+    (data.results || []).forEach(r => {
+      const div = document.createElement('div');
+      div.style.cssText = `border-radius:8px; padding:10px 14px; font-size:0.8rem;
+        background:${r.success ? '#f0fdf4' : '#fef2f2'};
+        border:1px solid ${r.success ? '#bbf7d0' : '#fecaca'};
+        color:${r.success ? '#15803d' : '#b91c1c'};`;
+      div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.proposed_title}" ${r.success ? '' : '· ' + r.detail}`;
+      box.appendChild(div);
+    });
+    box.classList.remove('hidden');
+
+    document.getElementById('applyBtn').textContent = 'Rename Selected';
+    document.getElementById('applyBtn').disabled = false;
+    runScan();
+
+  } catch (e) {
+    document.getElementById('applyBtn').textContent = 'Rename Selected';
+    document.getElementById('applyBtn').disabled = false;
+    alert('Error: ' + e.message);
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Auto-scan on load
+runScan();
+</script>
+{% endblock %}
