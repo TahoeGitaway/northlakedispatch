@@ -39,21 +39,25 @@ def _get_property_name(pid):
 
 
 def _is_lease(r: dict) -> bool:
-    """Lease = 30+ night stay, or type_stay contains 'lease'."""
+    """Lease = guest stay of 30+ nights. Excludes owner stays and blocks."""
+    # Exclude owner stays and blocks first
+    ts = r.get("type_stay") or {}
+    tr = r.get("type_reservation") or {}
+    ts_val = str(ts.get("code") or ts.get("name") or ts if not isinstance(ts, dict) else "").lower()
+    tr_val = str(tr.get("code") or tr.get("name") or tr if not isinstance(tr, dict) else "").lower()
+    if "owner" in ts_val or "block" in ts_val or "hold" in ts_val:
+        return False
+    if "block" in tr_val or "hold" in tr_val:
+        return False
+    # Must be 30+ nights
     checkin  = r.get("checkin_date",  "")[:10]
     checkout = r.get("checkout_date", "")[:10]
     if checkin and checkout:
         try:
-            if (date.fromisoformat(checkout) - date.fromisoformat(checkin)).days >= 30:
-                return True
+            return (date.fromisoformat(checkout) - date.fromisoformat(checkin)).days >= 30
         except ValueError:
             pass
-    ts = r.get("type_stay") or {}
-    if isinstance(ts, dict):
-        val = str(ts.get("code") or ts.get("name") or "")
-    else:
-        val = str(ts)
-    return "lease" in val.lower()
+    return False
 
 
 def _fetch_reservations(token: str, start: date, end: date) -> list:
@@ -130,7 +134,7 @@ def _fmt_task(t: dict) -> dict:
     raw_status  = (_safe_str(t.get("type_task_status")) or
                    _safe_str(t.get("status")) or
                    _safe_str(t.get("state")))
-    if done_at_raw or raw_status in ("complete", "completed", "done", "finished"):
+    if raw_status in ("complete", "completed", "done", "finished", "approved"):
         status = "complete"
     elif raw_status in ("in_progress", "in progress", "started"):
         status = "in_progress"
@@ -156,6 +160,7 @@ def _fmt_task(t: dict) -> dict:
         "sched_time": sched_time[:5]  if sched_time else None,
         "done_at":    done_at[:16]    if done_at    else None,
         "status":     status,
+        "raw_status": raw_status,  # debug: remove once status mapping is confirmed
         "assignees":  assignees,
     }
 

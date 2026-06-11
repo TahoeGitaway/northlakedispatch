@@ -127,6 +127,8 @@ function buildLeaseCard(lease) {
             <span>📅 ${dateTime}</span>
             ${doneStr ? `<span>✓ ${esc(doneStr)}</span>` : ''}
             <span>👤 ${esc(people)}</span>
+            <span style="color:#a78bfa;">[raw_status: "${esc(t.raw_status || '(empty)')
+}"]</span>
           </div>
         </div>
       `;
