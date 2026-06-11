@@ -228,17 +228,31 @@ async function applyRenames() {
       div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.proposed_title}"${r.success ? '' : ' · ' + r.detail}`;
       box.appendChild(div);
     });
-    const succeeded = (data.results || []).filter(r => r.success).length;
+    // Grey out succeeded rows in the table, leave failed rows alone
+    const succeededIds = new Set(
+      (data.results || []).filter(r => r.success).map(r => String(r.task_id))
+    );
+    document.querySelectorAll('.row-check').forEach(cb => {
+      const idx  = parseInt(cb.dataset.index);
+      const item = proposals[idx];
+      if (succeededIds.has(String(item.task_id))) {
+        const row = cb.closest('tr');
+        row.style.opacity = '0.4';
+        row.querySelectorAll('td').forEach(td => td.style.textDecoration = 'line-through');
+        cb.disabled = true;
+      }
+    });
+
+    const succeeded = succeededIds.size;
     const failed    = (data.results || []).length - succeeded;
     const summary   = document.createElement('div');
-    summary.style.cssText = 'font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:8px;';
+    summary.style.cssText = 'font-size:0.85rem;font-weight:600;color:#374151;margin-bottom:8px;';
     summary.textContent   = `${succeeded} renamed${failed ? `, ${failed} failed` : ''} — rescan when ready`;
     box.prepend(summary);
     box.classList.remove('hidden');
 
     document.getElementById('applyBtn').textContent = 'Rename Selected';
     document.getElementById('applyBtn').disabled = false;
-    // Do NOT auto-rescan — let user click Scan when ready
 
   } catch (e) {
     document.getElementById('applyBtn').textContent = 'Rename Selected';
