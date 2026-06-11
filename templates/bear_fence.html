@@ -226,10 +226,13 @@ async function applyChanges() {
     summary.style.cssText = 'font-size:0.85rem;font-weight:600;color:#374151;margin-bottom:8px;';
     summary.textContent   = `${succeeded} date${succeeded !== 1 ? 's' : ''} changed${failed ? `, ${failed} failed` : ''} — rescan when ready`;
     box.appendChild(summary);
-    (data.results || []).filter(r => !r.success).forEach(r => {
+    (data.results || []).forEach(r => {
       const div = document.createElement('div');
-      div.style.cssText = 'border-radius:8px;padding:10px 14px;font-size:0.8rem;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;';
-      div.textContent = `✗ ${r.property} · ${r.detail}`;
+      div.style.cssText = `border-radius:8px;padding:10px 14px;font-size:0.8rem;
+        background:${r.success ? '#f0fdf4' : '#fef2f2'};
+        border:1px solid ${r.success ? '#bbf7d0' : '#fecaca'};
+        color:${r.success ? '#15803d' : '#b91c1c'};`;
+      div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.task_title}" · ${r.detail}`;
       box.appendChild(div);
     });
     box.classList.remove('hidden');

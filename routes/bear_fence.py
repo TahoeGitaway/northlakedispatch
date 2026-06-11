@@ -126,7 +126,13 @@ def _patch_task(token: str, task_id, payload: dict) -> tuple:
         ok = r.status_code in (200, 201)
         try:
             body = r.json()
-            msg = f"status={r.status_code} date='{body.get('scheduled_date','')}'"
+            returned_date = body.get("scheduled_date") or "(not in response)"
+            sent_date     = payload.get("scheduled_date", "")
+            if ok:
+                match = "✓ confirmed" if returned_date[:10] == sent_date[:10] else f"⚠ returned {returned_date} (expected {sent_date})"
+                msg = f"status={r.status_code} {match}"
+            else:
+                msg = f"status={r.status_code} body={r.text[:300]}"
         except Exception:
             msg = f"status={r.status_code} body={r.text[:200]}"
         return ok, msg
@@ -268,6 +274,7 @@ def bear_fence_apply():
         results.append({
             "task_id":    item["task_id"],
             "property":   item.get("property", ""),
+            "task_title": item.get("task_title", ""),
             "new_date":   item["bear_fence_date"],
             "success":    ok,
             "detail":     msg,
