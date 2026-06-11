@@ -176,14 +176,21 @@ async function runScan() {
     proposals.forEach((p, i) => {
       const tr = document.createElement('tr');
       tr.className = 'border-b border-gray-50 hover:bg-gray-50';
+      const bfDateStr = p.bear_fence_date
+        ? p.bear_fence_date.slice(5,7).replace(/^0/,'') + '/' + p.bear_fence_date.slice(8,10).replace(/^0/,'')
+        : '';
       const bfCell = p.bear_fence_date
-        ? `<td class="px-4 py-3 whitespace-nowrap">
-             <span style="color:#b45309;font-weight:600;font-size:0.8rem;">Y — ${_fmtDate(p.bear_fence_date)}</span><br>
-             <label style="font-size:0.75rem;color:#6b7280;display:flex;align-items:center;gap:4px;margin-top:4px;cursor:pointer;">
-               <input type="checkbox" class="date-check rounded border-gray-300 text-orange-500"
-                      data-index="${i}" checked>
-               Change date to ${p.bear_fence_date.slice(5,7).replace(/^0/,'') + '/' + p.bear_fence_date.slice(8,10).replace(/^0/,'')}
-             </label>
+        ? `<td class="px-4 py-3">
+             <div style="color:#b45309;font-weight:600;font-size:0.8rem;">Y — ${_fmtDate(p.bear_fence_date)}</div>
+             <div style="font-size:0.72rem;color:#6b7280;margin-top:2px;">${esc(p.bear_fence_name || '')}</div>
+             ${p.date_change_needed
+               ? `<label style="font-size:0.75rem;color:#6b7280;display:flex;align-items:center;gap:4px;margin-top:5px;cursor:pointer;">
+                    <input type="checkbox" class="date-check rounded border-gray-300 text-orange-500"
+                           data-index="${i}" checked>
+                    Change date to ${bfDateStr}
+                  </label>`
+               : `<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Already on ${bfDateStr}</div>`
+             }
            </td>`
         : `<td class="px-4 py-3 text-gray-300 text-xs">—</td>`;
       tr.innerHTML = `
@@ -218,7 +225,9 @@ async function applyRenames() {
   const items = checked.map(cb => {
     const idx  = parseInt(cb.dataset.index);
     const p    = proposals[idx];
-    const dateCb = document.querySelector(`.date-check[data-index="${idx}"]`);
+    const dateCb = p.date_change_needed
+      ? document.querySelector(`.date-check[data-index="${idx}"]`)
+      : null;
     return { ...p, change_date: dateCb ? dateCb.checked : false };
   });
   if (!items.length) return;

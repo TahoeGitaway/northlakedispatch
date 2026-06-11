@@ -200,8 +200,8 @@ def walk_thru_scan():
     arrival_pids = list(reso_by_prop.keys())
     tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
 
-    # Build bear fence index: pid → earliest bear fence date on/after task date
-    bear_fence_by_prop: dict[str, list[date]] = {}
+    # Build bear fence index: pid → sorted list of (date, task_name)
+    bear_fence_by_prop: dict[str, list[tuple]] = {}
     for t in tasks:
         title = (t.get("title") or t.get("name") or "")
         if isinstance(title, dict):
@@ -211,11 +211,11 @@ def walk_thru_scan():
             sched = t.get("scheduled_date") or ""
             try:
                 d = date.fromisoformat(sched[:10])
-                bear_fence_by_prop.setdefault(pid, []).append(d)
+                bear_fence_by_prop.setdefault(pid, []).append((d, title))
             except (ValueError, TypeError):
                 pass
     for pid in bear_fence_by_prop:
-        bear_fence_by_prop[pid].sort()
+        bear_fence_by_prop[pid].sort(key=lambda x: x[0])
 
     proposals = []
     for t in tasks:
@@ -242,8 +242,10 @@ def walk_thru_scan():
             continue
 
         # Check for bear fence task at this property on/after task date
-        bf_dates   = bear_fence_by_prop.get(pid, [])
-        bear_fence = next((d for d in bf_dates if d >= task_date), None)
+        bf_entries = bear_fence_by_prop.get(pid, [])
+        bf_match   = next(((d, n) for d, n in bf_entries if d >= task_date), None)
+        bear_fence      = bf_match[0] if bf_match else None
+        bear_fence_name = bf_match[1] if bf_match else None
 
         prop_name    = _get_property_name(pid)
         proposed     = _build_proposed_title(title, arrival)
@@ -255,6 +257,8 @@ def walk_thru_scan():
             "arrival_date":   arrival.isoformat(),
             "proposed_title": proposed,
             "bear_fence_date": bear_fence.isoformat() if bear_fence else None,
+            "bear_fence_name": bear_fence_name,
+            "date_change_needed": bear_fence is not None and bear_fence != task_date,
         })
 
     proposals.sort(key=lambda x: x["task_date"])
