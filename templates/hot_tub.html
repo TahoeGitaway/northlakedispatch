@@ -11,11 +11,16 @@
         Biweekly or Arrival Hot Tub Service task was more than 14 days ago.
       </p>
     </div>
-    <button onclick="runScan()"
-            class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg
-                   hover:bg-indigo-700 transition-colors">
-      Scan
-    </button>
+    <div class="flex gap-2 items-center">
+      <button onclick="clearHandled()"
+              class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
+        Clear checkoffs
+      </button>
+      <button onclick="runScan()"
+              class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+        Scan
+      </button>
+    </div>
   </div>
 
   <!-- Loading -->
@@ -45,10 +50,61 @@
 </div>
 
 <script>
+const SESSION_KEY = 'hot_tub_handled';
+
+function _getHandled() {
+  try { return new Set(JSON.parse(sessionStorage.getItem(SESSION_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+function _setHandled(s) {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify([...s]));
+}
+
+function clearHandled() {
+  sessionStorage.removeItem(SESSION_KEY);
+  document.querySelectorAll('.ht-card').forEach(c => _applyHandled(c, false));
+}
+
+function _applyHandled(card, handled) {
+  card.style.opacity      = handled ? '0.45' : '1';
+  card.style.filter       = handled ? 'grayscale(0.4)' : '';
+  const btn = card.querySelector('.handled-btn');
+  if (btn) {
+    btn.textContent       = handled ? '✓ Handled' : 'Mark handled';
+    btn.style.background  = handled ? '#d1fae5' : '#f3f4f6';
+    btn.style.color       = handled ? '#065f46' : '#374151';
+    btn.style.border      = handled ? '1px solid #6ee7b7' : '1px solid #e5e7eb';
+  }
+}
+
+function toggleHandled(btn, propName) {
+  const handled = _getHandled();
+  const card    = btn.closest('.ht-card');
+  if (handled.has(propName)) {
+    handled.delete(propName);
+    _applyHandled(card, false);
+  } else {
+    handled.add(propName);
+    _applyHandled(card, true);
+  }
+  _setHandled(handled);
+}
+
 function _fmtDate(ds) {
-  if (!ds) return null;
+  if (!ds) return '—';
   const d = new Date(ds + 'T00:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function _fmtTime(ts) {
+  if (!ts) return null;
+  const s = String(ts);
+  const parts = s.split(':');
+  if (parts.length < 2) return ts;
+  let h = parseInt(parts[0]), m = parts[1];
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m} ${suffix}`;
 }
 
 function esc(s) {
@@ -82,44 +138,74 @@ async function runScan() {
 
     const items   = data.results || [];
     const overdue = items.filter(r => r.overdue).length;
-    const ok      = items.length - overdue;
-
     document.getElementById('sumOverdue').textContent = overdue;
-    document.getElementById('sumOk').textContent      = ok;
+    document.getElementById('sumOk').textContent      = items.length - overdue;
     document.getElementById('sumTotal').textContent   = items.length;
     document.getElementById('summary').classList.remove('hidden');
 
+    const handled   = _getHandled();
     const container = document.getElementById('results');
+
     items.forEach(r => {
       const isOverdue = r.overdue;
       const daysText  = r.days_since === null
         ? 'No service found in last 45 days'
         : `${r.days_since} day${r.days_since !== 1 ? 's' : ''} ago`;
 
+      // Next task block
+      let nextHtml = '';
+      if (r.next_task) {
+        const nt    = r.next_task;
+        const parts = [_fmtDate(nt.date)];
+        if (nt.time) parts.push(_fmtTime(nt.time));
+        if (nt.assignee) parts.push(nt.assignee);
+        nextHtml = `
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${isOverdue ? '#fecaca' : '#bbf7d0'};">
+            <div style="font-size:0.7rem;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;">Next Scheduled</div>
+            <div style="font-size:0.8rem;color:#1f2937;font-weight:500;">${esc(nt.title)}</div>
+            <div style="font-size:0.75rem;color:#6b7280;margin-top:2px;">${parts.join(' · ')}</div>
+          </div>`;
+      } else {
+        nextHtml = `
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${isOverdue ? '#fecaca' : '#bbf7d0'};">
+            <div style="font-size:0.75rem;color:#9ca3af;font-style:italic;">No upcoming hot tub task found in next 45 days</div>
+          </div>`;
+      }
+
       const card = document.createElement('div');
+      card.className = 'ht-card';
       card.style.cssText = `
-        border-radius:10px; padding:14px 16px;
+        border-radius:10px; padding:14px 16px; transition:opacity 0.2s;
         border:1px solid ${isOverdue ? '#fecaca' : '#bbf7d0'};
         background:${isOverdue ? '#fef2f2' : '#f0fdf4'};
       `;
       card.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-          <div>
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+          <div style="flex:1;min-width:0;">
             <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(r.property)}</div>
             <div style="font-size:0.78rem;color:#6b7280;margin-top:3px;">
-              ${r.last_task ? esc(r.last_task) : '<em>No matching task found</em>'}
+              Last: ${r.last_task ? esc(r.last_task) : '<em>none found</em>'}
             </div>
           </div>
-          <div style="text-align:right;flex-shrink:0;">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
             <div style="font-size:0.8rem;font-weight:600;color:${isOverdue ? '#dc2626' : '#16a34a'};">
               ${isOverdue ? '⚠ OVERDUE' : '✓ OK'}
             </div>
-            <div style="font-size:0.75rem;color:#6b7280;margin-top:2px;">
-              ${r.last_date ? _fmtDate(r.last_date) : '—'} &nbsp;·&nbsp; ${daysText}
+            <div style="font-size:0.75rem;color:#6b7280;text-align:right;">
+              ${_fmtDate(r.last_date)} · ${daysText}
             </div>
+            <button class="handled-btn"
+                    onclick="toggleHandled(this, ${JSON.stringify(r.property)})"
+                    style="font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:99px;cursor:pointer;
+                           background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;">
+              Mark handled
+            </button>
           </div>
         </div>
+        ${nextHtml}
       `;
+
+      if (handled.has(r.property)) _applyHandled(card, true);
       container.appendChild(card);
     });
 

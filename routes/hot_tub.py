@@ -166,46 +166,81 @@ def hot_tub_scan():
         return jsonify({"results": [], "tag_id": tag_id,
                         "warning": "No properties found with 'Hot Tub - TG Service' tag."})
 
-    # Step 3: fetch tasks for tagged properties over last 45 days
-    today     = date.today()
-    lookback  = today - timedelta(days=45)
+    # Step 3: fetch tasks — 45 days back AND 45 days forward to find last + next service
+    today    = date.today()
+    lookback = today - timedelta(days=45)
+    lookahead = today + timedelta(days=45)
 
     def fetch_tasks(pid):
-        return pid, _fetch_tasks_for_property(token, pid, ref_cache.get(pid, ""), lookback, today)
+        return pid, _fetch_tasks_for_property(token, pid, ref_cache.get(pid, ""), lookback, lookahead)
 
     tasks_by_pid: dict[str, list] = {}
     with ThreadPoolExecutor(max_workers=10) as ex:
         for pid, tasks in ex.map(lambda p: fetch_tasks(p), tagged_pids):
             tasks_by_pid[pid] = tasks
 
-    # Step 4: find last hot tub service per property
+    def _assignee_name(t: dict) -> str:
+        for a in (t.get("assignments") or []):
+            if isinstance(a, dict):
+                n = (a.get("name") or a.get("full_name") or
+                     f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
+                if n:
+                    return n
+        return ""
+
+    # Step 4: find last service (past) and next upcoming service (future) per property
     results = []
     for pid in tagged_pids:
         prop_name = _get_property_name(pid)
         tasks     = tasks_by_pid.get(pid, [])
 
-        service_dates = []
-        last_task_title = None
+        past_services   = []
+        future_services = []
+
         for t in tasks:
             title = (t.get("title") or t.get("name") or "")
             if isinstance(title, dict):
                 title = title.get("value") or title.get("name") or ""
-            if HOT_TUB_PATTERN.search(title):
-                sched = t.get("scheduled_date") or ""
-                try:
-                    d = date.fromisoformat(sched[:10])
-                    service_dates.append((d, title))
-                except (ValueError, TypeError):
-                    pass
+            if not HOT_TUB_PATTERN.search(title):
+                continue
+            sched = t.get("scheduled_date") or ""
+            try:
+                d = date.fromisoformat(sched[:10])
+            except (ValueError, TypeError):
+                continue
+            entry = {
+                "date":     d,
+                "title":    title,
+                "time":     t.get("scheduled_time") or "",
+                "assignee": _assignee_name(t),
+            }
+            if d <= today:
+                past_services.append(entry)
+            else:
+                future_services.append(entry)
 
-        if service_dates:
-            service_dates.sort(key=lambda x: x[0], reverse=True)
-            last_date, last_task_title = service_dates[0]
-            days_since = (today - last_date).days
+        if past_services:
+            past_services.sort(key=lambda x: x["date"], reverse=True)
+            last = past_services[0]
+            last_date       = last["date"]
+            last_task_title = last["title"]
+            days_since      = (today - last_date).days
         else:
             last_date       = None
             last_task_title = None
             days_since      = None
+
+        if future_services:
+            future_services.sort(key=lambda x: x["date"])
+            nxt = future_services[0]
+            next_task = {
+                "title":    nxt["title"],
+                "date":     nxt["date"].isoformat(),
+                "time":     nxt["time"],
+                "assignee": nxt["assignee"],
+            }
+        else:
+            next_task = None
 
         overdue = days_since is None or days_since > 14
 
@@ -215,6 +250,7 @@ def hot_tub_scan():
             "last_date":       last_date.isoformat() if last_date else None,
             "days_since":      days_since,
             "overdue":         overdue,
+            "next_task":       next_task,
         })
 
     # Sort: overdue first, then by days_since descending
