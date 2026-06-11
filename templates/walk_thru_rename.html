@@ -3,14 +3,24 @@
 {% block content %}
 <div class="max-w-4xl mx-auto px-4 py-6">
 
-  <!-- Header -->
-  <div class="mb-4">
-    <h2 class="text-xl font-bold text-gray-800">Walk Thru Rename</h2>
-    <p class="text-xs text-gray-400 mt-0.5">
-      Finds Walk Thru tasks without a date in the name, matches them to the
-      next reservation arrival, and proposes a rename.
-    </p>
+  <!-- Section header + sub-nav -->
+  <div class="mb-5">
+    <h2 class="text-xl font-bold text-gray-800 mb-3">Walk Thru Tools</h2>
+    <div class="flex gap-1 border-b border-gray-200">
+      <a href="{{ url_for('walk_thru.walk_thru_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-indigo-600 text-indigo-700">
+        Walk Thru Rename
+      </a>
+      <a href="{{ url_for('bear_fence.bear_fence_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+        Bear Fence Date Change
+      </a>
+    </div>
   </div>
+
+  <p class="text-xs text-gray-400 mb-4">
+    Finds Walk Thru tasks without a date in the name, matches them to the next reservation arrival, and proposes a rename.
+  </p>
 
   <!-- Date range + scan controls -->
   <div class="flex items-center gap-3 mb-5 flex-wrap">
@@ -21,20 +31,6 @@
       <label class="text-gray-500 font-medium">To</label>
       <input type="date" id="endDate"
              class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300">
-    </div>
-    <div class="flex gap-2">
-      <button onclick="setWeek(0)"
-              class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-        This week
-      </button>
-      <button onclick="setWeek(1)"
-              class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-        Next week
-      </button>
-      <button onclick="setWeek(2)"
-              class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-        Week after
-      </button>
     </div>
     <button onclick="runScan()"
             class="px-4 py-1.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
@@ -105,17 +101,6 @@ function _fmtDate(ds) {
   if (!ds) return '';
   const d = new Date(ds + 'T00:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function setWeek(offset) {
-  const today = new Date();
-  const dow   = today.getDay();
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1) + offset * 7);
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  document.getElementById('startDate').value = _isoDate(monday);
-  document.getElementById('endDate').value   = _isoDate(sunday);
 }
 
 function toggleAll(checked) {
