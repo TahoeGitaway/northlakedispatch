@@ -119,7 +119,6 @@ function setWeek(offset) {
   sunday.setDate(monday.getDate() + 6);
   document.getElementById('startDate').value = _isoDate(monday);
   document.getElementById('endDate').value   = _isoDate(sunday);
-  runScan();
 }
 
 function _initDates() {
@@ -257,7 +256,14 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// Init date range and auto-scan on load
-_initDates();
+// Init date range only — do not auto-scan
+const today = new Date();
+const dow = today.getDay();
+const monday = new Date(today);
+monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+const sunday = new Date(monday);
+sunday.setDate(monday.getDate() + 6);
+document.getElementById('startDate').value = _isoDate(monday);
+document.getElementById('endDate').value   = _isoDate(sunday);
 </script>
 {% endblock %}
