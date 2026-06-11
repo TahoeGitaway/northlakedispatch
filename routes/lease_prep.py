@@ -38,9 +38,22 @@ def _get_property_name(pid):
             str(pid))
 
 
-def _classify(r: dict) -> str:
-    from routes.briefing import _classify_reservation
-    return _classify_reservation(r)
+def _is_lease(r: dict) -> bool:
+    """Lease = 30+ night stay, or type_stay contains 'lease'."""
+    checkin  = r.get("checkin_date",  "")[:10]
+    checkout = r.get("checkout_date", "")[:10]
+    if checkin and checkout:
+        try:
+            if (date.fromisoformat(checkout) - date.fromisoformat(checkin)).days >= 30:
+                return True
+        except ValueError:
+            pass
+    ts = r.get("type_stay") or {}
+    if isinstance(ts, dict):
+        val = str(ts.get("code") or ts.get("name") or "")
+    else:
+        val = str(ts)
+    return "lease" in val.lower()
 
 
 def _fetch_reservations(token: str, start: date, end: date) -> list:
@@ -166,7 +179,7 @@ def _lease_prep_scan_inner():
     horizon  = today + timedelta(days=30)
 
     reservations = _fetch_reservations(token, today, horizon)
-    leases = [r for r in reservations if _classify(r) == "lease"]
+    leases = [r for r in reservations if _is_lease(r)]
     if not leases:
         return jsonify({"leases": []})
 
