@@ -236,7 +236,7 @@ async function applyRenames() {
         background:${r.success ? '#f0fdf4' : '#fef2f2'};
         border:1px solid ${r.success ? '#bbf7d0' : '#fecaca'};
         color:${r.success ? '#15803d' : '#b91c1c'};`;
-      div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.proposed_title}" ${r.success ? '' : '· ' + r.detail}`;
+      div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.proposed_title}" · ${r.detail}`;
       box.appendChild(div);
     });
     const succeeded = (data.results || []).filter(r => r.success).length;
