@@ -125,10 +125,12 @@ def _fmt_task(t: dict) -> dict:
     if isinstance(title, dict):
         title = title.get("value") or title.get("name") or ""
 
-    raw_status = (_safe_str(t.get("type_task_status")) or
-                  _safe_str(t.get("status")) or
-                  _safe_str(t.get("state")))
-    if raw_status in ("complete", "completed", "done", "finished"):
+    done_at_raw = (t.get("finished_at") or t.get("completed_at") or
+                   t.get("completed_date") or "")
+    raw_status  = (_safe_str(t.get("type_task_status")) or
+                   _safe_str(t.get("status")) or
+                   _safe_str(t.get("state")))
+    if done_at_raw or raw_status in ("complete", "completed", "done", "finished"):
         status = "complete"
     elif raw_status in ("in_progress", "in progress", "started"):
         status = "in_progress"
@@ -146,8 +148,7 @@ def _fmt_task(t: dict) -> dict:
 
     sched_date = str(t.get("scheduled_date") or "")
     sched_time = str(t.get("scheduled_time") or "")
-    done_at    = str(t.get("finished_at") or t.get("completed_at") or
-                     t.get("completed_date") or "")
+    done_at    = str(done_at_raw)
 
     return {
         "title":      title,
