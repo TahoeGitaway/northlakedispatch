@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Hot Tub - TG Service — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-6">
+
+  <div class="flex items-center justify-between mb-5">
+    <div>
+      <h2 class="text-xl font-bold text-gray-800">Hot Tub — TG Service</h2>
+      <p class="text-xs text-gray-400 mt-0.5">
+        Checks all properties tagged "Hot Tub - TG Service". Alerts if the last
+        Biweekly or Arrival Hot Tub Service task was more than 14 days ago.
+      </p>
+    </div>
+    <button onclick="runScan()"
+            class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg
+                   hover:bg-indigo-700 transition-colors">
+      Scan
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin"></div>
+    <span>Fetching property tags and task history…</span>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
+       style="background:#fef2f2; border:1px solid #fecaca;"></div>
+
+  <!-- Warning -->
+  <div id="warnBox" class="hidden rounded-xl px-5 py-3 text-amber-700 text-sm mb-4"
+       style="background:#fffbeb; border:1px solid #fde68a;"></div>
+
+  <!-- Summary -->
+  <div id="summary" class="hidden rounded-xl border border-gray-200 bg-white px-5 py-3 mb-5 flex gap-6 text-sm">
+    <div><span id="sumOverdue" class="font-bold text-red-600">—</span> <span class="text-gray-400">overdue</span></div>
+    <div><span id="sumOk"      class="font-bold text-green-600">—</span> <span class="text-gray-400">up to date</span></div>
+    <div><span id="sumTotal"   class="font-bold text-gray-700">—</span> <span class="text-gray-400">total properties</span></div>
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="space-y-3"></div>
+
+</div>
+
+<script>
+function _fmtDate(ds) {
+  if (!ds) return null;
+  const d = new Date(ds + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function runScan() {
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('summary').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('warnBox').classList.add('hidden');
+  document.getElementById('results').innerHTML = '';
+
+  try {
+    const resp = await fetch('/admin/hot-tub/scan', { method: 'POST' });
+    const data = await resp.json();
+    document.getElementById('loading').classList.add('hidden');
+
+    if (data.error) {
+      const eb = document.getElementById('errorBox');
+      eb.textContent = data.error;
+      eb.classList.remove('hidden');
+      return;
+    }
+
+    if (data.warning) {
+      const wb = document.getElementById('warnBox');
+      wb.textContent = data.warning;
+      wb.classList.remove('hidden');
+    }
+
+    const items   = data.results || [];
+    const overdue = items.filter(r => r.overdue).length;
+    const ok      = items.length - overdue;
+
+    document.getElementById('sumOverdue').textContent = overdue;
+    document.getElementById('sumOk').textContent      = ok;
+    document.getElementById('sumTotal').textContent   = items.length;
+    document.getElementById('summary').classList.remove('hidden');
+
+    const container = document.getElementById('results');
+    items.forEach(r => {
+      const isOverdue = r.overdue;
+      const daysText  = r.days_since === null
+        ? 'No service found in last 45 days'
+        : `${r.days_since} day${r.days_since !== 1 ? 's' : ''} ago`;
+
+      const card = document.createElement('div');
+      card.style.cssText = `
+        border-radius:10px; padding:14px 16px;
+        border:1px solid ${isOverdue ? '#fecaca' : '#bbf7d0'};
+        background:${isOverdue ? '#fef2f2' : '#f0fdf4'};
+      `;
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <div>
+            <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(r.property)}</div>
+            <div style="font-size:0.78rem;color:#6b7280;margin-top:3px;">
+              ${r.last_task ? esc(r.last_task) : '<em>No matching task found</em>'}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:0.8rem;font-weight:600;color:${isOverdue ? '#dc2626' : '#16a34a'};">
+              ${isOverdue ? '⚠ OVERDUE' : '✓ OK'}
+            </div>
+            <div style="font-size:0.75rem;color:#6b7280;margin-top:2px;">
+              ${r.last_date ? _fmtDate(r.last_date) : '—'} &nbsp;·&nbsp; ${daysText}
+            </div>
+          </div>
+        </div>
+      `;
+      container.appendChild(card);
+    });
+
+  } catch (e) {
+    document.getElementById('loading').classList.add('hidden');
+    const eb = document.getElementById('errorBox');
+    eb.textContent = 'Network error: ' + e.message;
+    eb.classList.remove('hidden');
+  }
+}
+</script>
+{% endblock %}
