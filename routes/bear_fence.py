@@ -30,8 +30,9 @@ WALK_THRU_PATTERNS = re.compile(
     r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|arrival[\s\-]?task|guest[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
-BB_PREFIX          = re.compile(r"^b/b\s+", re.IGNORECASE)
-BEAR_FENCE_PATTERN = re.compile(r"disarm[\s\-]*bear[\s\-]*fence", re.IGNORECASE)
+BB_PREFIX           = re.compile(r"^b/b\s+", re.IGNORECASE)
+BEAR_FENCE_PATTERN  = re.compile(r"disarm[\s\-]*bear[\s\-]*fence", re.IGNORECASE)
+ARRIVAL_HTS_PATTERN = re.compile(r"arrival[\s\-]+hot[\s\-]*tub", re.IGNORECASE)
 
 
 def _get_token():
@@ -166,10 +167,10 @@ def bear_fence_scan():
 
     tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
 
-    # Index Walk Thru tasks by pid
-    walk_thrus: dict[str, list[dict]] = {}
-    # Index Bear Fence tasks by pid
+    # Index tasks by pid
+    walk_thrus:  dict[str, list[dict]] = {}
     bear_fences: dict[str, list[dict]] = {}
+    hts_tasks:   dict[str, list[dict]] = {}  # Arrival Hot Tub Service
 
     for t in tasks:
         title = (t.get("title") or t.get("name") or "")
@@ -177,54 +178,78 @@ def bear_fence_scan():
             title = title.get("value") or title.get("name") or ""
         pid   = str(t.get("property_id") or t.get("home_id") or "")
         sched = t.get("scheduled_date") or ""
+        entry = {"title": title, "date": sched[:10], "id": t.get("id")}
 
         if BEAR_FENCE_PATTERN.search(title):
-            bear_fences.setdefault(pid, []).append({"title": title, "date": sched[:10], "id": t.get("id")})
+            bear_fences.setdefault(pid, []).append(entry)
+        elif ARRIVAL_HTS_PATTERN.search(title):
+            hts_tasks.setdefault(pid, []).append(entry)
         elif WALK_THRU_PATTERNS.search(title) and not BB_PREFIX.match(title):
-            walk_thrus.setdefault(pid, []).append({"title": title, "date": sched[:10], "id": t.get("id")})
+            walk_thrus.setdefault(pid, []).append(entry)
+
+    def _find_bf_match(bf_list, ref_date):
+        """Return the nearest bear fence task on or after ref_date, or None."""
+        for bf in sorted(bf_list, key=lambda x: x["date"]):
+            try:
+                bf_d = date.fromisoformat(bf["date"])
+                if bf_d >= ref_date:
+                    return bf, bf_d
+            except (ValueError, TypeError):
+                pass
+        return None, None
 
     proposals = []
-    for pid, wt_list in walk_thrus.items():
+
+    # All property IDs that appear in either walk_thrus or hts_tasks
+    candidate_pids = set(walk_thrus.keys()) | set(hts_tasks.keys())
+
+    for pid in candidate_pids:
         bf_list = bear_fences.get(pid)
         if not bf_list:
-            continue  # no bear fence at this property — skip
+            continue
 
         prop_name = _get_property_name(pid)
 
-        for wt in wt_list:
+        # Walk Thru tasks
+        for wt in walk_thrus.get(pid, []):
             try:
                 wt_date = date.fromisoformat(wt["date"])
             except (ValueError, TypeError):
                 continue
-
-            # Find the nearest bear fence task on or after the walk thru date
-            bf_match = None
-            for bf in sorted(bf_list, key=lambda x: x["date"]):
-                try:
-                    bf_d = date.fromisoformat(bf["date"])
-                    if bf_d >= wt_date:
-                        bf_match = bf
-                        bf_d_parsed = bf_d
-                        break
-                except (ValueError, TypeError):
-                    continue
-
-            if not bf_match:
+            bf_match, bf_d = _find_bf_match(bf_list, wt_date)
+            if not bf_match or bf_d == wt_date:
                 continue
-
-            if bf_d_parsed == wt_date:
-                continue  # dates already match — nothing to do
-
             proposals.append({
-                "task_id":         wt["id"],
-                "property":        prop_name,
-                "walk_thru_title": wt["title"],
-                "current_date":    wt["date"],
+                "task_id":          wt["id"],
+                "property":         prop_name,
+                "task_title":       wt["title"],
+                "task_type":        "Walk Thru",
+                "current_date":     wt["date"],
                 "bear_fence_title": bf_match["title"],
-                "bear_fence_date": bf_match["date"],
+                "bear_fence_date":  bf_match["date"],
             })
 
-    proposals.sort(key=lambda x: x["current_date"])
+        # Arrival Hot Tub Service tasks
+        for hts in hts_tasks.get(pid, []):
+            try:
+                hts_date = date.fromisoformat(hts["date"])
+            except (ValueError, TypeError):
+                continue
+            bf_match, bf_d = _find_bf_match(bf_list, hts_date)
+            if not bf_match or bf_d == hts_date:
+                continue
+            proposals.append({
+                "task_id":          hts["id"],
+                "property":         prop_name,
+                "task_title":       hts["title"],
+                "task_type":        "Arrival Hot Tub Service",
+                "current_date":     hts["date"],
+                "bear_fence_title": bf_match["title"],
+                "bear_fence_date":  bf_match["date"],
+            })
+
+    # Sort: by property then current date
+    proposals.sort(key=lambda x: (x["property"], x["current_date"]))
     return jsonify({"proposals": proposals})
 
 
