@@ -227,6 +227,8 @@ def walk_thru_scan():
             continue
         if ALREADY_DATED.search(title):
             continue
+        if BB_PREFIX.match(title):
+            continue
 
         task_id  = t.get("id") or t.get("task_id")
         pid      = str(t.get("property_id") or t.get("home_id") or "")
