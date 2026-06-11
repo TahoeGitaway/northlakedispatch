@@ -110,14 +110,24 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
     return []
 
 
+def _safe_str(val) -> str:
+    """Extract a plain lowercase string from any Breezeway field (string or dict)."""
+    if not val:
+        return ""
+    if isinstance(val, dict):
+        return str(val.get("code") or val.get("name") or val.get("label") or "").lower().strip()
+    return str(val).lower().strip()
+
+
 def _fmt_task(t: dict) -> dict:
     """Normalize a raw Breezeway task into a clean dict for the frontend."""
     title = t.get("title") or t.get("name") or ""
     if isinstance(title, dict):
         title = title.get("value") or title.get("name") or ""
 
-    raw_status = (t.get("type_task_status") or t.get("status") or
-                  t.get("state") or "").lower().strip()
+    raw_status = (_safe_str(t.get("type_task_status")) or
+                  _safe_str(t.get("status")) or
+                  _safe_str(t.get("state")))
     if raw_status in ("complete", "completed", "done", "finished"):
         status = "complete"
     elif raw_status in ("in_progress", "in progress", "started"):
@@ -134,10 +144,10 @@ def _fmt_task(t: dict) -> dict:
             if n:
                 assignees.append(n)
 
-    sched_date = t.get("scheduled_date") or ""
-    sched_time = t.get("scheduled_time") or ""
-    done_at    = (t.get("finished_at") or t.get("completed_at") or
-                  t.get("completed_date") or "")
+    sched_date = str(t.get("scheduled_date") or "")
+    sched_time = str(t.get("scheduled_time") or "")
+    done_at    = str(t.get("finished_at") or t.get("completed_at") or
+                     t.get("completed_date") or "")
 
     return {
         "title":      title,
@@ -164,7 +174,8 @@ def lease_prep_scan():
         return _lease_prep_scan_inner()
     except Exception as e:
         import traceback
-        return jsonify({"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-500:]}), 500
+        tb = traceback.format_exc()
+        return jsonify({"error": f"{type(e).__name__}: {e}\n\n{tb}"}), 500
 
 
 def _lease_prep_scan_inner():
