@@ -225,7 +225,7 @@ def _load_property_cache() -> str:
             resp = requests.get(
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
-                params={"limit": limit, "page": page},
+                params={"limit": limit, "page": page, "status": "active"},
                 timeout=15,
             )
             if not resp.ok:
