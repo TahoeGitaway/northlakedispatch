@@ -242,7 +242,7 @@ def hot_tub_scan():
         else:
             next_task = None
 
-        overdue = days_since is None or days_since > 14
+        overdue = days_since is None or days_since > 21
 
         results.append({
             "property":        prop_name,
