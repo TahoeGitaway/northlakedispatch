@@ -140,8 +140,14 @@ def _patch_task_title(token: str, task_id, new_title: str) -> tuple[bool, str]:
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
         r = requests.patch(url, headers=headers, json={"name": new_title}, timeout=15)
-        msg = f"status={r.status_code} body={r.text[:300]}"
-        return r.status_code in (200, 201), msg
+        ok = r.status_code in (200, 201)
+        try:
+            body = r.json()
+            returned_name = body.get("name") or body.get("title") or "(not in response)"
+            msg = f"status={r.status_code} returned name='{returned_name}'"
+        except Exception:
+            msg = f"status={r.status_code} body={r.text[:200]}"
+        return ok, msg
     except Exception as e:
         return False, str(e)
 
