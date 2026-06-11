@@ -151,7 +151,7 @@ async function runScan() {
 
     if (data.error) {
       const eb = document.getElementById('errorBox');
-      eb.textContent = data.error;
+      eb.innerHTML = `<pre style="white-space:pre-wrap;font-size:0.75rem;margin:0;">${esc(data.error)}</pre>`;
       eb.classList.remove('hidden');
       return;
     }

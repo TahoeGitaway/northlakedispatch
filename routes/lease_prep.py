@@ -186,19 +186,31 @@ def _lease_prep_scan_inner():
     from routes.briefing import _get_live_ref_cache, _ensure_property_cache
     _ensure_property_cache()
 
-    today    = date.today()
-    horizon  = today + timedelta(days=30)
+    today   = date.today()
+    horizon = today + timedelta(days=30)
 
-    reservations = _fetch_reservations(token, today, horizon)
-    leases = [r for r in reservations if _is_lease(r)]
+    # Step A: fetch reservations
+    try:
+        reservations = _fetch_reservations(token, today, horizon)
+    except Exception as e:
+        import traceback; return jsonify({"error": f"STEP A (fetch reservations): {e}\n{traceback.format_exc()}"})
+
+    # Step B: classify leases
+    try:
+        leases = [r for r in reservations if _is_lease(r)]
+    except Exception as e:
+        import traceback; return jsonify({"error": f"STEP B (classify leases): {e}\n{traceback.format_exc()}"})
+
     if not leases:
         return jsonify({"leases": []})
 
     ref_cache = _get_live_ref_cache()
 
+    # Step C: fetch tasks per lease
     def fetch_lease_tasks(r):
-        pid      = str(r.get("property_id") or r.get("home_id") or "")
-        checkin  = r.get("checkin_date", "")[:10]
+        pid = str(r.get("property_id") or r.get("home_id") or "")
+        checkin_raw = r.get("checkin_date") or ""
+        checkin = str(checkin_raw)[:10]
         try:
             arrival = date.fromisoformat(checkin)
         except ValueError:
@@ -209,30 +221,42 @@ def _lease_prep_scan_inner():
         )
         return r, tasks
 
+    try:
+        pairs = list(ThreadPoolExecutor(max_workers=8).map(fetch_lease_tasks, leases))
+    except Exception as e:
+        import traceback; return jsonify({"error": f"STEP C (fetch tasks): {e}\n{traceback.format_exc()}"})
+
+    # Step D: build results
     results = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        for reservation, tasks in ex.map(fetch_lease_tasks, leases):
-            pid      = str(reservation.get("property_id") or
-                           reservation.get("home_id") or "")
-            checkin  = reservation.get("checkin_date", "")[:10]
-            checkout = reservation.get("checkout_date", "")[:10]
-            guest    = (reservation.get("guest_name") or
-                        reservation.get("primary_guest") or
-                        reservation.get("name") or "")
-            if isinstance(guest, dict):
-                guest = (guest.get("name") or
-                         f"{guest.get('first_name','')} {guest.get('last_name','')}".strip())
+    for reservation, tasks in pairs:
+        try:
+            pid      = str(reservation.get("property_id") or reservation.get("home_id") or "")
+            checkin  = str(reservation.get("checkin_date")  or "")[:10]
+            checkout = str(reservation.get("checkout_date") or "")[:10]
+            guest_raw = (reservation.get("guest_name") or reservation.get("primary_guest") or
+                         reservation.get("name") or "")
+            if isinstance(guest_raw, dict):
+                guest = str(guest_raw.get("name") or
+                            f"{guest_raw.get('first_name','')} {guest_raw.get('last_name','')}".strip())
+            else:
+                guest = str(guest_raw)
             try:
-                nights = (date.fromisoformat(checkout) -
-                          date.fromisoformat(checkin)).days
+                nights = (date.fromisoformat(checkout) - date.fromisoformat(checkin)).days
             except ValueError:
                 nights = None
 
-            fmt_tasks = sorted(
-                [_fmt_task(t) for t in tasks],
-                key=lambda x: (x["sched_date"] or "")
-            )
+            fmt_tasks = []
+            for t in tasks:
+                try:
+                    fmt_tasks.append(_fmt_task(t))
+                except Exception as e:
+                    import traceback
+                    fmt_tasks.append({"title": f"[ERROR formatting task: {e}]",
+                                      "sched_date": None, "sched_time": None,
+                                      "done_at": None, "status": "pending",
+                                      "assignees": [], "debug": traceback.format_exc()[-300:]})
 
+            fmt_tasks.sort(key=lambda x: (x["sched_date"] or ""))
             results.append({
                 "property": _get_property_name(pid),
                 "checkin":  checkin,
@@ -241,6 +265,11 @@ def _lease_prep_scan_inner():
                 "guest":    guest,
                 "tasks":    fmt_tasks,
             })
+        except Exception as e:
+            import traceback
+            results.append({"property": f"[ERROR: {e}]", "checkin": "", "checkout": "",
+                            "nights": None, "guest": "", "tasks": [],
+                            "debug": traceback.format_exc()[-300:]})
 
     results.sort(key=lambda x: x["checkin"])
     return jsonify({"leases": results})
