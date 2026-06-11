@@ -75,6 +75,7 @@
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Current Title</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Arrival</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Proposed Title</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Bear Fence?</th>
           </tr>
         </thead>
         <tbody id="tableBody"></tbody>
@@ -175,6 +176,16 @@ async function runScan() {
     proposals.forEach((p, i) => {
       const tr = document.createElement('tr');
       tr.className = 'border-b border-gray-50 hover:bg-gray-50';
+      const bfCell = p.bear_fence_date
+        ? `<td class="px-4 py-3 whitespace-nowrap">
+             <span style="color:#b45309;font-weight:600;font-size:0.8rem;">Y — ${_fmtDate(p.bear_fence_date)}</span><br>
+             <label style="font-size:0.75rem;color:#6b7280;display:flex;align-items:center;gap:4px;margin-top:4px;cursor:pointer;">
+               <input type="checkbox" class="date-check rounded border-gray-300 text-orange-500"
+                      data-index="${i}" checked>
+               Change date to ${p.bear_fence_date.slice(5,7).replace(/^0/,'') + '/' + p.bear_fence_date.slice(8,10).replace(/^0/,'')}
+             </label>
+           </td>`
+        : `<td class="px-4 py-3 text-gray-300 text-xs">—</td>`;
       tr.innerHTML = `
         <td class="px-4 py-3">
           <input type="checkbox" class="row-check rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
@@ -185,6 +196,7 @@ async function runScan() {
         <td class="px-4 py-3 text-gray-500">${esc(p.current_title)}</td>
         <td class="px-4 py-3 text-indigo-500 whitespace-nowrap font-medium">${_fmtDate(p.arrival_date)}</td>
         <td class="px-4 py-3 font-semibold text-gray-800">${esc(p.proposed_title)}</td>
+        ${bfCell}
       `;
       tbody.appendChild(tr);
     });
@@ -203,7 +215,12 @@ async function runScan() {
 
 async function applyRenames() {
   const checked = [...document.querySelectorAll('.row-check:checked')];
-  const items = checked.map(cb => proposals[parseInt(cb.dataset.index)]);
+  const items = checked.map(cb => {
+    const idx  = parseInt(cb.dataset.index);
+    const p    = proposals[idx];
+    const dateCb = document.querySelector(`.date-check[data-index="${idx}"]`);
+    return { ...p, change_date: dateCb ? dateCb.checked : false };
+  });
   if (!items.length) return;
 
   document.getElementById('applyBtn').disabled = true;
@@ -238,8 +255,13 @@ async function applyRenames() {
       if (succeededIds.has(String(item.task_id))) {
         const row = cb.closest('tr');
         row.style.opacity = '0.4';
-        row.querySelectorAll('td').forEach(td => td.style.textDecoration = 'line-through');
+        row.querySelectorAll('td').forEach(td => {
+          td.style.textDecoration = 'line-through';
+          td.style.color = '#9ca3af';
+        });
         cb.disabled = true;
+        const dateCb = row.querySelector('.date-check');
+        if (dateCb) dateCb.disabled = true;
       }
     });
 

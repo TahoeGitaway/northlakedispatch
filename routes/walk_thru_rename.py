@@ -29,8 +29,9 @@ WALK_THRU_PATTERNS = re.compile(
     r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|arrival[\s\-]?task|guest[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
-ALREADY_DATED = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
-BB_PREFIX     = re.compile(r"^b/b\s+", re.IGNORECASE)
+ALREADY_DATED    = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
+BB_PREFIX        = re.compile(r"^b/b\s+", re.IGNORECASE)
+BEAR_FENCE_PATTERN = re.compile(r"disarm[\s\-]*bear[\s\-]*fence", re.IGNORECASE)
 
 
 def _get_token():
@@ -134,17 +135,20 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
     return all_results
 
 
-def _patch_task_title(token: str, task_id, new_title: str) -> tuple[bool, str]:
-    """PATCH a Breezeway task's title. Tries 'title' then 'name'."""
+def _patch_task(token: str, task_id, payload: dict) -> tuple[bool, str]:
+    """PATCH a Breezeway task with an arbitrary payload dict."""
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
-        r = requests.patch(url, headers=headers, json={"name": new_title}, timeout=15)
+        r = requests.patch(url, headers=headers, json=payload, timeout=15)
         ok = r.status_code in (200, 201)
         try:
             body = r.json()
-            returned_name = body.get("name") or body.get("title") or "(not in response)"
-            msg = f"status={r.status_code} returned name='{returned_name}'"
+            returned_name = body.get("name") or "(not in response)"
+            returned_date = body.get("scheduled_date") or ""
+            msg = f"status={r.status_code} name='{returned_name}'"
+            if "scheduled_date" in payload:
+                msg += f" date='{returned_date}'"
         except Exception:
             msg = f"status={r.status_code} body={r.text[:200]}"
         return ok, msg
@@ -196,6 +200,23 @@ def walk_thru_scan():
     arrival_pids = list(reso_by_prop.keys())
     tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
 
+    # Build bear fence index: pid → earliest bear fence date on/after task date
+    bear_fence_by_prop: dict[str, list[date]] = {}
+    for t in tasks:
+        title = (t.get("title") or t.get("name") or "")
+        if isinstance(title, dict):
+            title = title.get("value") or title.get("name") or ""
+        if BEAR_FENCE_PATTERN.search(title):
+            pid   = str(t.get("property_id") or t.get("home_id") or "")
+            sched = t.get("scheduled_date") or ""
+            try:
+                d = date.fromisoformat(sched[:10])
+                bear_fence_by_prop.setdefault(pid, []).append(d)
+            except (ValueError, TypeError):
+                pass
+    for pid in bear_fence_by_prop:
+        bear_fence_by_prop[pid].sort()
+
     proposals = []
     for t in tasks:
         title = (t.get("title") or t.get("name") or "")
@@ -220,15 +241,20 @@ def walk_thru_scan():
         if not arrival:
             continue
 
+        # Check for bear fence task at this property on/after task date
+        bf_dates   = bear_fence_by_prop.get(pid, [])
+        bear_fence = next((d for d in bf_dates if d >= task_date), None)
+
         prop_name    = _get_property_name(pid)
         proposed     = _build_proposed_title(title, arrival)
         proposals.append({
-            "task_id":       task_id,
-            "property":      prop_name,
-            "current_title": title,
-            "task_date":     sched[:10],
-            "arrival_date":  arrival.isoformat(),
+            "task_id":        task_id,
+            "property":       prop_name,
+            "current_title":  title,
+            "task_date":      sched[:10],
+            "arrival_date":   arrival.isoformat(),
             "proposed_title": proposed,
+            "bear_fence_date": bear_fence.isoformat() if bear_fence else None,
         })
 
     proposals.sort(key=lambda x: x["task_date"])
@@ -246,13 +272,17 @@ def walk_thru_apply():
     items = request.json.get("items", [])
     results = []
     for item in items:
-        ok, msg = _patch_task_title(token, item["task_id"], item["proposed_title"])
+        payload = {"name": item["proposed_title"]}
+        if item.get("change_date") and item.get("bear_fence_date"):
+            payload["scheduled_date"] = item["bear_fence_date"]
+        ok, msg = _patch_task(token, item["task_id"], payload)
         results.append({
-            "task_id":       item["task_id"],
-            "property":      item.get("property", ""),
+            "task_id":        item["task_id"],
+            "property":       item.get("property", ""),
             "proposed_title": item["proposed_title"],
-            "success":       ok,
-            "detail":        msg,
+            "changed_date":   item.get("change_date", False),
+            "success":        ok,
+            "detail":         msg,
         })
 
     return jsonify({"results": results})
