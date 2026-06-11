@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Lease Prep — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6">
+
+  <div class="flex items-center justify-between mb-5">
+    <div>
+      <h2 class="text-xl font-bold text-gray-800">Lease Prep</h2>
+      <p class="text-xs text-gray-400 mt-0.5">
+        Lease arrivals in the next 30 days — all tasks in the 30 days prior to each arrival.
+      </p>
+    </div>
+    <button onclick="runScan()"
+            class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+      Scan
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin"></div>
+    <span>Fetching lease reservations and prep tasks…</span>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
+       style="background:#fef2f2;border:1px solid #fecaca;"></div>
+
+  <!-- Empty -->
+  <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
+       style="background:#f9fafb;border:1px solid #e5e7eb;">
+    No lease arrivals found in the next 30 days.
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="space-y-6"></div>
+
+</div>
+
+<script>
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _fmtDate(ds) {
+  if (!ds) return '—';
+  const d = new Date(ds + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
+}
+
+function _fmtDateShort(ds) {
+  if (!ds) return '—';
+  const d = new Date(ds + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+
+function _fmtTime(ts) {
+  if (!ts) return null;
+  const parts = ts.split(':');
+  if (parts.length < 2) return ts;
+  let h = parseInt(parts[0]), m = parts[1];
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m} ${suffix}`;
+}
+
+function _statusBadge(status) {
+  if (status === 'complete')
+    return `<span style="display:inline-block;font-size:0.68rem;font-weight:700;padding:1px 7px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">✓ Complete</span>`;
+  if (status === 'in_progress')
+    return `<span style="display:inline-block;font-size:0.68rem;font-weight:700;padding:1px 7px;border-radius:99px;background:#e0e7ff;color:#3730a3;border:1px solid #a5b4fc;">🔄 In Progress</span>`;
+  return `<span style="display:inline-block;font-size:0.68rem;font-weight:700;padding:1px 7px;border-radius:99px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;">⏳ Scheduled</span>`;
+}
+
+function buildLeaseCard(lease) {
+  const card = document.createElement('div');
+  card.style.cssText = 'border-radius:12px;border:1px solid #e5e7eb;background:#fff;overflow:hidden;';
+
+  // Header
+  const nights = lease.nights ? `${lease.nights} nights` : '';
+  const guest  = lease.guest  ? ` · ${esc(lease.guest)}` : '';
+  card.innerHTML = `
+    <div style="background:#f8f7ff;padding:14px 18px;border-bottom:1px solid #e5e7eb;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+        <div>
+          <div style="font-weight:700;font-size:1rem;color:#1f2937;">${esc(lease.property)}</div>
+          <div style="font-size:0.8rem;color:#6b7280;margin-top:3px;">
+            Arrival <strong>${_fmtDate(lease.checkin)}</strong>${nights ? ' · ' + nights : ''}${guest}
+          </div>
+          <div style="font-size:0.75rem;color:#9ca3af;margin-top:1px;">
+            Checkout ${_fmtDate(lease.checkout)}
+          </div>
+        </div>
+        <div style="flex-shrink:0;text-align:right;">
+          <span style="font-size:0.75rem;font-weight:600;padding:3px 10px;border-radius:99px;background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;">
+            LEASE
+          </span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Tasks
+  const taskWrap = document.createElement('div');
+  taskWrap.style.cssText = 'padding:4px 0;';
+
+  if (!lease.tasks || !lease.tasks.length) {
+    taskWrap.innerHTML = `<div style="padding:14px 18px;font-size:0.8rem;color:#9ca3af;font-style:italic;">No tasks found in the 30 days prior to this arrival.</div>`;
+  } else {
+    lease.tasks.forEach(t => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:flex-start;gap:12px;padding:10px 18px;border-bottom:1px solid #f3f4f6;';
+
+      const dateStr  = t.sched_date ? _fmtDateShort(t.sched_date) : '—';
+      const timeStr  = t.sched_time ? _fmtTime(t.sched_time) : null;
+      const doneStr  = t.done_at    ? `Done ${t.done_at.slice(5,10).replace('-','/')}` : null;
+      const people   = (t.assignees || []).join(', ') || '—';
+      const dateTime = [dateStr, timeStr].filter(Boolean).join(' ');
+
+      row.innerHTML = `
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.title)}</span>
+            ${_statusBadge(t.status)}
+          </div>
+          <div style="font-size:0.75rem;color:#6b7280;margin-top:4px;display:flex;gap:12px;flex-wrap:wrap;">
+            <span>📅 ${dateTime}</span>
+            ${doneStr ? `<span>✓ ${esc(doneStr)}</span>` : ''}
+            <span>👤 ${esc(people)}</span>
+          </div>
+        </div>
+      `;
+      taskWrap.appendChild(row);
+    });
+  }
+
+  card.appendChild(taskWrap);
+  return card;
+}
+
+async function runScan() {
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('emptyBox').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('results').innerHTML = '';
+
+  try {
+    const resp = await fetch('/admin/lease-prep/scan', { method: 'POST' });
+    const data = await resp.json();
+    document.getElementById('loading').classList.add('hidden');
+
+    if (data.error) {
+      const eb = document.getElementById('errorBox');
+      eb.textContent = data.error;
+      eb.classList.remove('hidden');
+      return;
+    }
+
+    const leases = data.leases || [];
+    if (!leases.length) {
+      document.getElementById('emptyBox').classList.remove('hidden');
+      return;
+    }
+
+    const container = document.getElementById('results');
+    leases.forEach(lease => container.appendChild(buildLeaseCard(lease)));
+
+  } catch (e) {
+    document.getElementById('loading').classList.add('hidden');
+    const eb = document.getElementById('errorBox');
+    eb.textContent = 'Network error: ' + e.message;
+    eb.classList.remove('hidden');
+  }
+}
+</script>
+{% endblock %}
