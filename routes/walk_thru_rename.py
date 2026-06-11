@@ -6,7 +6,7 @@ have a date in the name, finds the next reservation arrival on or after each
 task's scheduled date for that property, and proposes a rename like
 "Walk Thru for 6/15". Admin reviews and approves before anything is changed.
 
-Two endpoints:
+Endpoints:
   GET  /admin/walk-thru-rename        — page
   POST /admin/walk-thru-rename/scan   — scan and return proposals (JSON)
   POST /admin/walk-thru-rename/apply  — PATCH approved renames (JSON)
@@ -29,9 +29,8 @@ WALK_THRU_PATTERNS = re.compile(
     r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|arrival[\s\-]?task|guest[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
-ALREADY_DATED    = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
-BB_PREFIX        = re.compile(r"^b/b\s+", re.IGNORECASE)
-BEAR_FENCE_PATTERN = re.compile(r"disarm[\s\-]*bear[\s\-]*fence", re.IGNORECASE)
+ALREADY_DATED = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
+BB_PREFIX     = re.compile(r"^b/b\s+", re.IGNORECASE)
 
 
 def _get_token():
@@ -43,21 +42,16 @@ def _get_property_name(pid):
     from routes.briefing import _get_live_property_cache, _ensure_property_cache
     _ensure_property_cache()
     cache = _get_live_property_cache()
-    # Try string key, then integer key
     return (cache.get(str(pid)) or
             cache.get(int(pid) if str(pid).isdigit() else pid) or
             str(pid))
 
 
 def _build_proposed_title(title: str, arrival: date) -> str:
-    date_str = f"{arrival.month}/{arrival.day}"
-    if BB_PREFIX.match(title):
-        return f"{title} {date_str}"
-    return f"{title} for {date_str}"
+    return f"{title} for {arrival.month}/{arrival.day}"
 
 
 def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
-    """Fetch Breezeway tasks for one property over a date range."""
     date_range = f"{start.isoformat()},{end.isoformat()}"
     id_pairs = []
     if ref_id:
@@ -82,7 +76,6 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
 
 
 def _fetch_tasks_for_pids(token: str, pids: list[str], start: date, end: date) -> list:
-    """Fetch tasks only for the given property IDs — much faster than all properties."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from routes.briefing import _get_live_ref_cache
     ref_cache = _get_live_ref_cache()
@@ -104,7 +97,6 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date, end: date) -
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:
-    """Fetch all Breezeway reservations with checkin in a date range."""
     all_results = []
     page = 1
     while True:
@@ -135,20 +127,15 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
     return all_results
 
 
-def _patch_task(token: str, task_id, payload: dict) -> tuple[bool, str]:
-    """PATCH a Breezeway task with an arbitrary payload dict."""
+def _patch_task_name(token: str, task_id, new_name: str) -> tuple[bool, str]:
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
-        r = requests.patch(url, headers=headers, json=payload, timeout=15)
+        r = requests.patch(url, headers=headers, json={"name": new_name}, timeout=15)
         ok = r.status_code in (200, 201)
         try:
-            body = r.json()
-            returned_name = body.get("name") or "(not in response)"
-            returned_date = body.get("scheduled_date") or ""
+            returned_name = r.json().get("name") or "(not in response)"
             msg = f"status={r.status_code} name='{returned_name}'"
-            if "scheduled_date" in payload:
-                msg += f" date='{returned_date}'"
         except Exception:
             msg = f"status={r.status_code} body={r.text[:200]}"
         return ok, msg
@@ -179,10 +166,8 @@ def walk_thru_scan():
     except ValueError:
         start, end = today, today + timedelta(days=7)
 
-    # Step 1: fetch reservations — one call, get all arrivals in window
     reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
 
-    # Index by property_id → sorted checkin dates; collect only pids with arrivals
     reso_by_prop: dict[str, list[date]] = {}
     for r in reservations:
         pid     = str(r.get("property_id") or r.get("home_id") or "")
@@ -196,26 +181,8 @@ def walk_thru_scan():
     for pid in reso_by_prop:
         reso_by_prop[pid].sort()
 
-    # Step 2: only fetch tasks for properties that actually have upcoming arrivals
     arrival_pids = list(reso_by_prop.keys())
     tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
-
-    # Build bear fence index: pid → sorted list of (date, task_name)
-    bear_fence_by_prop: dict[str, list[tuple]] = {}
-    for t in tasks:
-        title = (t.get("title") or t.get("name") or "")
-        if isinstance(title, dict):
-            title = title.get("value") or title.get("name") or ""
-        if BEAR_FENCE_PATTERN.search(title):
-            pid   = str(t.get("property_id") or t.get("home_id") or "")
-            sched = t.get("scheduled_date") or ""
-            try:
-                d = date.fromisoformat(sched[:10])
-                bear_fence_by_prop.setdefault(pid, []).append((d, title))
-            except (ValueError, TypeError):
-                pass
-    for pid in bear_fence_by_prop:
-        bear_fence_by_prop[pid].sort(key=lambda x: x[0])
 
     proposals = []
     for t in tasks:
@@ -230,9 +197,9 @@ def walk_thru_scan():
         if BB_PREFIX.match(title):
             continue
 
-        task_id  = t.get("id") or t.get("task_id")
-        pid      = str(t.get("property_id") or t.get("home_id") or "")
-        sched    = t.get("scheduled_date") or ""
+        task_id = t.get("id") or t.get("task_id")
+        pid     = str(t.get("property_id") or t.get("home_id") or "")
+        sched   = t.get("scheduled_date") or ""
         try:
             task_date = date.fromisoformat(sched[:10])
         except (ValueError, TypeError):
@@ -243,24 +210,13 @@ def walk_thru_scan():
         if not arrival:
             continue
 
-        # Check for bear fence task at this property on/after task date
-        bf_entries = bear_fence_by_prop.get(pid, [])
-        bf_match   = next(((d, n) for d, n in bf_entries if d >= task_date), None)
-        bear_fence      = bf_match[0] if bf_match else None
-        bear_fence_name = bf_match[1] if bf_match else None
-
-        prop_name    = _get_property_name(pid)
-        proposed     = _build_proposed_title(title, arrival)
         proposals.append({
             "task_id":        task_id,
-            "property":       prop_name,
+            "property":       _get_property_name(pid),
             "current_title":  title,
             "task_date":      sched[:10],
             "arrival_date":   arrival.isoformat(),
-            "proposed_title": proposed,
-            "bear_fence_date": bear_fence.isoformat() if bear_fence else None,
-            "bear_fence_name": bear_fence_name,
-            "date_change_needed": bear_fence is not None and bear_fence != task_date,
+            "proposed_title": _build_proposed_title(title, arrival),
         })
 
     proposals.sort(key=lambda x: x["task_date"])
@@ -278,15 +234,11 @@ def walk_thru_apply():
     items = request.json.get("items", [])
     results = []
     for item in items:
-        payload = {"name": item["proposed_title"]}
-        if item.get("change_date") and item.get("bear_fence_date"):
-            payload["scheduled_date"] = item["bear_fence_date"]
-        ok, msg = _patch_task(token, item["task_id"], payload)
+        ok, msg = _patch_task_name(token, item["task_id"], item["proposed_title"])
         results.append({
             "task_id":        item["task_id"],
             "property":       item.get("property", ""),
             "proposed_title": item["proposed_title"],
-            "changed_date":   item.get("change_date", False),
             "success":        ok,
             "detail":         msg,
         })
