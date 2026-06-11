@@ -26,7 +26,7 @@ hot_tub_bp = Blueprint("hot_tub", __name__)
 BW_BASE = "https://api.breezeway.io"
 
 HOT_TUB_PATTERN = re.compile(
-    r"(?=.*\bhot[\s\-]?tub\b)(?=.*\b(arrival|biweekly|bi[\s\-]?weekly)\b)",
+    r"(?=.*\bhot[\s\-]?tub\b)(?=.*\b(arrival|biweekly|bi[\s\-]?weekly|lease|d\s*&\s*s)\b)",
     re.IGNORECASE,
 )
 HOT_TUB_TAG_NAME = "hot tub - tg service"
