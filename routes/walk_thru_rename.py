@@ -138,18 +138,16 @@ def _patch_task_title(token: str, task_id, new_title: str) -> tuple[bool, str]:
     """PATCH a Breezeway task's title. Tries 'title' then 'name'."""
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
-    for payload in [{"title": new_title}, {"name": new_title}]:
+    last_msg = "no attempt made"
+    for field in ("title", "name"):
         try:
-            r = requests.patch(url, headers=headers, json=payload, timeout=15)
+            r = requests.patch(url, headers=headers, json={field: new_title}, timeout=15)
+            last_msg = f"field={field} status={r.status_code} body={r.text[:300]}"
             if r.status_code in (200, 201):
-                return True, f"status={r.status_code}"
-            # try next payload variant
+                return True, last_msg
         except Exception as e:
             return False, str(e)
-    try:
-        return False, f"status={r.status_code} body={r.text[:200]}"
-    except Exception:
-        return False, "all payload variants failed"
+    return False, last_msg
 
 
 @walk_thru_bp.route("/admin/walk-thru-rename")
