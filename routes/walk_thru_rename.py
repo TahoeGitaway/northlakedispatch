@@ -29,7 +29,8 @@ WALK_THRU_PATTERNS = re.compile(
     r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|arrival[\s\-]?task|guest[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
-ALREADY_DATED = re.compile(r"\bfor\s+\d{1,2}/\d{1,2}\b", re.IGNORECASE)
+ALREADY_DATED = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
+BB_PREFIX     = re.compile(r"^b/b\s+", re.IGNORECASE)
 
 
 def _get_token():
@@ -38,8 +39,20 @@ def _get_token():
 
 
 def _get_property_name(pid):
-    from routes.briefing import _get_live_property_cache
-    return _get_live_property_cache().get(pid, str(pid))
+    from routes.briefing import _get_live_property_cache, _ensure_property_cache
+    _ensure_property_cache()
+    cache = _get_live_property_cache()
+    # Try string key, then integer key
+    return (cache.get(str(pid)) or
+            cache.get(int(pid) if str(pid).isdigit() else pid) or
+            str(pid))
+
+
+def _build_proposed_title(title: str, arrival: date) -> str:
+    date_str = f"{arrival.month}/{arrival.day}"
+    if BB_PREFIX.match(title):
+        return f"{title} {date_str}"
+    return f"{title} for {date_str}"
 
 
 def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
@@ -155,10 +168,15 @@ def walk_thru_scan():
         return jsonify({"error": "Breezeway not configured."}), 500
 
     today = date.today()
-    end   = today + timedelta(days=30)
+    body  = request.get_json(silent=True) or {}
+    try:
+        start = date.fromisoformat(body["start"]) if "start" in body else today
+        end   = date.fromisoformat(body["end"])   if "end"   in body else today + timedelta(days=7)
+    except ValueError:
+        start, end = today, today + timedelta(days=7)
 
     # Step 1: fetch reservations — one call, get all arrivals in window
-    reservations = _fetch_reservations_range(token, today, end)
+    reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
 
     # Index by property_id → sorted checkin dates; collect only pids with arrivals
     reso_by_prop: dict[str, list[date]] = {}
@@ -176,7 +194,7 @@ def walk_thru_scan():
 
     # Step 2: only fetch tasks for properties that actually have upcoming arrivals
     arrival_pids = list(reso_by_prop.keys())
-    tasks = _fetch_tasks_for_pids(token, arrival_pids, today, end) if arrival_pids else []
+    tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
 
     proposals = []
     for t in tasks:
@@ -203,7 +221,7 @@ def walk_thru_scan():
             continue
 
         prop_name    = _get_property_name(pid)
-        proposed     = f"{title} for {arrival.month}/{arrival.day}"
+        proposed     = _build_proposed_title(title, arrival)
         proposals.append({
             "task_id":       task_id,
             "property":      prop_name,
