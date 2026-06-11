@@ -147,24 +147,29 @@ def lease_prep_page():
 @login_required
 @admin_required
 def lease_prep_scan():
+    try:
+        return _lease_prep_scan_inner()
+    except Exception as e:
+        import traceback
+        return jsonify({"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-500:]}), 500
+
+
+def _lease_prep_scan_inner():
     token = _get_token()
     if not token:
-        return jsonify({"error": "Breezeway not configured."}), 500
+        return jsonify({"error": "Breezeway not configured."})
 
-    from routes.briefing import _get_live_ref_cache
+    from routes.briefing import _get_live_ref_cache, _ensure_property_cache
+    _ensure_property_cache()
 
     today    = date.today()
     horizon  = today + timedelta(days=30)
 
-    # Step 1: fetch all reservations arriving in the next 30 days
     reservations = _fetch_reservations(token, today, horizon)
-
-    # Step 2: keep only leases
     leases = [r for r in reservations if _classify(r) == "lease"]
     if not leases:
         return jsonify({"leases": []})
 
-    # Step 3: for each lease, fetch tasks in the 30 days prior to arrival
     ref_cache = _get_live_ref_cache()
 
     def fetch_lease_tasks(r):
@@ -183,18 +188,16 @@ def lease_prep_scan():
     results = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         for reservation, tasks in ex.map(fetch_lease_tasks, leases):
-            pid       = str(reservation.get("property_id") or
-                            reservation.get("home_id") or "")
-            checkin   = reservation.get("checkin_date", "")[:10]
-            checkout  = reservation.get("checkout_date", "")[:10]
-            guest     = (reservation.get("guest_name") or
-                         reservation.get("primary_guest") or
-                         reservation.get("name") or "")
+            pid      = str(reservation.get("property_id") or
+                           reservation.get("home_id") or "")
+            checkin  = reservation.get("checkin_date", "")[:10]
+            checkout = reservation.get("checkout_date", "")[:10]
+            guest    = (reservation.get("guest_name") or
+                        reservation.get("primary_guest") or
+                        reservation.get("name") or "")
             if isinstance(guest, dict):
                 guest = (guest.get("name") or
                          f"{guest.get('first_name','')} {guest.get('last_name','')}".strip())
-
-            # Duration
             try:
                 nights = (date.fromisoformat(checkout) -
                           date.fromisoformat(checkin)).days
@@ -207,12 +210,12 @@ def lease_prep_scan():
             )
 
             results.append({
-                "property":  _get_property_name(pid),
-                "checkin":   checkin,
-                "checkout":  checkout,
-                "nights":    nights,
-                "guest":     guest,
-                "tasks":     fmt_tasks,
+                "property": _get_property_name(pid),
+                "checkin":  checkin,
+                "checkout": checkout,
+                "nights":   nights,
+                "guest":    guest,
+                "tasks":    fmt_tasks,
             })
 
     results.sort(key=lambda x: x["checkin"])
