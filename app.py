@@ -55,6 +55,7 @@ from routes.breezeway_sync import bw_sync_bp
 from routes.spi            import spi_bp
 from routes.ops_bot        import ops_bot_bp
 from routes.walk_thru_rename import walk_thru_bp
+from routes.bear_fence       import bear_fence_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
@@ -69,6 +70,7 @@ app.register_blueprint(bw_sync_bp)
 app.register_blueprint(spi_bp)
 app.register_blueprint(ops_bot_bp)
 app.register_blueprint(walk_thru_bp)
+app.register_blueprint(bear_fence_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():
