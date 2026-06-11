@@ -272,12 +272,12 @@ def bear_fence_apply():
     for item in items:
         ok, msg = _patch_task(token, item["task_id"], {"scheduled_date": item["bear_fence_date"]})
         results.append({
-            "task_id":    item["task_id"],
-            "property":   item.get("property", ""),
-            "task_title": item.get("task_title", ""),
-            "new_date":   item["bear_fence_date"],
-            "success":    ok,
-            "detail":     msg,
+            "task_id":         item["task_id"],
+            "property":        item.get("property", ""),
+            "task_title":      item.get("task_title", ""),
+            "bear_fence_date": item["bear_fence_date"],
+            "success":         ok,
+            "detail":          msg,
         })
 
     return jsonify({"results": results})

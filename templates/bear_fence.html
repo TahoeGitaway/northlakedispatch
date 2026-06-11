@@ -232,7 +232,7 @@ async function applyChanges() {
         background:${r.success ? '#f0fdf4' : '#fef2f2'};
         border:1px solid ${r.success ? '#bbf7d0' : '#fecaca'};
         color:${r.success ? '#15803d' : '#b91c1c'};`;
-      div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.task_title}" · ${r.detail}`;
+      div.textContent = `${r.success ? '✓' : '✗'} ${r.property} — "${r.task_title}" → ${_fmtDate(r.bear_fence_date)} · ${r.detail}`;
       box.appendChild(div);
     });
     box.classList.remove('hidden');
