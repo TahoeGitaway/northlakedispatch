@@ -463,9 +463,25 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
     day_name = date_obj.strftime("%A, %B ") + str(date_obj.day)
     lines    = [f"Today is {day_name}.\n"]
 
-    # Dispatcher notes — placed first so the AI treats them as the lead
+    # Dispatcher notes — split into statements (facts) and instructions (commands)
     if notes:
-        lines.append(f"DISPATCHER NOTES (most important — lead with this):\n{notes}")
+        note_lines   = [l.strip() for l in notes.splitlines() if l.strip()]
+        statements   = []
+        instructions = []
+        for nl in note_lines:
+            # Heuristic: ends with '?' or starts with an imperative verb pattern → instruction
+            lower = nl.lower()
+            imperative_starts = ("describe", "include", "mention", "list", "show", "summarize",
+                                 "note", "highlight", "report", "focus", "tell", "say", "do not",
+                                 "never", "always", "make sure", "ensure")
+            if nl.endswith("?") or any(lower.startswith(v) for v in imperative_starts):
+                instructions.append(nl)
+            else:
+                statements.append(nl)
+        if statements:
+            lines.append("FACTS TO INCLUDE:\n" + "\n".join(f"- {s}" for s in statements))
+        if instructions:
+            lines.append("INSTRUCTIONS (follow these exactly):\n" + "\n".join(f"- {i}" for i in instructions))
 
     # Routes
     if routes:
@@ -519,29 +535,8 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
     else:
         lines.append("No arrivals scheduled for today.")
 
-    # Breezeway departures
-    if checkouts:
-        lease_ct = sum(1 for r in checkouts if _classify_reservation(r) == "lease")
-        dep_lines = []
-        for r in checkouts:
-            kind = _classify_reservation(r)
-            prop = _get_property_name(r.get("property_id"))
-            t    = r.get("checkout_time", "")
-            prefix = {"lease": "[LEASE] ", "owner": "[OWNER] "}.get(kind, "")
-            entry  = f"- {prefix}{prop}"
-            if t:
-                entry += f" — checkout by {_fmt_time(t)}"
-            dep_lines.append(entry)
-        lease_note = f" including {lease_ct} lease{'s' if lease_ct!=1 else ''}" if lease_ct else ""
-        lines.append(
-            f"Departures today ({len(checkouts)} total{lease_note}):\n" + "\n".join(dep_lines)
-        )
-    else:
-        lines.append("No departures scheduled for today.")
-
-    if not checkins and not checkouts and not _get_breezeway_token():
-        lines[-2] = "(Breezeway data not available — credentials not configured.)"
-        lines[-1] = ""
+    if not checkins and not _get_breezeway_token():
+        lines[-1] = "(Breezeway data not available — credentials not configured.)"
 
     return "\n\n".join(l for l in lines if l)
 
@@ -561,12 +556,14 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
             system     = (
                 "You are a terse operations briefer for a vacation rental cleaning company "
                 "in Lake Tahoe. Write exactly 1 sentence using ONLY the data provided.\n\n"
-                "If dispatcher notes are present, lead with the key point from those notes. "
+                "If FACTS TO INCLUDE or INSTRUCTIONS are present in the data, they take "
+                "priority — weave the facts in and follow the instructions exactly. "
                 "Otherwise, state the single most operationally important fact — a priority "
-                "check-in deadline, a lease or owner arrival/departure, or anything that "
-                "affects timing. If nothing is notable, say so in one plain sentence.\n\n"
+                "check-in deadline, a lease or owner arrival, or anything that affects timing. "
+                "If nothing is notable, say so in one plain sentence.\n\n"
                 "Rules:\n"
                 "- One sentence only. No lists, no paragraphs.\n"
+                "- NEVER mention departures or checkouts — not relevant to operations.\n"
                 "- NEVER characterize the workload. Do not use: heavy, busy, light, big, "
                 "significant, demanding, packed, full, or any similar word.\n"
                 "- Do not name properties, technicians, or routes — those are listed below.\n"
