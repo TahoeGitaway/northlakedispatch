@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Quick Complete — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-sm mx-auto px-4 py-10">
+
+  <div class="mb-6">
+    <h2 class="text-xl font-bold text-gray-800">Quick Complete</h2>
+    <p class="text-xs text-gray-400 mt-1">
+      Marks your two recurring Facilities tasks complete in one click.
+    </p>
+  </div>
+
+  <div class="rounded-xl border border-gray-200 bg-white p-5 mb-4 space-y-2">
+    <div class="text-sm text-gray-600 font-medium">Will mark complete:</div>
+    <div class="text-sm text-gray-500">• Task Title / Dates</div>
+    <div class="text-sm text-gray-500">• Review new Post Rental Inspections</div>
+    <div class="text-xs text-gray-400 mt-1">Project: Facilities Maintenance &amp; Projects</div>
+  </div>
+
+  <button id="runBtn" onclick="run()"
+          class="w-full px-4 py-3 bg-indigo-600 text-white font-semibold rounded-xl
+                 hover:bg-indigo-700 transition-colors text-sm">
+    Mark Both Complete
+  </button>
+
+  <div id="results" class="mt-5 space-y-2 hidden"></div>
+
+</div>
+
+<script>
+async function run() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+
+  try {
+    const resp = await fetch('/my/quick-complete/run', { method: 'POST' });
+    const data = await resp.json();
+
+    const box = document.getElementById('results');
+    box.innerHTML = '';
+    box.classList.remove('hidden');
+
+    if (data.error) {
+      box.innerHTML = `<div style="color:#b91c1c;font-size:0.85rem;padding:10px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;">${data.error}</div>`;
+      btn.textContent = 'Mark Both Complete';
+      btn.disabled = false;
+      return;
+    }
+
+    (data.results || []).forEach(r => {
+      const div = document.createElement('div');
+      div.style.cssText = `padding:10px 14px;border-radius:8px;font-size:0.85rem;
+        background:${r.success ? '#f0fdf4' : '#fef2f2'};
+        border:1px solid ${r.success ? '#bbf7d0' : '#fecaca'};
+        color:${r.success ? '#15803d' : '#b91c1c'};`;
+      div.textContent = `${r.success ? '✓' : '✗'} ${r.task} — ${r.detail}`;
+      box.appendChild(div);
+    });
+
+    if (data.all_ok) {
+      btn.textContent = 'Done ✓';
+      btn.style.background = '#16a34a';
+    } else {
+      btn.textContent = 'Mark Both Complete';
+      btn.disabled = false;
+    }
+
+  } catch (e) {
+    document.getElementById('results').innerHTML =
+      `<div style="color:#b91c1c;font-size:0.85rem;">Network error: ${e.message}</div>`;
+    document.getElementById('results').classList.remove('hidden');
+    btn.textContent = 'Mark Both Complete';
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}
