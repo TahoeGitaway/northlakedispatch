@@ -366,6 +366,34 @@
           </div>
         </div>
       </div>
+
+      <!-- Reservations-by-type chart -->
+      <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mt-4">
+        <div class="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between gap-2">
+          <span class="text-sm font-semibold text-gray-700 tracking-wide">📊 Arrivals by Type</span>
+          <button onclick="openChartModal()"
+                  class="text-xs text-indigo-500 hover:text-indigo-700 font-medium">⤢ Expand</button>
+        </div>
+        <div class="px-5 py-3">
+          <div class="flex items-center gap-2 flex-wrap text-xs mb-3">
+            <label class="text-gray-500 font-medium">From</label>
+            <input type="date" id="chartStart"
+                   class="border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700
+                          focus:outline-none focus:ring-2 focus:ring-indigo-300">
+            <label class="text-gray-500 font-medium">To</label>
+            <input type="date" id="chartEnd"
+                   class="border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700
+                          focus:outline-none focus:ring-2 focus:ring-indigo-300">
+            <button onclick="loadReservationChart()"
+                    class="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
+                           rounded-lg transition-colors">Go</button>
+          </div>
+          <div id="chartMsg" class="hidden text-xs text-gray-400 py-8 text-center"></div>
+          <div style="position:relative;height:240px;">
+            <canvas id="resChart"></canvas>
+          </div>
+        </div>
+      </div>
     </div><!-- /col-right -->
 
   </div><!-- /routes-3col -->
@@ -1043,6 +1071,104 @@ function showToast(msg) {
 }
 
 /* PRI check now opens in a new tab at /admin/pri-check */
+</script>
+
+<!-- Chart.js + datalabels (for Arrivals by Type chart) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+
+<!-- Expand modal for the chart -->
+<div id="chartModal" class="hidden fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-6"
+     onclick="if(event.target===this)closeChartModal()">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl p-6">
+    <div class="flex items-center justify-between mb-4">
+      <span class="text-base font-semibold text-gray-800">📊 Arrivals by Type</span>
+      <button onclick="closeChartModal()" class="text-gray-400 hover:text-gray-700 text-sm">✕ Close</button>
+    </div>
+    <div style="position:relative;height:60vh;">
+      <canvas id="resChartLarge"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── RESERVATIONS-BY-TYPE CHART ── */
+let _resChart = null, _resChartLarge = null, _resChartData = null;
+const CHART_COLORS = { guest:"#4f8ff7", owner:"#16a34a", lease:"#f59e0b", block:"#ec4899" };
+
+function _chartIsoAdd(ds, days) {
+  const d = new Date(ds + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function _chartDatasets(d) {
+  return [
+    { label:"Guest", data:d.guest, backgroundColor:CHART_COLORS.guest },
+    { label:"Owner", data:d.owner, backgroundColor:CHART_COLORS.owner },
+    { label:"Lease", data:d.lease, backgroundColor:CHART_COLORS.lease },
+    { label:"Block", data:d.block, backgroundColor:CHART_COLORS.block },
+  ];
+}
+function _chartLabels(d) {
+  return d.dates.map(ds => new Date(ds + "T00:00:00")
+    .toLocaleDateString("en-US", { month:"short", day:"numeric" }));
+}
+function _chartOptions() {
+  return {
+    responsive:true, maintainAspectRatio:false,
+    plugins:{
+      legend:{ position:"top", labels:{ usePointStyle:true, boxWidth:8, font:{size:11} } },
+      datalabels:{ anchor:"end", align:"top", color:"#9ca3af", font:{size:10},
+                   formatter:v => v > 0 ? v : "" },
+    },
+    scales:{ y:{ beginAtZero:true, ticks:{ precision:0 } }, x:{ grid:{ display:false } } },
+  };
+}
+function _makeChart(canvasId, existing) {
+  if (existing) existing.destroy();
+  return new Chart(document.getElementById(canvasId), {
+    type:"bar",
+    data:{ labels:_chartLabels(_resChartData), datasets:_chartDatasets(_resChartData) },
+    options:_chartOptions(),
+    plugins:[ChartDataLabels],
+  });
+}
+
+async function loadReservationChart() {
+  const start = document.getElementById("chartStart").value;
+  const end   = document.getElementById("chartEnd").value;
+  const msg   = document.getElementById("chartMsg");
+  msg.classList.remove("hidden"); msg.textContent = "Loading…";
+  try {
+    const res  = await fetch(`/briefing/reservation-chart?start_date=${start}&end_date=${end}`);
+    const data = await res.json();
+    if (data.error) { msg.textContent = data.error; return; }
+    _resChartData = data;
+    msg.classList.add("hidden");
+    _resChart = _makeChart("resChart", _resChart);
+    if (!document.getElementById("chartModal").classList.contains("hidden"))
+      _resChartLarge = _makeChart("resChartLarge", _resChartLarge);
+  } catch (e) {
+    msg.classList.remove("hidden"); msg.textContent = "Could not load chart.";
+  }
+}
+function openChartModal() {
+  document.getElementById("chartModal").classList.remove("hidden");
+  if (_resChartData) _resChartLarge = _makeChart("resChartLarge", _resChartLarge);
+}
+function closeChartModal() {
+  document.getElementById("chartModal").classList.add("hidden");
+  if (_resChartLarge) { _resChartLarge.destroy(); _resChartLarge = null; }
+}
+
+(function initResChart() {
+  const startEl = document.getElementById("chartStart");
+  if (!startEl || typeof Chart === "undefined") return;
+  const start = (typeof selectedDate !== "undefined" && selectedDate) ? selectedDate : TODAY_STR;
+  startEl.value = start;
+  document.getElementById("chartEnd").value = _chartIsoAdd(start, 6);
+  loadReservationChart();
+})();
 </script>
 
 {% endblock %}

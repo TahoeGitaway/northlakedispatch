@@ -700,6 +700,8 @@ async function runBwImport() {
   btn.disabled    = true;
   btn.textContent = "Importing…";
   resultEl.classList.add("hidden");
+  const uncertainBox = document.getElementById("bwImportUncertain");
+  if (uncertainBox) { uncertainBox.innerHTML = ""; uncertainBox.classList.add("hidden"); }
 
   try {
     const res  = await fetch("/api/bw-import", {
@@ -713,7 +715,7 @@ async function runBwImport() {
     if (data.message) { _bwImportMsg(data.message, "gray"); return; }
 
     {  // single employee
-      // Single employee
+      // Confident matches are added immediately
       let added = 0;
       for (const p of (data.matched || [])) {
         if (!selectedStops.find(s => s.name === p.name)) {
@@ -721,15 +723,21 @@ async function runBwImport() {
           added++;
         }
       }
-      let msg   = added === 0 ? "All properties already in the list." : `Added ${added} stop${added !== 1 ? "s" : ""}.`;
+      let msg   = added === 0 ? "All matched properties already in the list." : `Added ${added} stop${added !== 1 ? "s" : ""}.`;
       let color = "green";
+      const uncertain = data.uncertain || [];
       const unmatched = data.unmatched || [];
+      if (uncertain.length) {
+        msg  += ` ${uncertain.length} unsure match${uncertain.length !== 1 ? "es" : ""} — confirm below.`;
+        color = "amber";
+      }
       if (unmatched.length) {
         msg  += ` Not found: ${unmatched.join(", ")}.`;
         color = added > 0 ? "amber" : "red";
       }
       _bwImportMsg(msg, color);
       _bwShowTaskSidebar(date, data.matched || []);
+      _bwRenderUncertain(date, uncertain);
       _bwPlaceMarkers();
       document.getElementById("routeDateField").value  = date;
       document.getElementById("assignedToField").value = assignees[0] || "";
@@ -754,6 +762,66 @@ function _bwImportMsg(text, color) {
   el.style.cssText = styleMap[color] || styleMap.gray;
   el.textContent = text;
   el.classList.remove("hidden");
+}
+
+function _fmtTaskDate(ds) {
+  if (!ds) return "";
+  const d = new Date(ds + "T00:00:00");
+  return isNaN(d.getTime()) ? ds : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// Low-confidence name matches — let the user keep or reject each before it
+// becomes a stop. Prevents a Breezeway house that isn't in the system yet from
+// silently matching the closest wrong home.
+function _bwRenderUncertain(date, list) {
+  const box = document.getElementById("bwImportUncertain");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!list || !list.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+
+  const hdr = document.createElement("div");
+  hdr.className = "text-xs font-semibold text-amber-700";
+  hdr.textContent = "Unsure about these matches — confirm each:";
+  box.appendChild(hdr);
+
+  const dropIfEmpty = () => {
+    if (!box.querySelector(".uncertain-row")) { box.innerHTML = ""; box.classList.add("hidden"); }
+  };
+
+  for (const p of list) {
+    const pct = Math.round((p.match_score || 0) * 100);
+    const row = document.createElement("div");
+    row.className = "uncertain-row rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs";
+    row.innerHTML =
+      `<div class="text-gray-700 leading-snug">Breezeway: <b>${_escHtml(p.bw_name)}</b></div>` +
+      `<div class="text-gray-500 leading-snug">matched → <b>${_escHtml(p.name)}</b> ` +
+      `<span class="text-gray-400">(${pct}% match)</span></div>`;
+
+    const btns = document.createElement("div");
+    btns.className = "flex gap-1.5 mt-1";
+
+    const keep = document.createElement("button");
+    keep.className = "flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded px-2 py-1 font-medium";
+    keep.textContent = "Keep";
+    keep.addEventListener("click", () => {
+      if (!selectedStops.find(s => s.name === p.name)) addStop(p, !!p.arrival, false);
+      _bwTasksByPropName[p.name] = p.tasks || [];
+      _syncSidebarToSchedule();
+      _bwPlaceMarkers();
+      row.remove();
+      dropIfEmpty();
+    });
+
+    const skip = document.createElement("button");
+    skip.className = "flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded px-2 py-1 font-medium";
+    skip.textContent = "Reject";
+    skip.addEventListener("click", () => { row.remove(); dropIfEmpty(); });
+
+    btns.appendChild(keep); btns.appendChild(skip);
+    row.appendChild(btns);
+    box.appendChild(row);
+  }
 }
 
 // Stored multi-employee data for tab switching
@@ -897,9 +965,89 @@ function _selectDailyRouteTab(routeId, label) {
       row.appendChild(name);
       content.appendChild(row);
     });
+    // Auto-run the discrepancy check against live Breezeway for this route
+    _renderRouteChanges(routeId, content);
   }).catch(() => {
     content.innerHTML = `<div class="text-xs text-red-400 text-center py-4">Failed to load.</div>`;
   });
+}
+
+/* ── ROUTE DISCREPANCY CHECK (saved route vs live Breezeway) ─────── */
+
+function _renderRouteChanges(routeId, mountEl) {
+  const box = document.createElement("div");
+  box.className = "mt-3 pt-3 border-t border-gray-200";
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-semibold text-gray-700 uppercase tracking-wide">Changes vs Breezeway</span>
+      <button data-refresh class="text-xs text-indigo-500 hover:text-indigo-700 font-medium">↻ Recheck</button>
+    </div>
+    <div data-body class="text-xs text-gray-400">Checking Breezeway…</div>`;
+  mountEl.appendChild(box);
+  const body = box.querySelector("[data-body]");
+  box.querySelector("[data-refresh]").addEventListener("click", () => _fetchRouteChanges(routeId, body));
+  _fetchRouteChanges(routeId, body);
+}
+
+async function _fetchRouteChanges(routeId, body) {
+  body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
+  try {
+    const res  = await fetch(`/api/route-discrepancies?route_id=${routeId}`);
+    const data = await res.json();
+    if (data.error) { body.innerHTML = `<span class="text-red-500">${data.error}</span>`; return; }
+    body.innerHTML = _renderChangesHtml(data);
+  } catch (e) {
+    body.innerHTML = `<span class="text-red-500">Could not check: ${e.message}</span>`;
+  }
+}
+
+function _fmtChangeWhen(w) {
+  if (!w) return "";
+  const d = new Date(w);
+  return isNaN(d.getTime())
+    ? w
+    : d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function _escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function _renderChangesHtml(d) {
+  const added = d.added || [], removed = d.removed || [], moved = d.moved || [];
+  if (!added.length && !removed.length && !moved.length) {
+    return `<div class="text-green-600">✓ No changes — the list matches the saved route.</div>`;
+  }
+  let h = "";
+  if (added.length) {
+    h += `<div class="font-semibold text-red-700 mb-1">➕ Added to list (${added.length})</div>`;
+    for (const a of added) {
+      const who  = a.history && a.history.who  ? _escHtml(a.history.who) : null;
+      const when = a.history && a.history.when ? _fmtChangeWhen(a.history.when) : null;
+      h += `<div class="mb-2 leading-snug">`;
+      h += `<span class="text-gray-800 font-medium">${_escHtml(a.task_name)}</span>`;
+      h += ` <span class="text-gray-400">→</span> <span class="text-gray-700">${_escHtml(a.property)}</span>`;
+      if (who || when) {
+        h += `<div class="text-gray-400">${when ? "added " + _escHtml(when) : "added"}${who ? " by " + who : ""}</div>`;
+      } else {
+        h += `<div class="text-gray-300 italic">when/who not exposed by Breezeway API</div>`;
+      }
+      h += `</div>`;
+    }
+  }
+  if (removed.length) {
+    h += `<div class="font-semibold text-amber-700 mt-3 mb-1">➖ No longer on list (${removed.length})</div>`;
+    for (const r of removed) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}</div>`;
+  }
+  if (moved.length) {
+    h += `<div class="font-semibold text-blue-700 mt-3 mb-1">🕑 Time changed (${moved.length})</div>`;
+    for (const m of moved) {
+      h += `<div class="text-gray-700 mb-1">${_escHtml(m.property)}: `
+         + `<span class="text-gray-400">${_escHtml(m.was)} → </span>${_escHtml(m.now)}</div>`;
+    }
+  }
+  return h;
 }
 
 /* ── BREEZEWAY TASK OVERLAY (after import) ─────────────────────── */
@@ -1013,6 +1161,12 @@ function _syncSidebarToSchedule() {
         asgn.className = "text-xs text-gray-400";
         asgn.textContent = "· " + t.assignees.join(", ");
         taskRow.appendChild(asgn);
+      }
+      if (t.date) {
+        const dt = document.createElement("span");
+        dt.className = "text-[10px] text-gray-300";  // discreet date confirmation
+        dt.textContent = "· " + _fmtTaskDate(t.date);
+        taskRow.appendChild(dt);
       }
       body.appendChild(taskRow);
     }

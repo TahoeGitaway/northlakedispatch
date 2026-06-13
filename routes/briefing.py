@@ -1099,3 +1099,56 @@ def calendar_activity():
     if activity:
         _calendar_cache[cache_key] = (now, activity)
     return jsonify(activity)
+
+
+@briefing_bp.route("/briefing/reservation-chart")
+@login_required
+def reservation_chart():
+    """Per-day arrival counts by reservation type (guest/owner/lease/block) for a
+    date range. Powers the bar chart on the saved routes page."""
+    today = date_cls.today()
+    try:
+        start = date_cls.fromisoformat(request.args["start_date"]) if request.args.get("start_date") else today
+    except Exception:
+        start = today
+    try:
+        end = date_cls.fromisoformat(request.args["end_date"]) if request.args.get("end_date") else start + timedelta(days=6)
+    except Exception:
+        end = start + timedelta(days=6)
+    if end < start:
+        start, end = end, start
+    if (end - start).days > 60:          # bound the API work
+        end = start + timedelta(days=60)
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."}), 500
+
+    raw = _fetch_bw_reservations(token, {
+        "checkin_date_ge": start.isoformat(),
+        "checkin_date_le": end.isoformat(),
+    })
+
+    dates, d = [], start
+    while d <= end:
+        dates.append(d.isoformat())
+        d += timedelta(days=1)
+    counts = {ds: {"guest": 0, "owner": 0, "lease": 0, "block": 0} for ds in dates}
+
+    for r in raw:
+        ci = (r.get("checkin_date") or "")[:10]
+        if ci not in counts:
+            continue
+        kind = _classify_reservation(r)
+        if kind in counts[ci]:
+            counts[ci][kind] += 1
+
+    return jsonify({
+        "start": start.isoformat(),
+        "end":   end.isoformat(),
+        "dates": dates,
+        "guest": [counts[ds]["guest"] for ds in dates],
+        "owner": [counts[ds]["owner"] for ds in dates],
+        "lease": [counts[ds]["lease"] for ds in dates],
+        "block": [counts[ds]["block"] for ds in dates],
+    })

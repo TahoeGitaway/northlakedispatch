@@ -25,27 +25,43 @@ GOOGLE_MAPS_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
 # ── Breezeway import helper ───────────────────────────────────────
 
-def _match_local_property(bw_name: str, db_props: dict):
+def _match_local_property_scored(bw_name: str, db_props: dict):
     """Fuzzy-match a Breezeway property name to a local DB property row.
-    db_props: {lower_name: row_dict}. Returns row_dict or None.
+    db_props: {lower_name: row_dict}.
+
+    Returns (row_or_None, score, tier) where tier is one of
+    exact / substring / keyword / fuzzy / none, and score is a 0..1
+    character-level similarity used to flag low-confidence matches so the
+    user can confirm or reject them (a Breezeway home not yet in the system
+    otherwise silently matches the closest wrong house).
     """
-    from difflib import get_close_matches
+    from difflib import SequenceMatcher, get_close_matches
     if not bw_name:
-        return None
+        return None, 0.0, "none"
     key = bw_name.lower().strip()
     if key in db_props:
-        return db_props[key]
+        return db_props[key], 1.0, "exact"
     for dk, row in db_props.items():
         if key in dk or dk in key:
-            return row
+            return row, SequenceMatcher(None, key, dk).ratio(), "substring"
     kwords = set(key.split())
     for dk, row in db_props.items():
         if kwords and kwords.issubset(set(dk.split())):
-            return row
+            return row, SequenceMatcher(None, key, dk).ratio(), "keyword"
     hits = get_close_matches(key, list(db_props.keys()), n=1, cutoff=0.6)
     if hits:
-        return db_props[hits[0]]
-    return None
+        return db_props[hits[0]], SequenceMatcher(None, key, hits[0]).ratio(), "fuzzy"
+    return None, 0.0, "none"
+
+
+# A match below this character-level similarity (and not exact) is treated as
+# uncertain and surfaced to the user for confirmation.
+_MATCH_CONFIDENT = 0.72
+
+
+def _match_local_property(bw_name: str, db_props: dict):
+    """Back-compat: return just the matched row (or None)."""
+    return _match_local_property_scored(bw_name, db_props)[0]
 
 
 def _haversine_matrix(locations):
@@ -1059,6 +1075,12 @@ def bw_import():
         bw_name_tasks  = {}
         bw_name_homeid = {}  # bw_name -> str(property_id) for arrival lookup
         for t in tasks_subset:
+            # Date guard — never surface tasks from another date. Breezeway's
+            # task param variants occasionally return off-date tasks, which then
+            # bled into the route's task summary.
+            t_date = (t.get("scheduled_date") or "")[:10]
+            if t_date and t_date != date_str:
+                continue
             home_id = t.get("home_id") or t.get("property_id")
             if home_id:
                 bw_name = _get_property_name(home_id)
@@ -1082,34 +1104,292 @@ def bw_import():
                     if n:
                         asgn_list.append(n)
                 bw_name_tasks.setdefault(bw_name, []).append(
-                    {"task_name": task_name, "assignees": asgn_list}
+                    {"task_name": task_name, "assignees": asgn_list, "date": t_date}
                 )
-        matched   = []
-        unmatched = []
+        matched, uncertain, unmatched = [], [], []
         for bw_name in bw_names:
-            row = _match_local_property(bw_name, db_props)
-            if row:
-                matched.append({
-                    "name":    row["Property Name"],
-                    "lat":     float(row["Latitude"]),
-                    "lng":     float(row["Longitude"]),
-                    "tasks":   bw_name_tasks.get(bw_name, []),
-                    "arrival": row["Property Name"] in checkin_db_names,
-                })
-            else:
+            row, score, tier = _match_local_property_scored(bw_name, db_props)
+            if not row:
                 unmatched.append(bw_name)
-        return matched, unmatched
+                continue
+            entry = {
+                "name":    row["Property Name"],
+                "lat":     float(row["Latitude"]),
+                "lng":     float(row["Longitude"]),
+                "tasks":   bw_name_tasks.get(bw_name, []),
+                "arrival": row["Property Name"] in checkin_db_names,
+            }
+            if tier == "exact" or score >= _MATCH_CONFIDENT:
+                matched.append(entry)
+            else:
+                entry["bw_name"]     = bw_name
+                entry["match_score"] = round(score, 2)
+                uncertain.append(entry)
+        return matched, uncertain, unmatched
 
     if len(assignees) > 1:
         by_assignee = {}
         for asgn in assignees:
-            matched, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
-            by_assignee[asgn] = {"matched": matched, "unmatched": unmatched}
+            matched, uncertain, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
+            by_assignee[asgn] = {"matched": matched, "uncertain": uncertain, "unmatched": unmatched}
         return jsonify({"by_assignee": by_assignee})
 
     subset = _filter_by_assignee(all_results, assignees[0].lower()) if assignees else all_results
-    matched, unmatched = _matched_for(subset)
-    if not matched and not unmatched:
-        return jsonify({"matched": [], "unmatched": [],
+    matched, uncertain, unmatched = _matched_for(subset)
+    if not matched and not uncertain and not unmatched:
+        return jsonify({"matched": [], "uncertain": [], "unmatched": [],
                         "message": "No Breezeway tasks found for that date/assignee."})
-    return jsonify({"matched": matched, "unmatched": unmatched})
+    return jsonify({"matched": matched, "uncertain": uncertain, "unmatched": unmatched})
+
+
+# ── Route discrepancy check ───────────────────────────────────────
+
+def _bw_task_title(t: dict) -> str:
+    title = (t.get("name") or t.get("task_name") or t.get("task_type") or t.get("type") or "Task")
+    if isinstance(title, dict):
+        title = title.get("value") or title.get("name") or "Task"
+    return str(title).strip()
+
+
+def _bw_assignee_match(task: dict, asgn_lower: str) -> bool:
+    if not asgn_lower:
+        return True
+    for a in (task.get("assignments") or []):
+        for n in (a.get("name", ""), a.get("full_name", ""),
+                  f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip()):
+            if n and asgn_lower in n.lower():
+                return True
+    return False
+
+
+def _bw_get_raw(token: str, path: str):
+    """Single raw GET against Breezeway. Returns (json_or_none, status_or_none)."""
+    try:
+        r = requests.get(f"https://api.breezeway.io{path}",
+                         headers={"Authorization": f"JWT {token}"}, timeout=15)
+        try:
+            body = r.json()
+        except Exception:
+            body = None
+        return body, r.status_code
+    except Exception:
+        return None, None
+
+
+def _task_history_summary(token: str, task: dict) -> dict:
+    """Best-effort 'who/when this task landed on the list'.
+
+    Breezeway's public API exposure of task history is uncertain, so we look at
+    fields already on the task, then try a few history/audit endpoints, and report
+    what we found plus whether anything was available.
+    """
+    task_id = task.get("id")
+
+    # Fields that may already be on the task object
+    when = task.get("created_at") or task.get("date_added") or task.get("created")
+    who  = None
+    cb   = task.get("created_by") or task.get("added_by") or task.get("creator")
+    if isinstance(cb, dict):
+        who = cb.get("name") or f"{cb.get('first_name','')} {cb.get('last_name','')}".strip()
+    elif isinstance(cb, str):
+        who = cb
+
+    # Try candidate history endpoints (may 404 / require elevated access)
+    history = []
+    for path in (f"/public/inventory/v1/task/{task_id}/history",
+                 f"/public/inventory/v1/task/{task_id}/audit",
+                 f"/public/inventory/v1/task/{task_id}/activity"):
+        body, status = _bw_get_raw(token, path)
+        if status == 200 and body:
+            history = body if isinstance(body, list) else body.get("results", body.get("data", []))
+            if history:
+                break
+
+    assigned_when = assigned_by = None
+    for ev in (history or []):
+        if not isinstance(ev, dict):
+            continue
+        ev_type = str(ev.get("type") or ev.get("action") or ev.get("event") or "").lower()
+        if "assign" in ev_type or "create" in ev_type or "add" in ev_type:
+            assigned_when = ev.get("created_at") or ev.get("timestamp") or ev.get("date") or assigned_when
+            actor = ev.get("user") or ev.get("actor") or ev.get("created_by") or ev.get("by")
+            if isinstance(actor, dict):
+                assigned_by = actor.get("name") or f"{actor.get('first_name','')} {actor.get('last_name','')}".strip()
+            elif isinstance(actor, str):
+                assigned_by = actor
+
+    return {
+        "available":    bool(assigned_when or who or when),
+        "who":          (assigned_by or who) or None,
+        "when":         (assigned_when or when) or None,
+        "from_history": bool(history),
+    }
+
+
+@dispatch_bp.route("/api/route-discrepancies")
+@login_required
+def route_discrepancies():
+    """Compare a saved route against the assignee's CURRENT Breezeway tasks for that
+    day. Reports tasks added to / removed from the person's list and time changes,
+    with best-effort who/when for added tasks."""
+    from routes.briefing import (
+        _get_breezeway_token, _fetch_bw_endpoint, _get_property_name,
+        _ensure_property_cache, _get_live_property_cache, _get_live_ref_cache,
+    )
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        route_id = int(request.args.get("route_id", ""))
+    except (TypeError, ValueError):
+        return jsonify({"error": "route_id required"}), 400
+
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT id, name, assigned_to, route_date, stops_json "
+                "FROM saved_routes WHERE id = %s", (route_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        return jsonify({"error": "route not found"}), 404
+    assignee = (row["assigned_to"] or "").strip()
+    date_str = str(row["route_date"])[:10]
+    schedule = json.loads(row["stops_json"]) or []
+    cur.execute('SELECT "Property Name", "Latitude", "Longitude" FROM properties '
+                'WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL')
+    db_props = {r["Property Name"].lower().strip(): dict(r) for r in cur.fetchall()}
+    cur.close(); conn.close()
+
+    if not assignee:
+        return jsonify({"error": "This route has no assignee, so there is no task list to compare against."}), 400
+
+    # Saved route: property -> planned ETA minutes
+    route_props, route_time, seen = [], {}, set()
+    for s in schedule:
+        if s.get("isLunch") or s.get("isGap"):
+            continue
+        nm = (s.get("name") or "").strip()
+        if nm and nm.lower() not in seen:
+            seen.add(nm.lower())
+            route_props.append(nm)
+            route_time[nm.lower()] = s.get("eta_minutes")
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()
+    ref_cache  = _get_live_ref_cache()
+    if not prop_cache:
+        return jsonify({"error": "Breezeway property cache empty — try again in a moment"}), 502
+
+    pid_candidates = {}
+    for bw_pid in prop_cache:
+        ref_id = ref_cache.get(bw_pid)
+        pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
+
+    def _tasks_for_ref(ref_id):
+        for dp in ({"scheduled_date": f"{date_str},{date_str}"},
+                   {"start_date": date_str, "end_date": date_str},
+                   {"date": date_str}):
+            r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
+                                              {"reference_property_id": ref_id, **dp})
+            if status == 200:
+                return r or []
+        return []
+
+    all_tasks = []
+    with ThreadPoolExecutor(max_workers=25) as ex:
+        for tasks in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+            all_tasks.extend(tasks)
+
+    asgn_lower = assignee.lower()
+    seen_ids, mine = set(), []
+    for t in all_tasks:
+        # Date guard — only this route's date, never off-date tasks
+        t_date = (t.get("scheduled_date") or "")[:10]
+        if t_date and t_date != date_str:
+            continue
+        tid = t.get("id")
+        if tid is not None and tid in seen_ids:
+            continue
+        if tid is not None:
+            seen_ids.add(tid)
+        if _bw_assignee_match(t, asgn_lower):
+            mine.append(t)
+
+    tasks_by_prop = {}
+    for t in mine:
+        pid = t.get("home_id") or t.get("property_id")
+        bw_name = _get_property_name(pid) if pid else (t.get("property_name") or "")
+        local = _match_local_property(bw_name, db_props)
+        prop_name = local["Property Name"] if local else (bw_name or "Unknown property")
+        tasks_by_prop.setdefault(prop_name, []).append(t)
+
+    route_set = {p.lower() for p in route_props}
+    present   = {p.lower() for p in tasks_by_prop}
+
+    added = []
+    for prop_name, tlist in tasks_by_prop.items():
+        if prop_name.lower() not in route_set:
+            for t in tlist:
+                added.append({"property": prop_name, "task_name": _bw_task_title(t),
+                              "task_id": t.get("id"), "history": _task_history_summary(token, t)})
+
+    removed = [{"property": p} for p in route_props if p.lower() not in present]
+
+    # moved: property is in the route but its task time-of-day differs from the plan
+    moved = []
+    for prop_name, tlist in tasks_by_prop.items():
+        key = prop_name.lower()
+        if key not in route_set:
+            continue
+        planned = route_time.get(key)
+        if planned is None:
+            continue
+        for t in tlist:
+            sched = t.get("scheduled_date") or ""
+            tod = sched[11:16] if len(sched) >= 16 else ""
+            if not tod or tod == "00:00":
+                continue
+            task_min = int(tod[:2]) * 60 + int(tod[3:5])
+            if abs(task_min - int(planned)) > 15:
+                ph, pm = divmod(int(planned), 60)
+                moved.append({"property": prop_name, "task_name": _bw_task_title(t),
+                              "was": f"{ph % 24:02d}:{pm:02d}", "now": tod})
+
+    return jsonify({
+        "route_id": route_id, "assignee": assignee, "date": date_str,
+        "added":   sorted(added,   key=lambda x: x["property"].lower()),
+        "removed": sorted(removed, key=lambda x: x["property"].lower()),
+        "moved":   sorted(moved,   key=lambda x: x["property"].lower()),
+        "history_available": any(a["history"].get("available") for a in added),
+        "summary": {"added": len(added), "removed": len(removed), "moved": len(moved)},
+    })
+
+
+@dispatch_bp.route("/api/bw-task-probe")
+@login_required
+def bw_task_probe():
+    """Admin diagnostic: dump a task's detail + try history endpoints, so we can
+    discover what who/when data Breezeway actually exposes. Usage: ?task_id=123"""
+    from routes.briefing import _get_breezeway_token
+    if not getattr(current_user, "is_admin", False):
+        return jsonify({"error": "admin only"}), 403
+    task_id = (request.args.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id required"}), 400
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+
+    out = {}
+    detail, st = _bw_get_raw(token, f"/public/inventory/v1/task/{task_id}")
+    out["task_detail"] = {"status": st,
+                          "keys": list(detail.keys()) if isinstance(detail, dict) else None,
+                          "body": detail}
+    for path in (f"/public/inventory/v1/task/{task_id}/history",
+                 f"/public/inventory/v1/task/{task_id}/audit",
+                 f"/public/inventory/v1/task/{task_id}/activity",
+                 f"/public/inventory/v1/task/{task_id}/log"):
+        body, status = _bw_get_raw(token, path)
+        out[path] = {"status": status, "body": body}
+    return jsonify(out)
