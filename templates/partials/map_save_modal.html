@@ -1,8 +1,8 @@
 <!-- SAVE MODAL -->
 <div id="saveModal"
      class="hidden fixed inset-0 bg-black/50 z-[10000] flex items-center justify-center p-4">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
-    <h3 class="font-bold text-lg text-gray-800 mb-4">Save Route</h3>
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 max-h-[90vh] overflow-y-auto">
+    <h3 id="saveModalTitle" class="font-bold text-lg text-gray-800 mb-4">Save Route</h3>
     <div id="saveError"   class="hidden mb-3 px-3 py-2 bg-red-100 text-red-700 rounded text-sm"></div>
     <div id="saveSuccess" class="hidden mb-3 px-3 py-2 bg-green-100 text-green-700 rounded text-sm"></div>
     <div class="space-y-3">
@@ -37,13 +37,36 @@
       </div>
       {% endif %}
     </div>
-    <div class="flex gap-2 mt-5">
-      <button id="saveSubmitBtn" onclick="submitSaveRoute()"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium
-                     py-2 rounded-lg text-sm transition-colors">Save</button>
+    <!-- Sync report (after Save & Sync) -->
+    <div id="saveSyncResult"
+         class="hidden mt-4 text-xs rounded-lg bg-gray-50 border border-gray-200 px-3 py-2
+                space-y-0.5 max-h-60 overflow-y-auto"></div>
+
+    <div id="saveActions" class="flex flex-col gap-2 mt-5">
+      {% if current_user.is_admin %}
+      <button id="saveSyncBtn" onclick="submitSaveRoute('sync')"
+              class="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold
+                     py-2.5 rounded-lg text-sm transition-colors">
+        💾 Save &amp; Sync Times to Breezeway
+      </button>
+      {% endif %}
+      <button id="saveReturnBtn" onclick="submitSaveRoute('return')"
+              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
+                     py-2.5 rounded-lg text-sm transition-colors">
+        💾 Save &amp; Return to Routes
+      </button>
       <button onclick="closeSaveModal()"
-              class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium
+              class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium
                      py-2 rounded-lg text-sm transition-colors">Cancel</button>
+    </div>
+
+    <!-- Shown after a Save & Sync completes -->
+    <div id="postSyncActions" class="hidden mt-4">
+      <button onclick="_goToSavedRoutes()"
+              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
+                     py-2.5 rounded-lg text-sm transition-colors">
+        Return to Routes &rarr;
+      </button>
     </div>
   </div>
 </div>

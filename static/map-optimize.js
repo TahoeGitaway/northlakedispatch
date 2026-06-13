@@ -194,6 +194,21 @@ function openSaveModal() {
   document.getElementById("saveError").classList.add("hidden");
   document.getElementById("saveSuccess").classList.add("hidden");
 
+  // Reset Save & Sync state each time the modal opens
+  const syncRes = document.getElementById("saveSyncResult");
+  if (syncRes) { syncRes.classList.add("hidden"); syncRes.innerHTML = ""; }
+  document.getElementById("saveActions").classList.remove("hidden");
+  document.getElementById("postSyncActions").classList.add("hidden");
+
+  // Label the modal as Save vs Update depending on whether a route is loaded
+  const verb      = currentRouteId ? "Update" : "Save";
+  const titleEl   = document.getElementById("saveModalTitle");
+  if (titleEl) titleEl.textContent = currentRouteId ? "Update Route" : "Save Route";
+  const syncBtn   = document.getElementById("saveSyncBtn");
+  const returnBtn = document.getElementById("saveReturnBtn");
+  if (syncBtn)   { syncBtn.disabled   = false; syncBtn.innerHTML   = `💾 ${verb} &amp; Sync Times to Breezeway`; }
+  if (returnBtn) { returnBtn.disabled = false; returnBtn.innerHTML = `💾 ${verb} &amp; Return to Routes`; }
+
   const sidebarName     = document.getElementById("routeNameField").value.trim();
   const sidebarAssigned = document.getElementById("assignedToField").value.trim();
   const sidebarDate     = document.getElementById("routeDateField").value;
@@ -211,7 +226,14 @@ function openSaveModal() {
 }
 function closeSaveModal() { document.getElementById("saveModal").classList.add("hidden"); }
 
-async function submitSaveRoute() {
+function _goToSavedRoutes() {
+  const savedDate = document.getElementById("routeDateField").value || document.getElementById("saveRouteDate").value;
+  window.location.href = savedDate ? `/routes?date=${savedDate}` : "/routes";
+}
+
+// mode: "return" → save then go back to the routes page (default)
+//       "sync"   → save, then sync times to Breezeway and show the report; stay open
+async function submitSaveRoute(mode = "return") {
   const name        = document.getElementById("saveRouteName").value.trim();
   const assignedTo  = document.getElementById("saveAssignedTo").value.trim();
   const routeDate   = document.getElementById("saveRouteDate").value;
@@ -221,13 +243,18 @@ async function submitSaveRoute() {
   const teamId      = teamEl ? parseInt(teamEl.value) || null : null;
   const errorEl     = document.getElementById("saveError");
   const successEl   = document.getElementById("saveSuccess");
-  const saveBtn     = document.getElementById("saveSubmitBtn");
+  const syncBtn     = document.getElementById("saveSyncBtn");
+  const returnBtn   = document.getElementById("saveReturnBtn");
+  const reenable    = () => { if (syncBtn) syncBtn.disabled = false; if (returnBtn) returnBtn.disabled = false; };
   errorEl.classList.add("hidden"); successEl.classList.add("hidden");
 
   if (!name)      { errorEl.textContent = "Please enter a route name."; errorEl.classList.remove("hidden"); return; }
   if (!routeDate) { errorEl.textContent = "Please choose a date.";      errorEl.classList.remove("hidden"); return; }
 
-  saveBtn.disabled = true;
+  if (syncBtn) syncBtn.disabled = true;
+  if (returnBtn) returnBtn.disabled = true;
+  const wasUpdate = !!currentRouteId;   // capture before save assigns currentRouteId
+  const savedVerb = wasUpdate ? "updated" : "saved";
   const real = optimizedSchedule.filter(s => !s.isLunch);
   const url  = currentRouteId ? `/routes/${currentRouteId}/update` : "/routes/save";
 
@@ -244,77 +271,39 @@ async function submitSaveRoute() {
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("json")) {
       errorEl.textContent = `Server error (${res.status}). Please try again.`;
-      errorEl.classList.remove("hidden"); saveBtn.disabled = false; return;
+      errorEl.classList.remove("hidden"); reenable(); return;
     }
     const data = await res.json();
     if (data.error) {
       errorEl.textContent = data.error; errorEl.classList.remove("hidden");
-      saveBtn.disabled = false;
-    } else {
-      if (data.id) currentRouteId = data.id;
-      successEl.textContent = "Route saved! Redirecting…";
+      reenable(); return;
+    }
+    if (data.id) currentRouteId = data.id;
+
+    if (mode === "sync") {
+      successEl.textContent = `Route ${savedVerb}. Syncing times to Breezeway…`;
       successEl.classList.remove("hidden");
-      const savedDate = document.getElementById("routeDateField").value || document.getElementById("saveRouteDate").value;
-      setTimeout(() => { window.location.href = savedDate ? `/routes?date=${savedDate}` : "/routes"; }, 1000);
+      await _bwSyncCore({
+        date:     routeDate,
+        assignee: assignedTo,
+        stops:    _bwSyncStops(),
+        resultEl: document.getElementById("saveSyncResult"),
+      });
+      successEl.textContent = `Route ${savedVerb}. Sync complete — review the report below.`;
+      // Swap the save buttons for a single "Return to Routes" so the user can read the report first
+      document.getElementById("saveActions").classList.add("hidden");
+      document.getElementById("postSyncActions").classList.remove("hidden");
+    } else {
+      successEl.textContent = `Route ${savedVerb}! Redirecting…`;
+      successEl.classList.remove("hidden");
+      setTimeout(_goToSavedRoutes, 1000);
     }
   } catch(e) {
     errorEl.textContent = "Save failed: " + e.message; errorEl.classList.remove("hidden");
-    saveBtn.disabled = false;
+    reenable();
   }
 }
 
-/* ── UPDATE ROUTE ── */
-async function submitUpdateRoute() {
-  const name        = document.getElementById("routeNameField").value.trim();
-  const assignedTo  = document.getElementById("assignedToField").value.trim();
-  const routeDate   = document.getElementById("routeDateField").value;
-  const notes       = document.getElementById("routeNotesField").value.trim();
-  const notesPublic = document.getElementById("notesPublicField").checked;
-  const sidebarTeam = document.getElementById("sidebarTeamId");
-  const modalTeam   = document.getElementById("saveTeamId");
-  const teamEl      = sidebarTeam || modalTeam;
-  const teamId      = teamEl ? parseInt(teamEl.value) || null : null;
-  const btn         = document.getElementById("updateRouteBtn");
-
-  if (!currentRouteId) { alert("No loaded route to update. Use Save Route instead."); return; }
-  if (!name)            { alert("Please enter a route name before updating."); return; }
-  if (!routeDate)       { alert("Please select a date before updating."); return; }
-
-  btn.disabled = true; btn.textContent = "Saving…";
-  const real = optimizedSchedule.filter(s => !s.isLunch);
-
-  try {
-    const res = await fetch(`/routes/${currentRouteId}/update`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, assigned_to:assignedTo, route_date:routeDate, schedule:real, stats:lastStats, notes, notes_public:notesPublic, team_id:teamId, startTime:minutesToHHMM24(startMinutes), startLocation, endLocation })
-    });
-    if (res.redirected || res.url.includes("/login")) {
-      document.getElementById("sessionBanner").style.display = "block"; return;
-    }
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.includes("json")) {
-      alert(`Server error (${res.status}). Please try again.`);
-      btn.disabled = false; btn.textContent = "↑ Update"; return;
-    }
-    const data = await res.json();
-    if (data.error) {
-      alert("Update failed: " + data.error);
-      btn.disabled = false; btn.textContent = "↑ Update";
-    } else {
-      btn.textContent = "✓ Updated! Redirecting…";
-      btn.classList.remove("bg-blue-600","hover:bg-blue-700");
-      btn.classList.add("bg-green-600");
-      const savedDate = document.getElementById("routeDateField").value;
-      setTimeout(() => {
-        window.location.href = savedDate ? `/routes?date=${savedDate}` : "/routes";
-      }, 900);
-    }
-  } catch(e) {
-    alert("Update failed: " + e.message);
-    btn.disabled = false; btn.textContent = "↑ Update";
-  }
-}
 
 /* ── LOAD FROM PROJECT CLUSTER ── */
 (async function checkPropsParam() {

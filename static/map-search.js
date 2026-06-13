@@ -406,18 +406,11 @@ function _highlightCustomDepot() {
 
 function _updateStartEndPill() {
   const startName = startLocation.name || "Custom Start";
-  const endName   = endLocation.name   || "Custom End";
   const short = n => n.length > 35 ? n.slice(0, 35) + "…" : n;
   document.getElementById("customStartLabel").textContent = short(startName);
+  // End address is not user-editable — never surface it in the pill.
   const endLabel = document.getElementById("customEndLabel");
-  const same = (Math.abs(startLocation.lat - endLocation.lat) < 1e-5 &&
-                Math.abs(startLocation.lng - endLocation.lng) < 1e-5);
-  if (same) {
-    endLabel.classList.add("hidden");
-  } else {
-    endLabel.textContent = "→ End: " + short(endName);
-    endLabel.classList.remove("hidden");
-  }
+  if (endLabel) endLabel.classList.add("hidden");
   _highlightCustomDepot();
 }
 
