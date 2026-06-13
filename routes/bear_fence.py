@@ -193,13 +193,16 @@ def bear_fence_scan():
         elif WALK_THRU_PATTERNS.search(title) and not BB_PREFIX.match(title):
             walk_thrus.setdefault(pid, []).append(entry)
 
-    def _find_bf_match(bf_list, ref_date):
-        """Return the nearest bear fence task on or after ref_date, or None."""
+    def _find_bf_match(bf_list, ref_date, max_gap_days=2):
+        """Return the nearest bear fence task on or after ref_date within
+        max_gap_days, or None. The gap cap avoids pairing a task with an
+        unrelated arrival's bear fence (e.g. owner-stay hot tub services,
+        which have no bear fence of their own)."""
         for bf in sorted(bf_list, key=lambda x: x["date"]):
             try:
                 bf_d = date.fromisoformat(bf["date"])
                 if bf_d >= ref_date:
-                    return bf, bf_d
+                    return (bf, bf_d) if (bf_d - ref_date).days <= max_gap_days else (None, None)
             except (ValueError, TypeError):
                 pass
         return None, None

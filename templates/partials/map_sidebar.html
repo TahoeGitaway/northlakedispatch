@@ -5,16 +5,64 @@
 
     <h2 class="text-xl font-bold">Tahoe Dispatch</h2>
 
-    <!-- START LOCATION — click to change -->
+    <!-- ROUTE INFO -->
+    <div class="space-y-2">
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Name</label>
+        <input id="routeNameField" type="text" placeholder="e.g. Friday Cleans – North Shore"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Assigned To</label>
+        <input id="assignedToField" type="text" placeholder="e.g. Sarah"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Date</label>
+        <input id="routeDateField" type="date"
+               class="w-full border rounded-lg px-3 py-2 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      </div>
+      <div id="sidebarTeamRow" class="hidden">
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Team</label>
+        <select id="sidebarTeamId"
+                class="w-full border rounded-lg px-3 py-2 text-sm
+                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </select>
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Notes</label>
+        <textarea id="routeNotesField" rows="2" placeholder="Internal notes, reminders, anything…"
+                  class="w-full border rounded-lg px-3 py-2 text-sm resize-none
+                         focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        <div class="flex items-center gap-3 mt-1">
+          <label class="flex items-center gap-1.5 cursor-pointer text-xs text-gray-500">
+            <input type="checkbox" id="notesPublicField" class="accent-indigo-600">
+            <span>Show in employee share link</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- START TIME -->
+    <div>
+      <label class="text-sm text-gray-600">Start Time</label>
+      <input type="time" id="startTime" value="09:30" class="w-full border rounded-lg p-2 mt-1">
+      <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
+    </div>
+
+    <!-- START / END LOCATION — edit before optimizing -->
     <div class="rounded-lg border border-gray-200 overflow-hidden text-sm">
-      <!-- Pill row — always visible, click to expand -->
+      <!-- Pill row — click to collapse/expand -->
       <button onclick="toggleCustomStart()"
               class="w-full flex items-center justify-between gap-2 px-3 py-2.5
                      bg-gray-50 hover:bg-indigo-50 transition-colors text-left group">
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-gray-400 text-base leading-none shrink-0">📍</span>
           <div class="min-w-0">
-            <div class="text-xs text-gray-400 font-medium uppercase tracking-wide leading-none mb-0.5">Start &amp; End</div>
+            <div class="text-xs text-gray-400 font-medium uppercase tracking-wide leading-none mb-0.5">Starting Point &amp; End</div>
             <div id="customStartLabel" class="font-medium text-gray-800 truncate">Tahoe Getaways Office</div>
             <div id="customEndLabel" class="hidden text-xs text-gray-500 truncate mt-0.5"></div>
           </div>
@@ -22,8 +70,8 @@
         <span class="text-xs text-indigo-400 group-hover:text-indigo-600 shrink-0 font-medium">change</span>
       </button>
 
-      <!-- Expandable input panel -->
-      <div id="customStartPanel" class="hidden border-t border-gray-200 p-2.5 bg-white space-y-3">
+      <!-- Input panel — open by default so it is editable before optimizing -->
+      <div id="customStartPanel" class="border-t border-gray-200 p-2.5 bg-white space-y-3">
 
         <!-- Start -->
         <div>
@@ -78,54 +126,6 @@
         </div>
 
       </div>
-    </div>
-
-    <!-- ROUTE INFO -->
-    <div class="space-y-2">
-      <div>
-        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Name</label>
-        <input id="routeNameField" type="text" placeholder="e.g. Friday Cleans – North Shore"
-               class="w-full border rounded-lg px-3 py-2 text-sm
-                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
-      </div>
-      <div>
-        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Assigned To</label>
-        <input id="assignedToField" type="text" placeholder="e.g. Sarah"
-               class="w-full border rounded-lg px-3 py-2 text-sm
-                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
-      </div>
-      <div>
-        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Route Date</label>
-        <input id="routeDateField" type="date"
-               class="w-full border rounded-lg px-3 py-2 text-sm
-                      focus:outline-none focus:ring-2 focus:ring-indigo-400">
-      </div>
-      <div id="sidebarTeamRow" class="hidden">
-        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Team</label>
-        <select id="sidebarTeamId"
-                class="w-full border rounded-lg px-3 py-2 text-sm
-                       focus:outline-none focus:ring-2 focus:ring-indigo-400">
-        </select>
-      </div>
-      <div>
-        <label class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1 block">Notes</label>
-        <textarea id="routeNotesField" rows="2" placeholder="Internal notes, reminders, anything…"
-                  class="w-full border rounded-lg px-3 py-2 text-sm resize-none
-                         focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
-        <div class="flex items-center gap-3 mt-1">
-          <label class="flex items-center gap-1.5 cursor-pointer text-xs text-gray-500">
-            <input type="checkbox" id="notesPublicField" class="accent-indigo-600">
-            <span>Show in employee share link</span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <!-- START TIME -->
-    <div>
-      <label class="text-sm text-gray-600">Start Time</label>
-      <input type="time" id="startTime" value="09:30" class="w-full border rounded-lg p-2 mt-1">
-      <div class="text-xs text-gray-400 mt-1">Check-ins by 4:00 PM · Priority by 12:00 PM</div>
     </div>
 
     <!-- BREEZEWAY IMPORT -->
