@@ -55,7 +55,7 @@ function clearRouteStale() {
   const gBtn = document.getElementById("googleOptimizeBtn");
   btn._stale  = false;
   gBtn._stale = false;
-  btn.textContent = "Optimize Route with Haversene";
+  btn.textContent = "Optimize Route In-App For Free";
   btn.classList.remove("bg-amber-500","hover:bg-amber-600");
   btn.classList.add("bg-indigo-600","hover:bg-indigo-700");
   const gSpan = gBtn.querySelector("span:first-child");
@@ -512,7 +512,7 @@ async function recalcDriveTimes() {
     const data = await guardResponse(res);
     document.getElementById("loadingOverlay").classList.remove("active");
     btn.disabled = false;
-    btn.textContent = "🗺 Recalc Drive Times";
+    btn.textContent = "↻ Recalc drive times and leave stop order intact";
     if (data.error) { alert(data.error); return; }
 
     durationMatrix = data.duration_matrix || durationMatrix;
@@ -533,7 +533,7 @@ async function recalcDriveTimes() {
   } catch(err) {
     document.getElementById("loadingOverlay").classList.remove("active");
     btn.disabled = false;
-    btn.textContent = "🗺 Recalc Drive Times";
+    btn.textContent = "↻ Recalc drive times and leave stop order intact";
     if (err === "session_expired") return;
     alert("Could not fetch drive times: " + (err.message || err));
   }

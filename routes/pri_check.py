@@ -51,22 +51,26 @@ def pri_check():
     """
     _get_breezeway_token, _fetch_bw_reservations, _classify_reservation, _extract_str, _get_property_name = _shared()
 
+    today = date_cls.today()
+
+    # Caller picks an explicit checkout window (From / To). Defaults: today → +30 days.
     start_param = request.args.get("start_date")
+    end_param   = request.args.get("end_date")
     try:
-        today = date_cls.fromisoformat(start_param) if start_param else date_cls.today()
+        win_start = date_cls.fromisoformat(start_param) if start_param else today
     except Exception:
-        today = date_cls.today()
-
+        win_start = today
     try:
-        report_days = int(request.args.get("days", 60))
+        win_end = date_cls.fromisoformat(end_param) if end_param else win_start + timedelta(days=30)
     except Exception:
-        report_days = 60
-    report_days = max(1, min(report_days, 60))
+        win_end = win_start + timedelta(days=30)
+    if win_end < win_start:
+        win_start, win_end = win_end, win_start
 
-    lookback_start    = today - timedelta(days=30)   # how far back to look for checkouts
-    reso_lookback     = today - timedelta(days=180)  # wider window for upcoming — catches long owner stays
-    report_end        = today + timedelta(days=report_days)
-    far_end           = today + timedelta(days=150)
+    lookback_start    = win_start                        # checkout window lower bound (From)
+    reso_lookback     = win_start - timedelta(days=180)  # wider window for upcoming — catches long owner stays
+    report_end        = win_end                          # checkout window upper bound (To)
+    far_end           = win_end + timedelta(days=150)
 
     token = _get_breezeway_token()
     if not token:
@@ -167,8 +171,8 @@ def pri_check():
         "needs_tag":       needs_tag,
         "already_tagged":  already_done,
         "no_booking":      no_booking,
+        "scanned_from":    lookback_str,
         "scanned_through": report_end_str,
-        "report_days":     report_days,
     })
 
 

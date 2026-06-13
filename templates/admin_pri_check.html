@@ -36,18 +36,20 @@
     </ul>
   </div>
 
-  <!-- Toggle -->
-  <div class="flex items-center gap-3 mb-5">
-    <div class="flex rounded-lg overflow-hidden border border-gray-200 text-sm font-medium">
-      <button id="btnQuick" onclick="setMode(30)"
-              class="px-4 py-2 bg-amber-500 text-white transition-colors">
-        Next 30 days
-      </button>
-      <button id="btnFull" onclick="setMode(60)"
-              class="px-4 py-2 bg-white text-gray-500 hover:bg-gray-50 transition-colors">
-        Full 60 days
-      </button>
+  <!-- Date range + scan controls -->
+  <div class="flex items-center gap-3 mb-5 flex-wrap">
+    <div class="flex items-center gap-2 text-sm">
+      <label class="text-gray-500 font-medium">From</label>
+      <input type="date" id="startDate"
+             class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-300">
+      <label class="text-gray-500 font-medium">To</label>
+      <input type="date" id="endDate"
+             class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-300">
     </div>
+    <button onclick="runScan()"
+            class="px-4 py-1.5 bg-amber-500 text-white text-sm font-semibold rounded-lg hover:bg-amber-600 transition-colors">
+      Scan
+    </button>
     <span id="subtitle" class="text-xs text-gray-400"></span>
   </div>
 
@@ -67,8 +69,9 @@
 </div>
 
 <script>
-let _days = 30;
 let _dismissedKeys = new Set();  // loaded from server on each page load
+
+function _isoDate(d) { return d.toISOString().slice(0, 10); }
 
 function _vacancyKey(p)   { return `${p.property}::${p.checkout_date}`; }
 function _ownerNextKey(p) { return `${p.property}::${p.checkout_date}::on`; }
@@ -108,18 +111,8 @@ async function clearAllOwnerNextDismissed() {
 }
 
 
-function setMode(d) {
-  _days = d;
-  document.getElementById("btnQuick").className =
-    d === 30 ? "px-4 py-2 bg-amber-500 text-white transition-colors"
-             : "px-4 py-2 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
-  document.getElementById("btnFull").className =
-    d === 60 ? "px-4 py-2 bg-amber-500 text-white transition-colors"
-             : "px-4 py-2 bg-white text-gray-500 hover:bg-gray-50 transition-colors";
-  load();
-}
-
-function reload() { load(); }
+function runScan() { load(); }
+function reload()  { load(); }
 
 function _fmtDate(ds) {
   if (!ds) return "—";
@@ -223,8 +216,14 @@ async function load() {
   document.getElementById("subtitle").textContent = "";
 
   try {
+    const params = new URLSearchParams();
+    const startV = document.getElementById("startDate").value;
+    const endV   = document.getElementById("endDate").value;
+    if (startV) params.set("start_date", startV);
+    if (endV)   params.set("end_date", endV);
+
     const [res, dismissRes] = await Promise.all([
-      fetch(`/briefing/pri-check?days=${_days}`),
+      fetch(`/briefing/pri-check?${params.toString()}`),
       fetch("/admin/pri-dismissals"),
     ]);
     const [data, dismissData] = await Promise.all([res.json(), dismissRes.json()]);
@@ -250,7 +249,7 @@ async function load() {
     const total = allNeeds.length + done.length + allVacant.length;
 
     document.getElementById("subtitle").textContent =
-      `Through ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
+      `${data.scanned_from || ""} → ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
 
     const resultsEl = document.getElementById("results");
     resultsEl.innerHTML = "";
@@ -321,7 +320,13 @@ async function runAlertRefresh() {
   }
 }
 
-// Auto-load on page open
+// Default window: today → +30 days, then auto-load on page open
+(function initDates() {
+  const today = new Date();
+  const end   = new Date(); end.setDate(end.getDate() + 30);
+  document.getElementById("startDate").value = _isoDate(today);
+  document.getElementById("endDate").value   = _isoDate(end);
+})();
 load();
 </script>
 {% endblock %}
