@@ -1,7 +1,7 @@
 <div class="flex h-[calc(100vh-72px)]">
 
   <!-- ═══════════════ SIDEBAR ═══════════════ -->
-  <div class="w-[28rem] bg-white shadow-xl p-6 overflow-y-auto flex flex-col gap-4" style="will-change:transform;isolation:isolate;">
+  <div class="w-[32rem] bg-white shadow-xl p-6 overflow-y-auto flex flex-col gap-4" style="will-change:transform;isolation:isolate;">
 
     <h2 class="text-xl font-bold">Tahoe Dispatch</h2>
 
@@ -214,11 +214,18 @@
       </div>
 
       <!-- POST-OPTIMIZE: recalc, clearly labelled -->
-      <button id="recalcTimesBtn" onclick="recalcDriveTimes()"
+      <button id="recalcTimesBtn" onclick="recalcDriveTimes(true)"
+              class="hidden w-full bg-emerald-700 hover:bg-emerald-800 text-white
+                     px-4 py-2.5 rounded-xl font-semibold text-sm leading-snug
+                     transition-colors flex items-center justify-between gap-2">
+        <span>🗺 Recalc drive times — Google Maps</span>
+        <span class="text-emerald-200 text-xs font-normal whitespace-nowrap">paid · keeps order</span>
+      </button>
+      <button id="recalcFreeBtn" onclick="recalcDriveTimes(false)"
               class="hidden w-full bg-emerald-50 hover:bg-emerald-100 text-emerald-800
                      border border-emerald-200 px-4 py-2.5 rounded-xl font-semibold text-sm
                      leading-snug text-center transition-colors">
-        ↻ Recalc drive times and leave stop order intact
+        ↻ Recalc drive times — in-app (free, keeps order)
       </button>
 
       <!-- POST-OPTIMIZE: add stops -->

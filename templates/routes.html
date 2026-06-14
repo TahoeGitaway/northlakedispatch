@@ -252,11 +252,13 @@
         <div class="cal-grid" id="calGrid"></div>
       </div>
 
-      <!-- Staff section -->
+      <!-- Staff section (admin only) -->
+      {% if current_user.is_admin %}
       <div id="staffSection"
            class="hidden bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
         <div id="staffContent"></div>
       </div>
+      {% endif %}
 
       <!-- Routes list (populated by JS when a day is selected) -->
       <div id="dayDetailRoutes" class="space-y-3"></div>
@@ -285,7 +287,7 @@
           <div class="px-5 py-3.5 border-b border-indigo-100 flex items-center gap-2"
                style="background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);">
             <span class="text-indigo-400 font-bold text-base leading-none">✦</span>
-            <span class="text-sm font-semibold text-indigo-700 tracking-wide">AI Briefing</span>
+            <span class="text-sm font-semibold text-indigo-700 tracking-wide">{% if current_user.is_admin %}AI Briefing{% else %}Today's Notes{% endif %}</span>
           </div>
 
           <!-- Notes -->
@@ -311,10 +313,11 @@
             </div>
           </div>
 
+          {% if current_user.is_admin %}
           <!-- Divider -->
           <div style="border-top:1px solid #f3f4f6; margin:0 20px;"></div>
 
-          <!-- Generate / Loading / Card / Error -->
+          <!-- Generate / Loading / Card / Error (admin only) -->
           <div class="px-5 py-4">
 
             <!-- Prompt button -->
@@ -364,6 +367,7 @@
             </div>
 
           </div>
+          {% endif %}
         </div>
       </div>
 
@@ -402,6 +406,7 @@
 <script>
 /* ── AI BRIEFING ── */
 function startBriefing() {
+  if (!NLD.isAdmin) return;
   document.getElementById("briefingPrompt").classList.add("hidden");
   loadBriefing(false);
 }
@@ -509,6 +514,7 @@ async function saveDaySummary() {
 }
 
 async function loadBriefing(force = false) {
+  if (!NLD.isAdmin) return;
   document.getElementById("briefingCard").classList.add("hidden");
   document.getElementById("briefingError").classList.add("hidden");
   document.getElementById("briefingPrompt").classList.add("hidden");
@@ -560,6 +566,7 @@ async function loadBriefing(force = false) {
 
 /* Check for a saved briefing without generating. Shows Generate button if nothing saved. */
 async function peekBriefing() {
+  if (!NLD.isAdmin) return;
   const briefingDate = selectedDate || TODAY_STR;
   const teamParam = selectedTeamId ? `&team_id=${selectedTeamId}` : "";
   try {
@@ -657,15 +664,8 @@ function selectTeam(teamId) {
     activeBtn.classList.remove("border-gray-200", "text-gray-500");
     activeBtn.classList.add("bg-indigo-600", "text-white", "border-indigo-600");
   }
-  const isPS = teamId === PS_TEAM_ID;
-  document.getElementById("briefingSection").classList.toggle("hidden", !isPS);
-  if (isPS) {
-    document.getElementById("briefingCard").classList.add("hidden");
-    document.getElementById("briefingLoading").classList.add("hidden");
-    document.getElementById("briefingError").classList.add("hidden");
-    document.getElementById("briefingPrompt").classList.add("hidden");
-    peekBriefing();
-  }
+  // Notes card is always visible to everyone; the AI briefing inside it is
+  // admin-only and refreshes per selected day (see selectDay).
   buildRoutesByDate();
   buildCalendar();
   if (selectedDate) selectDay(selectedDate);
@@ -774,14 +774,19 @@ function selectDay(ds) {
   const newRouteBtn = document.getElementById("newRouteBtn");
   if (newRouteBtn) newRouteBtn.href = `/?date=${ds}`;
 
-  document.getElementById("briefingPrompt").classList.remove("hidden");
-  document.getElementById("briefingCard").classList.add("hidden");
-  document.getElementById("briefingLoading").classList.add("hidden");
-  document.getElementById("briefingError").classList.add("hidden");
+  if (NLD.isAdmin) {
+    document.getElementById("briefingPrompt").classList.remove("hidden");
+    document.getElementById("briefingCard").classList.add("hidden");
+    document.getElementById("briefingLoading").classList.add("hidden");
+    document.getElementById("briefingError").classList.add("hidden");
+    peekBriefing();   // load any saved briefing for this day
+  }
 
-  staffEntries = [];
-  document.getElementById("staffSection").classList.remove("hidden");
-  _renderStaffSection();
+  if (NLD.isAdmin) {
+    staffEntries = [];
+    document.getElementById("staffSection").classList.remove("hidden");
+    _renderStaffSection();
+  }
   loadNotes();
 
   const routes = routesByDate[ds] || [];
@@ -1014,7 +1019,6 @@ document.addEventListener("DOMContentLoaded", () => {
     defaultTab.classList.remove("border-gray-200", "text-gray-500");
     defaultTab.classList.add("bg-indigo-600", "text-white", "border-indigo-600");
   }
-  document.getElementById("briefingSection").classList.toggle("hidden", selectedTeamId !== PS_TEAM_ID);
   buildCalendar();
   loadCalendarActivity(calYear, calMonth);
 

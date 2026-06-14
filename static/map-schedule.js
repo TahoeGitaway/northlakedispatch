@@ -274,7 +274,7 @@ function renderStops() {
     div.className = "stop-card bg-gray-50 p-2 rounded shadow-sm text-sm";
 
     div.innerHTML = `
-      <div class="font-medium text-gray-800 truncate mb-1" title="${s.name}">${s.name}</div>
+      <div class="font-medium text-gray-800 mb-1 break-words" title="${s.name}">${s.name}</div>
       <div class="stop-card-row items-center">
         <label class="flex items-center gap-1 cursor-pointer">
           <input type="checkbox" class="accent-green-600" data-role="checkin"
@@ -384,6 +384,7 @@ function restartRoute() {
   document.getElementById("addMoreBtn").classList.add("hidden");
   document.getElementById("changeStartBtn").classList.add("hidden");
   document.getElementById("recalcTimesBtn").classList.add("hidden");
+  document.getElementById("recalcFreeBtn")?.classList.add("hidden");
   document.getElementById("bwSyncResult")?.classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   document.getElementById("workInBox").value = "";
@@ -393,6 +394,7 @@ function restartRoute() {
   document.getElementById("routeNameField").value  = "";
   document.getElementById("assignedToField").value = "";
   document.getElementById("routeDateField").value  = "";
+  if (typeof updateRouteMapOverlay === "function") updateRouteMapOverlay();
   document.getElementById("routeNotesField").value   = "";
   document.getElementById("notesPublicField").checked = false;
   ["totalTime","drivingTime","serviceTime","distance"].forEach(id =>
@@ -540,7 +542,7 @@ function renderSchedule() {
         <div class="flex items-center justify-between gap-1">
           <div class="font-medium text-sm flex items-center gap-2 flex-1 min-w-0">
             <span class="text-indigo-600 font-bold shrink-0">${num}.</span>
-            <span class="truncate max-w-[160px]" title="${stop.name}">${stop.name}</span>
+            <span class="break-words leading-snug" title="${stop.name}">${stop.name}</span>
           </div>
           <div class="flex gap-1 shrink-0">
             <button class="move-btn" onclick="moveUp(this)"   ${si===0?"disabled":""}>▲</button>
@@ -636,7 +638,7 @@ function renderSchedule() {
         <div class="font-medium text-sm flex items-center flex-wrap gap-1 flex-1 min-w-0">
           <span class="drag-handle" title="Drag to reorder">⠿</span>
           <span class="text-indigo-600 font-bold shrink-0">${num}.</span>
-          <span class="truncate max-w-[100px]" title="${stop.name}">${stop.name}</span>
+          <span class="break-words leading-snug" title="${stop.name}">${stop.name}</span>
           ${badge}
         </div>
         <div class="flex gap-1 shrink-0">

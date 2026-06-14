@@ -605,6 +605,10 @@ def get_briefing_notes():
             except Exception:
                 staff_entries = [{"text": raw, "saved_at": (row["staff_updated_at"] or "")}]
 
+    # Staff plan is admin-only; notes stay visible to everyone.
+    if not getattr(current_user, "is_admin", False):
+        staff_entries = []
+
     return jsonify({
         "note_text":     (row["note_text"] or "").strip() if row else "",
         "staff_entries": staff_entries,
@@ -619,6 +623,10 @@ def save_briefing_notes():
     date_str  = (data.get("date") or datetime.utcnow().strftime("%Y-%m-%d")).strip()
     note_text = (data.get("note_text") or "").strip()
     now       = datetime.utcnow().isoformat()
+
+    # Staff plan is admin-only; notes remain open to everyone.
+    if "staff_list" in data and not getattr(current_user, "is_admin", False):
+        return jsonify({"error": "Staff plan is admin-only."}), 403
 
     conn = get_db()
     cur  = get_cursor(conn)
@@ -668,6 +676,7 @@ def save_briefing_notes():
 
 @briefing_bp.route("/briefing")
 @login_required
+@admin_required
 def daily_briefing():
     date_str      = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     team_id       = request.args.get("team_id") or None

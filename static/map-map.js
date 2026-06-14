@@ -20,6 +20,52 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
 }).addTo(map);
 
+/* ── Always-visible specialist + date pill, pinned to the top of the map ── */
+(function initRouteMapOverlay() {
+  const overlay = document.createElement("div");
+  overlay.id = "routeMapOverlay";
+  overlay.style.cssText = [
+    "position:absolute", "top:12px", "left:50%", "transform:translateX(-50%)",
+    "z-index:1000", "background:rgba(255,255,255,0.96)", "border:1px solid #e5e7eb",
+    "border-radius:9999px", "box-shadow:0 2px 10px rgba(0,0,0,0.12)",
+    "padding:7px 18px", "font-size:13px", "font-weight:600", "color:#374151",
+    "display:none", "align-items:center", "gap:10px", "white-space:nowrap",
+    "pointer-events:none"
+  ].join(";");
+  document.getElementById("map").appendChild(overlay);
+
+  ["assignedToField", "routeDateField"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("input",  updateRouteMapOverlay);
+    el.addEventListener("change", updateRouteMapOverlay);
+  });
+  updateRouteMapOverlay();
+})();
+
+// Mirror the sidebar's assignee + date onto the map pill. Call this after any
+// programmatic change to those fields (import, route load).
+function updateRouteMapOverlay() {
+  const el = document.getElementById("routeMapOverlay");
+  if (!el) return;
+  const who  = (document.getElementById("assignedToField")?.value || "").trim();
+  const date = (document.getElementById("routeDateField")?.value || "").trim();
+  if (!who && !date) { el.style.display = "none"; return; }
+
+  let dateLabel = "";
+  if (date) {
+    const d = new Date(date + "T00:00:00");
+    dateLabel = isNaN(d.getTime())
+      ? date
+      : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
+  el.innerHTML =
+    (who ? `<span>👤 ${who}</span>` : "") +
+    (who && dateLabel ? `<span style="color:#d1d5db;">·</span>` : "") +
+    (dateLabel ? `<span>📅 ${dateLabel}</span>` : "");
+  el.style.display = "flex";
+}
+
 function clearRouteMarkers() {
   activeRouteMarkers.forEach(m => map.removeLayer(m));
   activeRouteMarkers = []; markers = {};

@@ -163,6 +163,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
     document.getElementById("addMoreBtn").classList.remove("hidden");
     document.getElementById("changeStartBtn").classList.remove("hidden");
     document.getElementById("recalcTimesBtn").classList.remove("hidden");
+    document.getElementById("recalcFreeBtn").classList.remove("hidden");
     if (currentRouteId) {
       document.getElementById("saveRouteBtn").classList.add("hidden");
       document.getElementById("updateRouteBtn").classList.remove("hidden");
@@ -407,6 +408,7 @@ async function loadRouteById(loadId) {
     document.getElementById("addMoreBtn").classList.remove("hidden");
     document.getElementById("changeStartBtn").classList.remove("hidden");
     document.getElementById("recalcTimesBtn").classList.remove("hidden");
+    document.getElementById("recalcFreeBtn").classList.remove("hidden");
     document.getElementById("saveRouteBtn").classList.add("hidden");
     document.getElementById("updateRouteBtn").classList.remove("hidden");
     document.getElementById("saveRouteName").value    = data.name;
@@ -415,6 +417,7 @@ async function loadRouteById(loadId) {
     document.getElementById("routeNameField").value   = data.name;
     document.getElementById("assignedToField").value  = data.assigned_to || "";
     document.getElementById("routeDateField").value   = data.route_date;
+    if (typeof updateRouteMapOverlay === "function") updateRouteMapOverlay();
     document.getElementById("routeNotesField").value  = data.notes || "";
     document.getElementById("notesPublicField").checked = data.notes_public || false;
     const teamEl      = document.getElementById("saveTeamId");
@@ -473,17 +476,21 @@ document.getElementById("saveModal").addEventListener("click", function(e) {
   if (e.target === this) closeSaveModal();
 });
 
-/* ── RECALCULATE DRIVE TIMES (Google Maps, no re-optimize) ── */
-async function recalcDriveTimes() {
+/* ── RECALCULATE DRIVE TIMES (no re-optimize, keeps stop order) ──
+   useGoogle=true  → real Google Maps drive times (paid API)
+   useGoogle=false → in-app Haversine estimate (free)                 */
+async function recalcDriveTimes(useGoogle = true) {
   if (!isOptimized) return;
   const real = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
   if (!real.length) return;
 
-  const btn = document.getElementById("recalcTimesBtn");
+  const btn   = document.getElementById(useGoogle ? "recalcTimesBtn" : "recalcFreeBtn");
+  const label = btn.innerHTML;   // restore exact label (incl. the cost sub-span) afterward
   btn.disabled = true;
   btn.textContent = "Fetching…";
   document.getElementById("loadingOverlay").classList.add("active");
-  document.getElementById("loadingOverlay").querySelector(".lo-label").textContent = "Fetching real drive times…";
+  document.getElementById("loadingOverlay").querySelector(".lo-label").textContent =
+    useGoogle ? "Fetching real drive times…" : "Recalculating drive times…";
 
   try {
     const res = await fetch("/optimize", {
@@ -494,14 +501,14 @@ async function recalcDriveTimes() {
         start:             startLocation,
         end:               endLocation,
         startTime:         minutesToHHMM24(startMinutes),
-        use_google_matrix: true,
+        use_google_matrix: useGoogle,
         preserve_order:    true,
       })
     });
     const data = await guardResponse(res);
     document.getElementById("loadingOverlay").classList.remove("active");
     btn.disabled = false;
-    btn.textContent = "↻ Recalc drive times and leave stop order intact";
+    btn.innerHTML = label;
     if (data.error) { alert(data.error); return; }
 
     durationMatrix = data.duration_matrix || durationMatrix;
@@ -518,11 +525,11 @@ async function recalcDriveTimes() {
       document.getElementById("distance").textContent = (data.distance / 1609).toFixed(1) + " miles";
     }
     if (data.route_polyline) await redrawRouteOnMap(data.route_polyline);
-    showToast("✓ Drive times updated with Google Maps");
+    showToast(useGoogle ? "✓ Drive times updated with Google Maps" : "✓ Drive times recalculated in-app");
   } catch(err) {
     document.getElementById("loadingOverlay").classList.remove("active");
     btn.disabled = false;
-    btn.textContent = "↻ Recalc drive times and leave stop order intact";
+    btn.innerHTML = label;
     if (err === "session_expired") return;
     alert("Could not fetch drive times: " + (err.message || err));
   }

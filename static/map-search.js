@@ -741,6 +741,7 @@ async function runBwImport() {
       _bwPlaceMarkers();
       document.getElementById("routeDateField").value  = date;
       document.getElementById("assignedToField").value = assignees[0] || "";
+      if (typeof updateRouteMapOverlay === "function") updateRouteMapOverlay();
     }
   } catch (_) {
     _bwImportMsg("Network error — could not reach server.", "red");
@@ -942,31 +943,11 @@ function _selectDailyRouteTab(routeId, label) {
   const content = document.getElementById("bwTaskSidebarContent");
   content.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">Loading…</div>`;
 
-  // Load the route onto the map using the shared loader
+  // Load the route, then render stops + the Breezeway comparison via the single
+  // render path (_syncSidebarToSchedule), so later redraws can't wipe the panel.
+  _routeChangesCache = { routeId: null, html: null };   // force a fresh check for this route
   loadRouteById(routeId).then(() => {
-    // After load, show stop list in the panel
-    content.innerHTML = "";
-    const stops = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
-    if (!stops.length) {
-      content.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">No stops.</div>`;
-      return;
-    }
-    stops.forEach((s, i) => {
-      const row = document.createElement("div");
-      row.className = "flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0";
-      const num = document.createElement("span");
-      num.className = "text-xs text-gray-400 font-medium w-4 shrink-0 pt-px";
-      num.textContent = i + 1;
-      const name = document.createElement("span");
-      name.className = "text-xs text-gray-700 leading-snug";
-      name.textContent = s.name;
-      if (s.arrival) name.className += " font-medium text-green-700";
-      row.appendChild(num);
-      row.appendChild(name);
-      content.appendChild(row);
-    });
-    // Auto-run the discrepancy check against live Breezeway for this route
-    _renderRouteChanges(routeId, content);
+    _syncSidebarToSchedule();
   }).catch(() => {
     content.innerHTML = `<div class="text-xs text-red-400 text-center py-4">Failed to load.</div>`;
   });
@@ -974,7 +955,15 @@ function _selectDailyRouteTab(routeId, label) {
 
 /* ── ROUTE DISCREPANCY CHECK (saved route vs live Breezeway) ─────── */
 
-function _renderRouteChanges(routeId, mountEl) {
+let _routeChangesCache    = { routeId: null, html: null };
+let _routeChangesInflight = { routeId: null, promise: null };
+
+// Append the "Changes vs Breezeway" block for the currently-loaded saved route.
+// Cheap to re-run: re-renders from cache on later panel redraws, and shares a
+// single in-flight request per route so redraws don't re-hit the heavy endpoint.
+function _appendRouteChanges(content) {
+  if (!currentRouteId) return;
+  const rid = currentRouteId;
   const box = document.createElement("div");
   box.className = "mt-3 pt-3 border-t border-gray-200";
   box.innerHTML = `
@@ -983,22 +972,37 @@ function _renderRouteChanges(routeId, mountEl) {
       <button data-refresh class="text-xs text-indigo-500 hover:text-indigo-700 font-medium">↻ Recheck</button>
     </div>
     <div data-body class="text-xs text-gray-400">Checking Breezeway…</div>`;
-  mountEl.appendChild(box);
+  content.appendChild(box);
   const body = box.querySelector("[data-body]");
-  box.querySelector("[data-refresh]").addEventListener("click", () => _fetchRouteChanges(routeId, body));
-  _fetchRouteChanges(routeId, body);
+  box.querySelector("[data-refresh]").addEventListener("click", () => {
+    _routeChangesCache    = { routeId: null, html: null };
+    _routeChangesInflight = { routeId: null, promise: null };
+    _renderRouteChangesInto(rid, body);
+  });
+  _renderRouteChangesInto(rid, body);
 }
 
-async function _fetchRouteChanges(routeId, body) {
-  body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
-  try {
-    const res  = await fetch(`/api/route-discrepancies?route_id=${routeId}`);
-    const data = await res.json();
-    if (data.error) { body.innerHTML = `<span class="text-red-500">${data.error}</span>`; return; }
-    body.innerHTML = _renderChangesHtml(data);
-  } catch (e) {
-    body.innerHTML = `<span class="text-red-500">Could not check: ${e.message}</span>`;
+function _renderRouteChangesInto(routeId, body) {
+  if (_routeChangesCache.routeId === routeId && _routeChangesCache.html != null) {
+    body.innerHTML = _routeChangesCache.html;
+    return;
   }
+  body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
+  if (_routeChangesInflight.routeId !== routeId || !_routeChangesInflight.promise) {
+    _routeChangesInflight = {
+      routeId,
+      promise: fetch(`/api/route-discrepancies?route_id=${routeId}`).then(r => r.json()),
+    };
+  }
+  _routeChangesInflight.promise.then(data => {
+    const html = data.error
+      ? `<span class="text-red-500">${data.error}</span>`
+      : _renderChangesHtml(data);
+    if (!data.error) _routeChangesCache = { routeId, html };
+    body.innerHTML = html;
+  }).catch(e => {
+    body.innerHTML = `<span class="text-red-500">Could not check: ${e.message}</span>`;
+  });
 }
 
 function _fmtChangeWhen(w) {
@@ -1126,6 +1130,7 @@ function _syncSidebarToSchedule() {
       row.appendChild(num); row.appendChild(name);
       content.appendChild(row);
     });
+    _appendRouteChanges(content);
     return;
   }
 
@@ -1174,6 +1179,7 @@ function _syncSidebarToSchedule() {
     card.appendChild(num); card.appendChild(body);
     content.appendChild(card);
   });
+  _appendRouteChanges(content);
 }
 
 function _bwRenderTaskContent(matched) {
