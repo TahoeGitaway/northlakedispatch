@@ -237,8 +237,10 @@
       </button>
 
       {% if current_user.is_admin %}
+      <!-- Standalone sync button hidden: syncing now happens via Save & Sync (update).
+           Element kept (not deleted) so the untouched bwSyncTimes() it drives still works. -->
       <button id="bwSyncBtn" onclick="bwSyncTimes()"
-              class="w-full bg-violet-600 hover:bg-violet-700 text-white px-3 py-2.5
+              class="hidden w-full bg-violet-600 hover:bg-violet-700 text-white px-3 py-2.5
                      rounded-xl font-semibold transition-colors text-sm
                      flex items-center justify-center gap-2">
         ⬆ Sync Times to Breezeway

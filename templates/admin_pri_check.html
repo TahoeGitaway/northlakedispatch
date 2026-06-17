@@ -53,8 +53,13 @@
     <span id="subtitle" class="text-xs text-gray-400"></span>
   </div>
 
-  <!-- Loading -->
-  <div id="loading" class="flex items-center gap-3 py-12 text-gray-400 justify-center">
+  <!-- Initial prompt (before any scan) -->
+  <div id="scanPrompt" class="text-center text-gray-400 text-sm py-12">
+    Choose a date range and click <span class="font-semibold text-amber-600">Scan</span> to check for PRIs.
+  </div>
+
+  <!-- Loading (only while actually scanning) -->
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
     <div class="w-5 h-5 border-2 border-amber-300 border-t-amber-500 rounded-full animate-spin"></div>
     <span>Checking Breezeway reservations…</span>
   </div>
@@ -210,6 +215,7 @@ function greenCard(p) {
 }
 
 async function load() {
+  document.getElementById("scanPrompt")?.classList.add("hidden");
   document.getElementById("loading").classList.remove("hidden");
   document.getElementById("errorBox").classList.add("hidden");
   document.getElementById("results").classList.add("hidden");
@@ -320,13 +326,12 @@ async function runAlertRefresh() {
   }
 }
 
-// Default window: today → +30 days, then auto-load on page open
+// Prefill the date range only — do NOT scan until the user clicks Scan.
 (function initDates() {
   const today = new Date();
-  const end   = new Date(); end.setDate(end.getDate() + 30);
+  const end   = new Date(); end.setDate(end.getDate() + 7);
   document.getElementById("startDate").value = _isoDate(today);
   document.getElementById("endDate").value   = _isoDate(end);
 })();
-load();
 </script>
 {% endblock %}

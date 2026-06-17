@@ -1040,16 +1040,19 @@ function _renderChangesHtml(d) {
   }
   if (added.length) {
     h += `<div class="font-semibold text-red-700 mb-1">➕ Added to list (${added.length})</div>`;
-    for (const a of added) {
-      const who  = a.history && a.history.who  ? _escHtml(a.history.who) : null;
-      const when = a.history && a.history.when ? _fmtChangeWhen(a.history.when) : null;
-      h += `<div class="mb-2 leading-snug">`;
-      h += `<span class="text-gray-800 font-medium">${_escHtml(a.task_name)}</span>`;
-      h += ` <span class="text-gray-400">→</span> <span class="text-gray-700">${_escHtml(a.property)}</span>`;
-      if (who || when) {
-        h += `<div class="text-gray-400">${when ? "added " + _escHtml(when) : "added"}${who ? " by " + who : ""}</div>`;
-      } else {
-        h += `<div class="text-gray-300 italic">when/who not exposed by Breezeway API</div>`;
+    // Group by property so it reads like the stop list above: house header + bulleted tasks.
+    const byProp = {};
+    for (const a of added) (byProp[a.property] = byProp[a.property] || []).push(a);
+    for (const prop of Object.keys(byProp)) {
+      h += `<div class="mb-1.5 leading-snug">`;
+      h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}</div>`;
+      for (const a of byProp[prop]) {
+        const who  = a.history && a.history.who  ? _escHtml(a.history.who) : null;
+        const when = a.history && a.history.when ? _fmtChangeWhen(a.history.when) : null;
+        const note = (who || when)
+          ? ` <span class="text-gray-400">(${when ? "added " + _escHtml(when) : "added"}${who ? " by " + who : ""})</span>`
+          : ` <span class="text-gray-300 italic">(when/who not exposed)</span>`;
+        h += `<div class="text-[11px] text-gray-500 pl-3 leading-snug">• ${_escHtml(a.task_name)}${note}</div>`;
       }
       h += `</div>`;
     }
@@ -1144,6 +1147,12 @@ function _syncSidebarToSchedule() {
       name.className = "text-xs leading-snug " + (s.arrival ? "font-medium text-green-700" : "text-gray-700");
       name.textContent = s.name;
       row.appendChild(num); row.appendChild(name);
+      if (s.arrival) {
+        const badge = document.createElement("span");
+        badge.className = "shrink-0 text-[0.6rem] font-bold text-green-700 bg-green-100 rounded px-1.5 leading-tight mt-px";
+        badge.textContent = "CHECK-IN";
+        row.appendChild(badge);
+      }
       card.appendChild(row);
       // Auto-loaded task titles for this property that day, for this person
       const tasks = _tasksForStop(s.name);

@@ -551,22 +551,27 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
         prompt = _build_prompt(date_str, routes, checkins, checkouts, notes)
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
-            model      = "claude-haiku-4-5-20251001",
+            model      = "claude-sonnet-4-6",
             max_tokens = 240,
             system     = (
                 "You are a terse operations briefer for a vacation rental cleaning company "
-                "in Lake Tahoe. Write exactly 1 sentence using ONLY the data provided.\n\n"
-                "If FACTS TO INCLUDE or INSTRUCTIONS are present in the data, they take "
-                "priority — weave the facts in and follow the instructions exactly. "
-                "Otherwise, state the single most operationally important fact — a priority "
-                "check-in deadline, a lease or owner arrival, or anything that affects timing. "
-                "If nothing is notable, say so in one plain sentence.\n\n"
+                "in Lake Tahoe. Write ONE sentence using ONLY the data provided. Add a "
+                "SECOND sentence ONLY when dispatcher notes (FACTS TO INCLUDE or INSTRUCTIONS) "
+                "are present — that second sentence conveys the notes. If there are no notes, "
+                "write only the one sentence.\n\n"
+                "First sentence: state the single most operationally important fact — a "
+                "priority check-in deadline, a lease or owner arrival, or anything that "
+                "affects timing — AND how many arrivals (check-ins) are on each list.\n"
+                "Second sentence (only when notes are present): follow the INSTRUCTIONS "
+                "exactly and weave in the FACTS TO INCLUDE.\n\n"
                 "Rules:\n"
-                "- One sentence only. No lists, no paragraphs.\n"
+                "- One sentence, or two only when dispatcher notes are present. No bullet lists, no paragraphs.\n"
+                "- Do mention how many arrivals are on each list.\n"
                 "- NEVER mention departures or checkouts — not relevant to operations.\n"
                 "- NEVER characterize the workload. Do not use: heavy, busy, light, big, "
                 "significant, demanding, packed, full, or any similar word.\n"
-                "- Do not name properties, technicians, or routes — those are listed below.\n"
+                "- Do not name individual properties — those are listed below. You MAY name "
+                "each list (by its assignee) to give that list's arrival count.\n"
                 "- Use the actual day name (e.g. 'Thursday') — never 'today'.\n"
                 "- No greeting. Start with the fact."
             ),
