@@ -517,6 +517,29 @@ async function loadDaySummary(ds, force = false) {
 }
 
 /* ── ADMIN: remove all assigned times for a person on the selected day ── */
+function _renderClearTimesResults(data) {
+  const el = document.getElementById("clearTimesResult");
+  if (!el) return;
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+    c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+  const rows = (data.results || []).map(r => {
+    const color = r.ok ? "#15803d" : "#b91c1c";
+    const asgn  = (r.assignees && r.assignees.length) ? r.assignees.join(", ") : "—";
+    return `<div style="border-top:1px solid #f1f5f9;padding:5px 0;">
+      <div style="color:${color};font-weight:600;">${r.ok ? "✓" : "✗"} ${esc(r.task)} — ${r.ok ? "removed" : "FAILED"}</div>
+      <div style="color:#6b7280;">${esc(r.property)} · ${esc(r.date || "—")} · ${esc(asgn)}</div>
+      <div style="color:#9ca3af;font-family:monospace;font-size:0.66rem;">task ${esc(r.task_id)} · ${esc(r.detail || "")}</div>
+    </div>`;
+  }).join("");
+  el.style.cssText = "border-radius:8px;padding:8px 12px;font-size:0.74rem;background:#f9fafb;"
+    + "color:#374151;max-height:340px;overflow-y:auto;";
+  el.innerHTML =
+    `<div style="font-weight:700;margin-bottom:4px;color:${data.failed ? "#b45309" : "#15803d"};">`
+    + `${data.cleared} of ${data.total} removed${data.failed ? ` · ${data.failed} failed` : ""} `
+    + `— ${esc(data.assignee)}, ${esc(data.date)}</div>${rows}`;
+  el.classList.remove("hidden");
+}
+
 function _clearTimesMsg(text, color) {
   const el = document.getElementById("clearTimesResult");
   if (!el) return;
@@ -547,9 +570,7 @@ async function removeAllTimes() {
     const data = await r.json();
     if (data.error) { _clearTimesMsg(data.error, "red"); return; }
     if (!data.total) { _clearTimesMsg(`No tasks found for ${person} on that day.`, "gray"); return; }
-    let msg = `${data.cleared} time${data.cleared !== 1 ? "s" : ""} removed`;
-    if (data.failed) msg += ` · ${data.failed} failed`;
-    _clearTimesMsg(msg, data.failed ? "amber" : "green");
+    _renderClearTimesResults(data);
   } catch (e) {
     _clearTimesMsg("Could not reach the server.", "red");
   }

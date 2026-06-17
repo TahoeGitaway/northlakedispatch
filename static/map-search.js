@@ -1068,7 +1068,79 @@ function _renderChangesHtml(d) {
          + `<span class="text-gray-400">${_escHtml(m.was)} → </span>${_escHtml(m.now)}</div>`;
     }
   }
+
+  // Apply-to-route button: add the added properties / drop the removed ones,
+  // then leave the route in the editable state for manual reorder + optimize.
+  if (added.length || removed.length) {
+    const nAdd = new Set(added.map(a => a.property)).size;
+    h += `<button onclick="reapproachWithChanges()"
+            class="w-full mt-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs
+                   font-semibold py-2 rounded-lg transition-colors">`
+       + `↘ Apply to route — add ${nAdd}, remove ${removed.length}</button>`;
+  }
   return h;
+}
+
+// Apply the right-panel changes to the LEFT sidebar route: add the added
+// properties, drop the removed ones, then drop back into the editable state so
+// the user can reorder, set times, and optimize manually. Keeps the route's
+// identity (name/assignee/date/id) so a re-save updates the same route.
+function reapproachWithChanges() {
+  const data = _routeChangesCache.data;
+  if (!data) { alert("Open the route first so the Breezeway changes have loaded."); return; }
+  const added   = data.added   || [];
+  const removed = data.removed || [];
+  if (!added.length && !removed.length) { alert("No added or removed properties to apply."); return; }
+
+  // Keep current stops except the removed ones (preserve their existing settings)
+  const removedSet = new Set(removed.map(r => (r.property || "").toLowerCase()));
+  const origReal   = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
+  const kept = origReal
+    .filter(s => !removedSet.has((s.name || "").toLowerCase()))
+    .map(s => ({ _id: s._id || makeStopId(), name: s.name, lat: s.lat, lng: s.lng,
+                 arrival: s.arrival, priority_checkin: s.priority_checkin || false,
+                 serviceMinutes: s.serviceMinutes || 60 }));
+  const removedCount = origReal.length - kept.length;
+
+  // Add the added properties — look up coordinates in the property DB
+  const have       = new Set(kept.map(s => (s.name || "").toLowerCase()));
+  const addedProps = [...new Set(added.map(a => a.property).filter(Boolean))];
+  const notFound   = [];
+  let addedCount   = 0;
+  for (const name of addedProps) {
+    const key = name.toLowerCase();
+    if (have.has(key)) continue;                       // already on the list
+    const p = (typeof properties !== "undefined")
+      ? properties.find(pr => (pr.name || "").toLowerCase() === key) : null;
+    if (!p) { notFound.push(name); continue; }
+    kept.push({ _id: makeStopId(), name: p.name, lat: p.lat, lng: p.lng,
+                arrival: false, priority_checkin: false, serviceMinutes: 60 });
+    have.add(key);
+    addedCount++;
+  }
+
+  // Drop back into the editable (pre-optimize) state — keep route identity
+  selectedStops = kept;
+  optimizedSchedule = []; isOptimized = false; durationMatrix = [];
+  clearRouteMarkers();
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  document.getElementById("preOptSection").classList.remove("hidden");
+  document.getElementById("preOptSearch").classList.remove("hidden");
+  document.getElementById("scheduleSection").classList.add("hidden");
+  document.getElementById("workInSection").classList.add("hidden");
+  document.getElementById("addMoreBtn").classList.add("hidden");
+  document.getElementById("saveRouteBtn").classList.add("hidden");
+  document.getElementById("updateRouteBtn").classList.add("hidden");
+  document.getElementById("recalcTimesBtn").classList.add("hidden");
+  document.getElementById("recalcFreeBtn")?.classList.add("hidden");
+  document.getElementById("warningBox").classList.add("hidden");
+  renderStops();
+  if (typeof redrawRouteOnMap === "function") redrawRouteOnMap();
+
+  let msg = `Applied: +${addedCount} added, −${removedCount} removed. `
+          + `Now reorder, set times, and optimize.`;
+  if (notFound.length) msg += `\n\nCouldn't add (not in your property DB): ${notFound.join(", ")}`;
+  alert(msg);
 }
 
 /* ── BREEZEWAY TASK OVERLAY (after import) ─────────────────────── */

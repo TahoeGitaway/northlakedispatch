@@ -790,9 +790,9 @@ def day_summary():
         except Exception:
             pass
 
-    # 2) In-memory cache
+    # 2) In-memory cache (10-min TTL — never serve a stale snapshot indefinitely)
     cached = _day_summary_cache.get(date_str)
-    if cached and not force:
+    if cached and not force and (time.time() - cached[0]) < 600:
         ts, payload = cached
         return jsonify({**payload, "cached_at": _fmt_pacific(ts), "source": "live"})
 
@@ -829,7 +829,11 @@ def day_summary():
 
     payload = {"date": date_str, "arrivals": arrivals, "departures": departures}
     ts      = time.time()
-    _day_summary_cache[date_str] = (ts, payload)
+    # Only cache NON-empty results. An empty fetch is usually a transient Breezeway
+    # hiccup; caching it (previously with no TTL) is what made arrivals/departures
+    # stick on "None" on every auto-load until a manual Refresh.
+    if any(arrivals.values()) or any(departures.values()):
+        _day_summary_cache[date_str] = (ts, payload)
 
     return jsonify({**payload, "cached_at": _fmt_pacific(ts), "source": "live"})
 

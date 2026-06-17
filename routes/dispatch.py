@@ -1479,18 +1479,28 @@ def clear_task_times():
         if _bw_assignee_match(t, asgn_lower):
             mine.append(t)
 
-    results, cleared, failed = [], 0, 0
-    for t in mine:
+    # Clear the times in PARALLEL — the person can have many tasks, and a
+    # sequential loop (15s timeout each) was the slowest, avoidable part.
+    def _clear_one(t):
         ok, detail = _clear_task_time(token, t.get("id"))
-        cleared += 1 if ok else 0
-        failed  += 0 if ok else 1
         pid = t.get("home_id") or t.get("property_id")
-        results.append({
-            "task":     _bw_task_title(t),
-            "property": _get_property_name(pid) if pid else "",
-            "ok":       ok,
-            "detail":   detail,
-        })
+        asgn = []
+        for a in (t.get("assignments") or []):
+            n = (a.get("full_name") or a.get("name") or
+                 f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
+            if n:
+                asgn.append(n)
+        return {"task":      _bw_task_title(t),
+                "property":  _get_property_name(pid) if pid else "",
+                "date":      (t.get("scheduled_date") or "")[:16],
+                "assignees": asgn,
+                "task_id":   t.get("id"),
+                "ok":        ok,
+                "detail":    detail}
+
+    results = list(ThreadPoolExecutor(max_workers=10).map(_clear_one, mine)) if mine else []
+    cleared = sum(1 for r in results if r["ok"])
+    failed  = sum(1 for r in results if not r["ok"])
 
     return jsonify({"date": date_str, "assignee": assignee,
                     "total": len(mine), "cleared": cleared, "failed": failed,
