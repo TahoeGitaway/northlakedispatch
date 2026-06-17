@@ -611,24 +611,18 @@ function renderSchedule() {
     else if (stop.arrival)
       badge = `<span class="checkin-badge">CHECK-IN</span>`;
 
-    let actionBtns = "";
-    if (stop.arrival && stop.priority_checkin) {
-      actionBtns = `
-        <button onclick="toggleSchedulePriority('${stop._id}')"
-                class="text-xs text-violet-700 hover:text-gray-500 font-medium">★ Priority</button>
-        <button onclick="toggleScheduleCheckin('${stop._id}')"
-                class="text-xs text-green-700 hover:text-red-500 font-medium">✓ Check-in</button>`;
-    } else if (stop.arrival) {
-      actionBtns = `
-        <button onclick="toggleSchedulePriority('${stop._id}')"
-                class="text-xs text-gray-400 hover:text-violet-600 font-medium">+ Priority</button>
-        <button onclick="toggleScheduleCheckin('${stop._id}')"
-                class="text-xs text-green-700 hover:text-red-500 font-medium">✓ Check-in</button>`;
-    } else {
-      actionBtns = `
-        <button onclick="toggleScheduleCheckin('${stop._id}')"
-                class="text-xs text-gray-400 hover:text-green-600 font-medium">+ Check-in</button>`;
-    }
+    // Always render BOTH toggles (active or muted) so every card has the same
+    // controls in the same place — no content-driven wrapping between cards.
+    const priorityBtn = stop.priority_checkin
+      ? `<button onclick="toggleSchedulePriority('${stop._id}')"
+                 class="text-xs font-medium text-violet-700 hover:text-gray-400">★ Priority</button>`
+      : `<button onclick="toggleSchedulePriority('${stop._id}')"
+                 class="text-xs font-medium text-gray-400 hover:text-violet-600">+ Priority</button>`;
+    const checkinBtn = stop.arrival
+      ? `<button onclick="toggleScheduleCheckin('${stop._id}')"
+                 class="text-xs font-medium text-green-700 hover:text-red-500">✓ Check-in</button>`
+      : `<button onclick="toggleScheduleCheckin('${stop._id}')"
+                 class="text-xs font-medium text-gray-400 hover:text-green-600">+ Check-in</button>`;
 
     li.className = "p-2 border rounded bg-white hover:bg-indigo-50 transition-colors";
     li.draggable = true;
@@ -646,13 +640,18 @@ function renderSchedule() {
                   class="move-btn !bg-red-50 !text-red-500 !border-red-200 hover:!bg-red-100">✕</button>
         </div>
       </div>
-      <div class="text-xs text-gray-500 mt-0.5 flex items-center gap-3 flex-wrap">
-        <span>Arrive: ${stop.eta} &nbsp;|&nbsp; <span class="text-sm font-bold text-gray-800">Depart: ${dep}</span></span>
-        <select class="service-time-select"
+      <!-- Row 1: timing left, service time right — fixed positions, no wrap -->
+      <div class="text-xs text-gray-500 mt-1 flex items-center justify-between gap-2">
+        <span class="whitespace-nowrap">Arrive: ${stop.eta} &nbsp;|&nbsp; <span class="text-sm font-bold text-gray-800">Depart: ${dep}</span></span>
+        <select class="service-time-select shrink-0"
                 onchange="setServiceMinutes('${stop._id}', parseInt(this.value))">
           ${generateTimeOptions(stop.serviceMinutes)}
         </select>
-        ${actionBtns}
+      </div>
+      <!-- Row 2: consistent toggle strip — both controls always present -->
+      <div class="mt-1.5 pt-1.5 border-t border-gray-100 flex items-center gap-4">
+        ${priorityBtn}
+        ${checkinBtn}
       </div>`;
 
     li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });

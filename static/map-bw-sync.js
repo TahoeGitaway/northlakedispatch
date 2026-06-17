@@ -4,21 +4,41 @@
  * Requires a saved route (currentRouteId) so unsaved-only routes can't sync.
  */
 
-// Build the stops payload from the current on-screen schedule.
-function _bwSyncStops() {
-  return optimizedSchedule
-    .filter(s => !s.isLunch && !s.isGap && s.lat)
-    .map(s => ({ name: s.name, eta_minutes: s.eta_minutes + (s.serviceMinutes || 0) }));
-}
+function bwSyncTimes() {
+  if (!currentRouteId) {
+    alert("Save the route first before syncing to Breezeway.");
+    return;
+  }
 
-// Core sync: POST to Breezeway and render the confirmation report into resultEl.
-// Returns a promise so callers can chain (e.g. Save & Sync). No confirm() here —
-// callers own any confirmation prompt.
-function _bwSyncCore({ date, assignee, stops, resultEl }) {
-  resultEl.classList.remove("hidden");
-  resultEl.innerHTML = '<span class="text-gray-500">Contacting Breezeway…</span>';
+  const real = optimizedSchedule.filter(s => !s.isLunch && !s.isGap && s.lat);
+  if (!real.length) {
+    alert("No stops on screen to sync.");
+    return;
+  }
 
-  return fetch("/api/bw-sync-times", {
+  const assignee = (document.getElementById("assignedToField").value || "").trim();
+  const date     = (document.getElementById("routeDateField").value || "").trim();
+
+  if (!date) {
+    alert("Set a route date before syncing.");
+    return;
+  }
+
+  const warning = `This will update start times on Breezeway tasks for ${assignee || "this route"} on ${date}.`
+                + `\n\nOnly existing tasks assigned to "${assignee || "this employee"}" will be changed. Nothing will be created or deleted.`
+                + `\n\nContinue?`;
+  if (!confirm(warning)) return;
+
+  const stops     = real.map(s => ({ name: s.name, eta_minutes: s.eta_minutes + (s.serviceMinutes || 0) }));
+  const btn       = document.getElementById("bwSyncBtn");
+  const resultDiv = document.getElementById("bwSyncResult");
+
+  btn.disabled    = true;
+  btn.textContent = "Syncing…";
+  resultDiv.classList.remove("hidden");
+  resultDiv.innerHTML = '<span class="text-gray-500">Contacting Breezeway…</span>';
+
+  fetch("/api/bw-sync-times", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ date, assignee, stops }),
@@ -26,7 +46,7 @@ function _bwSyncCore({ date, assignee, stops, resultEl }) {
     .then(r => r.json())
     .then(data => {
       if (data.error) {
-        resultEl.innerHTML = `<span class="text-red-600">Error: ${data.error}</span>`;
+        resultDiv.innerHTML = `<span class="text-red-600">Error: ${data.error}</span>`;
         return;
       }
       const s  = data.summary || {};
@@ -56,46 +76,13 @@ function _bwSyncCore({ date, assignee, stops, resultEl }) {
         }
         html += `</div>`;
       }
-      resultEl.innerHTML = html;
+      resultDiv.innerHTML = html;
     })
     .catch(e => {
-      resultEl.innerHTML = `<span class="text-red-600">Error: ${e.message}</span>`;
-    });
-}
-
-// Sidebar "Sync Times to Breezeway" button — confirm, then run the core sync.
-function bwSyncTimes() {
-  if (!currentRouteId) {
-    alert("Save the route first before syncing to Breezeway.");
-    return;
-  }
-
-  const stops = _bwSyncStops();
-  if (!stops.length) {
-    alert("No stops on screen to sync.");
-    return;
-  }
-
-  const assignee = (document.getElementById("assignedToField").value || "").trim();
-  const date     = (document.getElementById("routeDateField").value || "").trim();
-
-  if (!date) {
-    alert("Set a route date before syncing.");
-    return;
-  }
-
-  const warning = `This will update start times on Breezeway tasks for ${assignee || "this route"} on ${date}.`
-                + `\n\nOnly existing tasks assigned to "${assignee || "this employee"}" will be changed. Nothing will be created or deleted.`
-                + `\n\nContinue?`;
-  if (!confirm(warning)) return;
-
-  const btn = document.getElementById("bwSyncBtn");
-  btn.disabled    = true;
-  btn.textContent = "Syncing…";
-
-  _bwSyncCore({ date, assignee, stops, resultEl: document.getElementById("bwSyncResult") })
+      resultDiv.innerHTML = `<span class="text-red-600">Error: ${e.message}</span>`;
+    })
     .finally(() => {
       btn.disabled    = false;
-      btn.textContent = "⬆ Sync Times to Breezeway";
+      btn.textContent = "Sync Times to Breezeway";
     });
 }

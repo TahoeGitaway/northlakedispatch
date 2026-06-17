@@ -849,7 +849,6 @@ def knowledge_upload():
 
 @admin_bp.route("/admin/pri-check")
 @login_required
-@admin_required
 def pri_check_page():
     return render_template("admin_pri_check.html")
 
@@ -947,7 +946,6 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
 
 @admin_bp.route("/admin/pri-dismissals", methods=["GET"])
 @login_required
-@admin_required
 def pri_dismissals_get():
     conn = get_db(); cur = get_cursor(conn)
     cur.execute("SELECT item_key FROM pri_dismissals")
@@ -958,7 +956,6 @@ def pri_dismissals_get():
 
 @admin_bp.route("/admin/pri-dismissal", methods=["POST"])
 @login_required
-@admin_required
 def pri_dismissal_add():
     key = (request.get_json(force=True) or {}).get("key", "").strip()
     if not key:
@@ -976,7 +973,6 @@ def pri_dismissal_add():
 
 @admin_bp.route("/admin/pri-dismissals/clear", methods=["POST"])
 @login_required
-@admin_required
 def pri_dismissals_clear():
     # type: "owner_next" clears only ::on keys; "vacancy" clears non-::on; omit to clear all
     kind = (request.get_json(force=True) or {}).get("type", "all")
@@ -995,7 +991,6 @@ def pri_dismissals_clear():
 
 @admin_bp.route("/admin/pri-alert-refresh", methods=["POST"])
 @login_required
-@admin_required
 def pri_alert_refresh():
     from routes.pri_check import refresh_pri_banner_alerts
     try:

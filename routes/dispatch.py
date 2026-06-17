@@ -1356,11 +1356,19 @@ def route_discrepancies():
                 moved.append({"property": prop_name, "task_name": _bw_task_title(t),
                               "was": f"{ph % 24:02d}:{pm:02d}", "now": tod})
 
+    # Full current task list for this person that day, grouped by house.
+    current_tasks = sorted(
+        ({"property": p, "tasks": [_bw_task_title(t) for t in tlist]}
+         for p, tlist in tasks_by_prop.items()),
+        key=lambda x: x["property"].lower(),
+    )
+
     return jsonify({
         "route_id": route_id, "assignee": assignee, "date": date_str,
         "added":   sorted(added,   key=lambda x: x["property"].lower()),
         "removed": sorted(removed, key=lambda x: x["property"].lower()),
         "moved":   sorted(moved,   key=lambda x: x["property"].lower()),
+        "current_tasks": current_tasks,
         "history_available": any(a["history"].get("available") for a in added),
         "summary": {"added": len(added), "removed": len(removed), "moved": len(moved)},
     })

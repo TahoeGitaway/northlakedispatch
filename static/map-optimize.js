@@ -282,18 +282,12 @@ async function submitSaveRoute(mode = "return") {
     if (data.id) currentRouteId = data.id;
 
     if (mode === "sync") {
-      successEl.textContent = `Route ${savedVerb}. Syncing times to Breezeway…`;
-      successEl.classList.remove("hidden");
-      await _bwSyncCore({
-        date:     routeDate,
-        assignee: assignedTo,
-        stops:    _bwSyncStops(),
-        resultEl: document.getElementById("saveSyncResult"),
-      });
-      successEl.textContent = `Route ${savedVerb}. Sync complete — review the report below.`;
-      // Swap the save buttons for a single "Return to Routes" so the user can read the report first
-      document.getElementById("saveActions").classList.add("hidden");
-      document.getElementById("postSyncActions").classList.remove("hidden");
+      // Save is done — hand straight off to the ORIGINAL, untouched sidebar
+      // sync. We don't reimplement or wrap it; we just trigger it. Results
+      // render in the sidebar exactly as the standalone Sync button.
+      closeSaveModal();
+      bwSyncTimes();
+      return;
     } else {
       successEl.textContent = `Route ${savedVerb}! Redirecting…`;
       successEl.classList.remove("hidden");

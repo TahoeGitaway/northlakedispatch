@@ -78,7 +78,7 @@ function renderSuggestions() {
   anyAddr.className = "sugg-item sugg-any-address";
   const anyText = searchBox.value.trim();
   anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">
-    📍 Add "${anyText}" as address…</span>`;
+    📍 Add "${anyText}" as address…</span><span style="font-size:0.6rem;color:#9ca3af;white-space:nowrap;margin-left:6px;">💲 Google lookup</span>`;
   anyAddr.addEventListener("click", () => geocodeAndAddStop(anyText, false, false));
   suggestions.appendChild(anyAddr);
 
@@ -166,7 +166,7 @@ function renderWorkInSuggestions() {
   anyAddr.className = "sugg-item sugg-any-address";
   const anyText = workInBox.value.trim();
   anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">
-    📍 Add "${anyText}" as address…</span>`;
+    📍 Add "${anyText}" as address…</span><span style="font-size:0.6rem;color:#9ca3af;white-space:nowrap;margin-left:6px;">💲 Google lookup</span>`;
   anyAddr.addEventListener("click", () => geocodeAndWorkIn(anyText, false, false));
   workInSuggestions.appendChild(anyAddr);
 
@@ -306,7 +306,7 @@ function renderAddMoreSugg(rawText = "") {
   if (rawText) {
     const anyAddr = document.createElement("div");
     anyAddr.className = "sugg-item sugg-any-address";
-    anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">📍 Add "${rawText}" as address…</span>`;
+    anyAddr.innerHTML = `<span class="sugg-item-name" style="color:#6366f1;">📍 Add "${rawText}" as address…</span><span style="font-size:0.6rem;color:#9ca3af;white-space:nowrap;margin-left:6px;">💲 Google lookup</span>`;
     anyAddr.addEventListener("click", () => geocodeAndStageStop(rawText, false, false));
     addMoreSuggestions.appendChild(anyAddr);
   }
@@ -998,11 +998,23 @@ function _renderRouteChangesInto(routeId, body) {
     const html = data.error
       ? `<span class="text-red-500">${data.error}</span>`
       : _renderChangesHtml(data);
-    if (!data.error) _routeChangesCache = { routeId, html };
     body.innerHTML = html;
+    if (!data.error) {
+      _routeChangesCache = { routeId, html, data };
+      _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
+    }
   }).catch(e => {
     body.innerHTML = `<span class="text-red-500">Could not check: ${e.message}</span>`;
   });
+}
+
+// Task titles for a given stop name, from the last discrepancy fetch.
+function _tasksForStop(name) {
+  const data = _routeChangesCache.data;
+  if (!data || !data.current_tasks) return null;
+  const key = (name || "").toLowerCase();
+  const hit = data.current_tasks.find(c => (c.property || "").toLowerCase() === key);
+  return hit ? hit.tasks : null;
 }
 
 function _fmtChangeWhen(w) {
@@ -1020,10 +1032,12 @@ function _escHtml(s) {
 
 function _renderChangesHtml(d) {
   const added = d.added || [], removed = d.removed || [], moved = d.moved || [];
-  if (!added.length && !removed.length && !moved.length) {
-    return `<div class="text-green-600">✓ No changes — the list matches the saved route.</div>`;
-  }
   let h = "";
+
+  // ── What changed since the route was saved ──
+  if (!added.length && !removed.length && !moved.length) {
+    h += `<div class="text-green-600 mb-1">✓ No changes — the list matches the saved route.</div>`;
+  }
   if (added.length) {
     h += `<div class="font-semibold text-red-700 mb-1">➕ Added to list (${added.length})</div>`;
     for (const a of added) {
@@ -1119,8 +1133,10 @@ function _syncSidebarToSchedule() {
   if (!hasBwTasks) {
     content.innerHTML = "";
     stops.forEach((s, i) => {
+      const card = document.createElement("div");
+      card.className = "py-1.5 border-b border-gray-100 last:border-0";
       const row = document.createElement("div");
-      row.className = "flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0";
+      row.className = "flex items-start gap-2";
       const num = document.createElement("span");
       num.className = "text-xs text-gray-400 font-medium w-4 shrink-0 pt-px";
       num.textContent = i + 1;
@@ -1128,7 +1144,16 @@ function _syncSidebarToSchedule() {
       name.className = "text-xs leading-snug " + (s.arrival ? "font-medium text-green-700" : "text-gray-700");
       name.textContent = s.name;
       row.appendChild(num); row.appendChild(name);
-      content.appendChild(row);
+      card.appendChild(row);
+      // Auto-loaded task titles for this property that day, for this person
+      const tasks = _tasksForStop(s.name);
+      if (tasks && tasks.length) {
+        const tl = document.createElement("div");
+        tl.className = "pl-6 mt-0.5 space-y-0.5";
+        tl.innerHTML = tasks.map(t => `<div class="text-[11px] text-gray-400 leading-snug">• ${_escHtml(t)}</div>`).join("");
+        card.appendChild(tl);
+      }
+      content.appendChild(card);
     });
     _appendRouteChanges(content);
     return;
