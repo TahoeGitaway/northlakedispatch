@@ -719,7 +719,7 @@ async function runBwImport() {
       let added = 0;
       for (const p of (data.matched || [])) {
         if (!selectedStops.find(s => s.name === p.name)) {
-          addStop(p, !!p.arrival, false);
+          addStop(p, !!p.arrival, !!p.priority_checkin);
           added++;
         }
       }
@@ -771,6 +771,11 @@ function _fmtTaskDate(ds) {
   return isNaN(d.getTime()) ? ds : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// "PCI" as a standalone token in a task title = priority check-in (arrive by noon).
+function _titleHasPci(title) {
+  return (" " + String(title || "").toLowerCase().replace(/[-:/]/g, " ") + " ").includes(" pci ");
+}
+
 // Low-confidence name matches — let the user keep or reject each before it
 // becomes a stop. Prevents a Breezeway house that isn't in the system yet from
 // silently matching the closest wrong home.
@@ -806,7 +811,7 @@ function _bwRenderUncertain(date, list) {
     keep.className = "flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded px-2 py-1 font-medium";
     keep.textContent = "Keep";
     keep.addEventListener("click", () => {
-      if (!selectedStops.find(s => s.name === p.name)) addStop(p, !!p.arrival, false);
+      if (!selectedStops.find(s => s.name === p.name)) addStop(p, !!p.arrival, !!p.priority_checkin);
       _bwTasksByPropName[p.name] = p.tasks || [];
       _syncSidebarToSchedule();
       _bwPlaceMarkers();
@@ -1102,6 +1107,15 @@ function reapproachWithChanges() {
                  serviceMinutes: s.serviceMinutes || 60 }));
   const removedCount = origReal.length - kept.length;
 
+  // Arrival / PCI status per added property (OR-combined across its tasks)
+  const meta = {};
+  for (const a of added) {
+    const k = (a.property || "").toLowerCase();
+    if (!meta[k]) meta[k] = { arrival: false, pci: false };
+    if (a.arrival) meta[k].arrival = true;
+    if (a.pci)     meta[k].pci     = true;
+  }
+
   // Add the added properties — look up coordinates in the property DB
   const have       = new Set(kept.map(s => (s.name || "").toLowerCase()));
   const addedProps = [...new Set(added.map(a => a.property).filter(Boolean))];
@@ -1113,8 +1127,9 @@ function reapproachWithChanges() {
     const p = (typeof properties !== "undefined")
       ? properties.find(pr => (pr.name || "").toLowerCase() === key) : null;
     if (!p) { notFound.push(name); continue; }
+    const m = meta[key] || {};
     kept.push({ _id: makeStopId(), name: p.name, lat: p.lat, lng: p.lng,
-                arrival: false, priority_checkin: false, serviceMinutes: 60 });
+                arrival: !!(m.arrival || m.pci), priority_checkin: !!m.pci, serviceMinutes: 60 });
     have.add(key);
     addedCount++;
   }
@@ -1264,7 +1279,7 @@ function _syncSidebarToSchedule() {
       const taskRow = document.createElement("div");
       taskRow.className = "flex items-baseline gap-1 mt-0.5";
       const tname = document.createElement("span");
-      tname.className = "text-xs text-gray-600";
+      tname.className = _titleHasPci(t.task_name) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
       tname.textContent = t.task_name;
       taskRow.appendChild(tname);
       if (t.assignees && t.assignees.length) {
@@ -1310,7 +1325,7 @@ function _bwRenderTaskContent(matched) {
       const row   = document.createElement("div");
       row.className = "mb-1";
       const tname = document.createElement("div");
-      tname.className = "text-xs font-medium text-gray-700";
+      tname.className = _titleHasPci(t.task_name) ? "text-xs font-bold text-violet-700" : "text-xs font-medium text-gray-700";
       tname.textContent = t.task_name;
       row.appendChild(tname);
       if (t.assignees && t.assignees.length) {

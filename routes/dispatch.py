@@ -65,6 +65,14 @@ def _match_local_property(bw_name: str, db_props: dict):
     return _match_local_property_scored(bw_name, db_props)[0]
 
 
+def _title_has_pci(title: str) -> bool:
+    """True if 'PCI' appears as a standalone token in a task title. A PCI Walk Thru
+    is a priority check-in (must arrive by noon) — it lives only in the title and is
+    easy to overlook, so we surface it automatically."""
+    t = " " + (title or "").lower().replace("-", " ").replace(":", " ").replace("/", " ") + " "
+    return " pci " in t
+
+
 def _haversine_matrix(locations):
     """Fallback NxN drive-time matrix (seconds) when Google Maps API is unavailable."""
     n   = len(locations)
@@ -1113,12 +1121,16 @@ def bw_import():
             if not row:
                 unmatched.append(bw_name)
                 continue
+            tasks_here = bw_name_tasks.get(bw_name, [])
+            # "PCI" in a (Walk Thru) task title → priority check-in, arrive by noon.
+            is_pci = any(_title_has_pci(t.get("task_name", "")) for t in tasks_here)
             entry = {
-                "name":    row["Property Name"],
-                "lat":     float(row["Latitude"]),
-                "lng":     float(row["Longitude"]),
-                "tasks":   bw_name_tasks.get(bw_name, []),
-                "arrival": row["Property Name"] in checkin_db_names,
+                "name":             row["Property Name"],
+                "lat":              float(row["Latitude"]),
+                "lng":              float(row["Longitude"]),
+                "tasks":            tasks_here,
+                "arrival":          (row["Property Name"] in checkin_db_names) or is_pci,
+                "priority_checkin": is_pci,
             }
             if tier == "exact" or score >= _MATCH_CONFIDENT:
                 matched.append(entry)
@@ -1328,12 +1340,30 @@ def route_discrepancies():
     route_set = {p.lower() for p in route_props}
     present   = {p.lower() for p in tasks_by_prop}
 
+    # Which of these properties have a guest check-in that day, so an added stop can
+    # be auto-flagged as an arrival (matching the Breezeway import behaviour).
+    from routes.briefing import _fetch_breezeway_checkins, _classify_reservation
+    arrival_names = set()
+    try:
+        for r in _fetch_breezeway_checkins(date_str):
+            if _classify_reservation(r) == "block":
+                continue
+            local = _match_local_property(_get_property_name(r.get("property_id")), db_props)
+            if local:
+                arrival_names.add(local["Property Name"])
+    except Exception:
+        pass
+
     added = []
     for prop_name, tlist in tasks_by_prop.items():
         if prop_name.lower() not in route_set:
+            is_arrival = prop_name in arrival_names
+            is_pci     = any(_title_has_pci(_bw_task_title(t)) for t in tlist)
             for t in tlist:
                 added.append({"property": prop_name, "task_name": _bw_task_title(t),
-                              "task_id": t.get("id"), "history": _task_history_summary(token, t)})
+                              "task_id": t.get("id"),
+                              "arrival": is_arrival, "pci": is_pci,
+                              "history": _task_history_summary(token, t)})
 
     removed = [{"property": p} for p in route_props if p.lower() not in present]
 
