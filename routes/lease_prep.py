@@ -38,17 +38,51 @@ def _get_property_name(pid):
             str(pid))
 
 
+def _fetch_property_tags(token: str, pid: str) -> list:
+    """Fetch tags for one property — tries the /tags endpoint, then the detail."""
+    for path in (f"/public/inventory/v1/property/{pid}/tags",
+                 f"/public/inventory/v1/property/{pid}"):
+        try:
+            r = requests.get(f"{BW_BASE}{path}",
+                             headers={"Authorization": f"JWT {token}"}, timeout=15)
+            if r.status_code == 200:
+                body = r.json()
+                if isinstance(body, list):
+                    return body
+                tags = body.get("tags") or body.get("property_tags") or []
+                if tags:
+                    return tags
+        except Exception:
+            pass
+    return []
+
+
+def _property_has_hot_tub(token: str, pid: str) -> bool:
+    """True if the property carries a 'Hot Tub' tag in Breezeway."""
+    for tag in _fetch_property_tags(token, pid):
+        name = (tag.get("name") or tag.get("label") or "") if isinstance(tag, dict) else tag
+        if "hot tub" in str(name).lower():
+            return True
+    return False
+
+
 def _is_lease(r: dict) -> bool:
     """Lease = guest stay of 30+ nights. Excludes owner stays and blocks."""
     # Exclude owner stays and blocks first
     ts = r.get("type_stay") or {}
     tr = r.get("type_reservation") or {}
-    ts_val = str(ts.get("code") or ts.get("name") or ts if not isinstance(ts, dict) else "").lower()
-    tr_val = str(tr.get("code") or tr.get("name") or tr if not isinstance(tr, dict) else "").lower()
+    ts_val = str((ts.get("code") or ts.get("name") or "") if isinstance(ts, dict) else ts).lower()
+    tr_val = str((tr.get("code") or tr.get("name") or "") if isinstance(tr, dict) else tr).lower()
     if "owner" in ts_val or "block" in ts_val or "hold" in ts_val:
         return False
     if "block" in tr_val or "hold" in tr_val:
         return False
+    # An "Owner Next" tag also marks an owner stay (Breezeway sometimes
+    # miscategorises owner bookings) — matches _classify_reservation in briefing.py.
+    for t in (r.get("tags") or []):
+        tag = (str(t.get("name") or t.get("code") or "") if isinstance(t, dict) else str(t)).lower()
+        if "owner next" in tag:
+            return False
     # Must be 30+ nights
     checkin  = r.get("checkin_date",  "")[:10]
     checkout = r.get("checkout_date", "")[:10]
@@ -220,12 +254,13 @@ def _lease_prep_scan_inner():
         try:
             arrival = date.fromisoformat(checkin)
         except ValueError:
-            return r, []
+            return r, [], None
         window_start = arrival - timedelta(days=30)
         tasks = _fetch_tasks_for_property(
             token, pid, ref_cache.get(pid, ""), window_start, arrival
         )
-        return r, tasks
+        has_hot_tub = _property_has_hot_tub(token, pid)
+        return r, tasks, has_hot_tub
 
     try:
         pairs = list(ThreadPoolExecutor(max_workers=8).map(fetch_lease_tasks, leases))
@@ -234,7 +269,7 @@ def _lease_prep_scan_inner():
 
     # Step D: build results
     results = []
-    for reservation, tasks in pairs:
+    for reservation, tasks, has_hot_tub in pairs:
         try:
             pid      = str(reservation.get("property_id") or reservation.get("home_id") or "")
             checkin  = str(reservation.get("checkin_date")  or "")[:10]
@@ -264,12 +299,13 @@ def _lease_prep_scan_inner():
 
             fmt_tasks.sort(key=lambda x: (x["sched_date"] or ""))
             results.append({
-                "property": _get_property_name(pid),
-                "checkin":  checkin,
-                "checkout": checkout,
-                "nights":   nights,
-                "guest":    guest,
-                "tasks":    fmt_tasks,
+                "property":    _get_property_name(pid),
+                "checkin":     checkin,
+                "checkout":    checkout,
+                "nights":      nights,
+                "guest":       guest,
+                "has_hot_tub": has_hot_tub,
+                "tasks":       fmt_tasks,
             })
         except Exception as e:
             import traceback

@@ -12,6 +12,7 @@ import requests
 from flask import (Blueprint, render_template, request, jsonify,
                    redirect, url_for, flash)
 from flask_login import login_required, current_user
+from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from db import (get_db, get_cursor, DEFAULT_START,
@@ -1401,3 +1402,96 @@ def bw_task_probe():
         body, status = _bw_get_raw(token, path)
         out[path] = {"status": status, "body": body}
     return jsonify(out)
+
+# ── Remove all assigned task times for a person on a day (admin, destructive) ──
+
+def _clear_task_time(token: str, task_id) -> tuple:
+    """Clear a task's scheduled start time in Breezeway (PATCH scheduled_time=null)."""
+    headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
+    url = f"https://api.breezeway.io/public/inventory/v1/task/{task_id}"
+    try:
+        r = requests.patch(url, headers=headers, json={"scheduled_time": None}, timeout=15)
+        ok = r.status_code in (200, 201)
+        return ok, f"status={r.status_code}" + ("" if ok else f" {r.text[:160]}")
+    except Exception as e:
+        return False, str(e)
+
+
+@dispatch_bp.route("/admin/clear-task-times", methods=["POST"])
+@login_required
+@admin_required
+def clear_task_times():
+    """Remove the assigned start time from EVERY Breezeway task in a person's name
+    on a given day. Destructive — only invoked from the confirmed UI action."""
+    from routes.briefing import (
+        _get_breezeway_token, _fetch_bw_endpoint, _get_property_name,
+        _ensure_property_cache, _get_live_property_cache, _get_live_ref_cache,
+    )
+    from concurrent.futures import ThreadPoolExecutor
+
+    body     = request.get_json() or {}
+    date_str = (body.get("date") or "").strip()
+    assignee = (body.get("assignee") or "").strip()
+    if not date_str:
+        return jsonify({"error": "A date is required."}), 400
+    if not assignee:
+        return jsonify({"error": "A person is required."}), 400
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()
+    ref_cache  = _get_live_ref_cache()
+    if not prop_cache:
+        return jsonify({"error": "Breezeway property cache empty — try again in a moment"}), 502
+
+    pid_candidates = {}
+    for bw_pid in prop_cache:
+        ref_id = ref_cache.get(bw_pid)
+        pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
+
+    def _tasks_for_ref(ref_id):
+        for dp in ({"scheduled_date": f"{date_str},{date_str}"},
+                   {"start_date": date_str, "end_date": date_str},
+                   {"date": date_str}):
+            r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
+                                              {"reference_property_id": ref_id, **dp})
+            if status == 200:
+                return r or []
+        return []
+
+    all_tasks = []
+    with ThreadPoolExecutor(max_workers=25) as ex:
+        for tasks in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+            all_tasks.extend(tasks)
+
+    asgn_lower = assignee.lower()
+    seen, mine = set(), []
+    for t in all_tasks:
+        t_date = (t.get("scheduled_date") or "")[:10]
+        if t_date and t_date != date_str:          # only this exact day
+            continue
+        tid = t.get("id")
+        if tid is None or tid in seen:
+            continue
+        seen.add(tid)
+        if _bw_assignee_match(t, asgn_lower):
+            mine.append(t)
+
+    results, cleared, failed = [], 0, 0
+    for t in mine:
+        ok, detail = _clear_task_time(token, t.get("id"))
+        cleared += 1 if ok else 0
+        failed  += 0 if ok else 1
+        pid = t.get("home_id") or t.get("property_id")
+        results.append({
+            "task":     _bw_task_title(t),
+            "property": _get_property_name(pid) if pid else "",
+            "ok":       ok,
+            "detail":   detail,
+        })
+
+    return jsonify({"date": date_str, "assignee": assignee,
+                    "total": len(mine), "cleared": cleared, "failed": failed,
+                    "results": results})

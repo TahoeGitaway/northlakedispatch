@@ -205,6 +205,36 @@
                 </div>
               </div>
             </div>
+
+            {% if current_user.is_admin %}
+            <!-- Remove assigned times for a person on this day (admin, destructive) -->
+            <div class="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden mt-4">
+              <div class="px-4 py-3 border-b border-red-100" style="background:#fef2f2;">
+                <span class="text-sm font-semibold text-red-700">🕑 Remove assigned times</span>
+              </div>
+              <div class="px-4 py-3 space-y-2.5">
+                <div>
+                  <label class="text-xs font-medium text-gray-500 block mb-1">Person</label>
+                  <input id="clearTimesPerson" type="text" placeholder="e.g. Chris Marin"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+                                focus:outline-none focus:ring-2 focus:ring-red-300">
+                </div>
+                <div class="text-xs text-gray-500">
+                  Date: <span id="clearTimesDate" class="font-semibold text-gray-700">—</span>
+                </div>
+                <div class="text-xs text-red-600 flex items-start gap-1.5 leading-snug">
+                  <span class="shrink-0">⚠️</span>
+                  <span>This removes the assigned start time of <strong>every task in that person's name on this day in Breezeway</strong>. It can't be undone from here.</span>
+                </div>
+                <button onclick="removeAllTimes()"
+                        class="w-full bg-red-600 hover:bg-red-700 text-white text-sm font-semibold
+                               py-2 rounded-lg transition-colors">
+                  Remove all times
+                </button>
+                <div id="clearTimesResult" class="hidden rounded-lg px-3 py-2 leading-snug"></div>
+              </div>
+            </div>
+            {% endif %}
           </div>
 
         </div>
@@ -483,6 +513,45 @@ async function loadDaySummary(ds, force = false) {
     panel.classList.remove("hidden");
   } catch (e) {
     loading.classList.add("hidden");
+  }
+}
+
+/* ── ADMIN: remove all assigned times for a person on the selected day ── */
+function _clearTimesMsg(text, color) {
+  const el = document.getElementById("clearTimesResult");
+  if (!el) return;
+  const map = { green:"background:#f0fdf4;color:#15803d;", amber:"background:#fffbeb;color:#b45309;",
+                red:"background:#fef2f2;color:#b91c1c;", gray:"background:#f9fafb;color:#4b5563;" };
+  el.style.cssText = "border-radius:8px;padding:8px 12px;font-size:0.78rem;" + (map[color] || map.gray);
+  el.textContent = text;
+  el.classList.remove("hidden");
+}
+
+async function removeAllTimes() {
+  const person = (document.getElementById("clearTimesPerson").value || "").trim();
+  const date   = selectedDate || TODAY_STR;
+  if (!person) { _clearTimesMsg("Enter a person's name first.", "red"); return; }
+  if (!date)   { _clearTimesMsg("Select a day first.", "red"); return; }
+
+  const fmt = new Date(date + "T00:00:00").toLocaleDateString("en-US",
+    { weekday:"short", month:"short", day:"numeric" });
+  if (!confirm(`⚠️ Remove ALL assigned times for ${person} on ${fmt}?\n\n`
+    + `This clears the start time of every task in ${person}'s name that day in Breezeway. It cannot be undone.`)) return;
+
+  _clearTimesMsg("Removing times in Breezeway… this can take a moment.", "gray");
+  try {
+    const r = await fetch("/admin/clear-task-times", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, assignee: person }),
+    });
+    const data = await r.json();
+    if (data.error) { _clearTimesMsg(data.error, "red"); return; }
+    if (!data.total) { _clearTimesMsg(`No tasks found for ${person} on that day.`, "gray"); return; }
+    let msg = `${data.cleared} time${data.cleared !== 1 ? "s" : ""} removed`;
+    if (data.failed) msg += ` · ${data.failed} failed`;
+    _clearTimesMsg(msg, data.failed ? "amber" : "green");
+  } catch (e) {
+    _clearTimesMsg("Could not reach the server.", "red");
   }
 }
 
@@ -770,6 +839,13 @@ async function loadCalendarActivity(year, month) {
 function selectDay(ds) {
   selectedDate = ds;
   buildCalendar();
+
+  // Admin "remove times" block — reflect the selected day, reset its state
+  const ctd = document.getElementById("clearTimesDate");
+  if (ctd) ctd.textContent = new Date(ds + "T00:00:00")
+    .toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
+  const ctr = document.getElementById("clearTimesResult");
+  if (ctr) ctr.classList.add("hidden");
 
   const newRouteBtn = document.getElementById("newRouteBtn");
   if (newRouteBtn) newRouteBtn.href = `/?date=${ds}`;

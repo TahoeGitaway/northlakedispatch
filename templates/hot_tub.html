@@ -66,8 +66,8 @@ function clearHandled() {
 }
 
 function _applyHandled(card, handled) {
-  card.style.opacity      = handled ? '0.45' : '1';
-  card.style.filter       = handled ? 'grayscale(0.4)' : '';
+  // "Handled" hides the card entirely (Clear checkoffs brings them all back).
+  card.style.display = handled ? 'none' : '';
   const btn = card.querySelector('.handled-btn');
   if (btn) {
     btn.textContent       = handled ? '✓ Handled' : 'Mark handled';
@@ -146,7 +146,13 @@ async function runScan() {
     const handled   = _getHandled();
     const container = document.getElementById('results');
 
-    items.forEach(r => {
+    // Only show overdue properties — the up-to-date ones are just noise
+    // (their count is still in the summary above).
+    const overdueItems = items.filter(r => r.overdue);
+    if (!overdueItems.length) {
+      container.innerHTML = `<div style="text-align:center;color:#16a34a;font-size:0.9rem;padding:32px;">✓ Nothing overdue — all ${items.length} properties are up to date.</div>`;
+    }
+    overdueItems.forEach(r => {
       const isOverdue = r.overdue;
       const daysText  = r.days_since === null
         ? 'No service found in last 45 days'
