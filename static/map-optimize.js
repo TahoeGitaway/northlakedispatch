@@ -232,6 +232,57 @@ function _goToSavedRoutes() {
   window.location.href = savedDate ? `/routes?date=${savedDate}` : "/routes";
 }
 
+/* ── BREEZEWAY SYNC STATUS BANNER ──
+   A prominent, real-time indicator for the Save & Sync flow. It does NOT touch
+   the sync function — it only watches what bwSyncTimes() writes into
+   #bwSyncResult and mirrors it as an obvious top-of-screen banner. */
+function _showBwSyncBanner(state, text) {
+  const b = document.getElementById("bwSyncBanner");
+  if (!b) return;
+  const bg = { contacting:"#1e293b", ok:"#16a34a", warn:"#d97706", error:"#dc2626" }[state] || "#1e293b";
+  const spinner = state === "contacting"
+    ? '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.4);'
+      + 'border-top-color:#fff;border-radius:50%;animation:rl-spin 0.7s linear infinite;margin-right:9px;'
+      + 'vertical-align:middle;flex-shrink:0;"></span>'
+    : '';
+  const dismiss = state === "contacting" ? ''
+    : '<button onclick="document.getElementById(\'bwSyncBanner\').style.display=\'none\'" '
+      + 'style="margin-left:14px;background:rgba(255,255,255,0.25);border:none;color:#fff;'
+      + 'border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:700;flex-shrink:0;">✕</button>';
+  b.style.cssText = "position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:10001;"
+    + "padding:11px 20px;border-radius:9999px;font-size:0.85rem;font-weight:600;color:#fff;"
+    + "box-shadow:0 6px 22px rgba(0,0,0,0.28);display:flex;align-items:center;max-width:92vw;"
+    + "background:" + bg + ";";
+  b.innerHTML = spinner + '<span style="line-height:1.3;">' + text + '</span>' + dismiss;
+  b.style.display = "flex";
+}
+
+function _watchBwSync() {
+  const src = document.getElementById("bwSyncResult");
+  if (!src) return;
+  let started = false;
+  const obs = new MutationObserver(() => {
+    const txt = (src.textContent || "").trim();
+    if (!started) {                                  // wait until the sync actually begins
+      if (/contacting breezeway/i.test(txt)) {       // (so a cancelled confirm shows nothing)
+        started = true;
+        _showBwSyncBanner("contacting", "Contacting Breezeway… syncing times");
+      }
+      return;
+    }
+    if (/contacting breezeway/i.test(txt) || !txt) return;   // still in progress
+    obs.disconnect();
+    if (/^error/i.test(txt) && !/updated/i.test(txt)) {
+      _showBwSyncBanner("error", "Breezeway sync failed — " + txt.slice(0, 160));
+    } else {
+      const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
+      _showBwSyncBanner(/failed/i.test(summary) ? "warn" : "ok", "Breezeway sync done — " + summary);
+    }
+  });
+  obs.observe(src, { childList: true, subtree: true, characterData: true });
+  setTimeout(() => obs.disconnect(), 5 * 60 * 1000);   // safety stop
+}
+
 // mode: "return" → save then go back to the routes page (default)
 //       "sync"   → save, then sync times to Breezeway and show the report; stay open
 async function submitSaveRoute(mode = "return") {
@@ -286,6 +337,7 @@ async function submitSaveRoute(mode = "return") {
       // sync. We don't reimplement or wrap it; we just trigger it. Results
       // render in the sidebar exactly as the standalone Sync button.
       closeSaveModal();
+      _watchBwSync();   // prominent, real-time status banner (observes the sync output)
       bwSyncTimes();
       return;
     } else {

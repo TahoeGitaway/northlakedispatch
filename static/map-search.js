@@ -962,6 +962,7 @@ function _selectDailyRouteTab(routeId, label) {
 
 let _routeChangesCache    = { routeId: null, html: null };
 let _routeChangesInflight = { routeId: null, promise: null };
+let _appliedRouteChanges  = new Set();   // route ids whose changes have been applied (hide the Apply button)
 
 // Append the "Changes vs Breezeway" block for the currently-loaded saved route.
 // Cheap to re-run: re-renders from cache on later panel redraws, and shares a
@@ -982,6 +983,7 @@ function _appendRouteChanges(content) {
   box.querySelector("[data-refresh]").addEventListener("click", () => {
     _routeChangesCache    = { routeId: null, html: null };
     _routeChangesInflight = { routeId: null, promise: null };
+    _appliedRouteChanges.delete(rid);   // a fresh check brings the Apply button back
     _renderRouteChangesInto(rid, body);
   });
   _renderRouteChangesInto(rid, body);
@@ -1076,12 +1078,15 @@ function _renderChangesHtml(d) {
 
   // Apply-to-route button: add the added properties / drop the removed ones,
   // then leave the route in the editable state for manual reorder + optimize.
-  if (added.length || removed.length) {
+  // Hidden once applied (until the next Recheck).
+  if ((added.length || removed.length) && !_appliedRouteChanges.has(d.route_id)) {
     const nAdd = new Set(added.map(a => a.property)).size;
     h += `<button onclick="reapproachWithChanges()"
             class="w-full mt-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs
                    font-semibold py-2 rounded-lg transition-colors">`
        + `↘ Apply to route — add ${nAdd}, remove ${removed.length}</button>`;
+  } else if ((added.length || removed.length) && _appliedRouteChanges.has(d.route_id)) {
+    h += `<div class="mt-3 text-xs text-green-600 font-medium">✓ Applied — Recheck to refresh.</div>`;
   }
   return h;
 }
@@ -1132,6 +1137,13 @@ function reapproachWithChanges() {
                 arrival: !!(m.arrival || m.pci), priority_checkin: !!m.pci, serviceMinutes: 60 });
     have.add(key);
     addedCount++;
+  }
+
+  // Mark these changes applied so the Apply button disappears (until next Recheck).
+  // Regenerate the cached HTML too — the panel re-renders from cache.
+  if (currentRouteId) {
+    _appliedRouteChanges.add(currentRouteId);
+    if (_routeChangesCache.data) _routeChangesCache.html = _renderChangesHtml(_routeChangesCache.data);
   }
 
   // Drop back into the editable (pre-optimize) state — keep route identity

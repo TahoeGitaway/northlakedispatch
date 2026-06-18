@@ -1535,3 +1535,114 @@ def clear_task_times():
     return jsonify({"date": date_str, "assignee": assignee,
                     "total": len(mine), "cleared": cleared, "failed": failed,
                     "results": results})
+
+
+# ── Template-change PROBE (admin diagnostics) ─────────────────────
+# Discovery only: list company templates, and test whether PATCHing a task's
+# template_id actually re-templates it. Used to decide if a bulk Walk Thru →
+# Light Walk Thru tool is possible via the API.
+
+@dispatch_bp.route("/admin/bw-templates")
+@login_required
+@admin_required
+def bw_templates():
+    """List Breezeway company task templates (id + name)."""
+    from routes.briefing import _get_breezeway_token
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured"}), 503
+    out = {}
+    for path in ("/public/inventory/v1/companies/templates",
+                 "/public/inventory/v1/company/templates",
+                 "/public/inventory/v1/templates",
+                 "/public/inventory/v1/task/templates"):
+        body, status = _bw_get_raw(token, path)
+        entry = {"status": status}
+        if status == 200 and body is not None:
+            items = body if isinstance(body, list) else body.get("results", body.get("data", []))
+            entry["count"] = len(items or [])
+            entry["templates"] = [{"id": t.get("id"),
+                                   "name": t.get("name") or t.get("title") or t.get("label")}
+                                  for t in (items or []) if isinstance(t, dict)]
+        out[path] = entry
+    return jsonify(out)
+
+
+def _task_template_snapshot(token, task_id):
+    """Capture a task's template_id + name + checklist (requirements) for before/after compare."""
+    detail, ds = _bw_get_raw(token, f"/public/inventory/v1/task/{task_id}")
+    d = detail if isinstance(detail, dict) else {}
+    reqs, rs, req_path = None, None, None
+    for p in (f"/public/inventory/v1/task/{task_id}/requirements",
+              f"/public/inventory/v1/task/{task_id}/checklist",
+              f"/public/inventory/v1/task/{task_id}/template-requirements"):
+        body, status = _bw_get_raw(token, p)
+        if status == 200:
+            reqs, rs, req_path = body, status, p
+            break
+        if rs is None:
+            rs = status
+    req_list = reqs if isinstance(reqs, list) else (
+        reqs.get("results", reqs.get("data", [])) if isinstance(reqs, dict) else [])
+    return {
+        "detail_status":       ds,
+        "template_id":         d.get("template_id"),
+        "name":                d.get("name"),
+        "type_department":     d.get("type_department"),
+        "task_keys":           list(d.keys())[:30],
+        "requirements_path":   req_path,
+        "requirements_status": rs,
+        "requirements_count":  len(req_list or []),
+        "requirements":        [(r.get("name") or r.get("title") or r.get("label"))
+                                for r in (req_list or []) if isinstance(r, dict)][:60],
+    }
+
+
+@dispatch_bp.route("/admin/bw-task-template-test", methods=["GET", "POST"])
+@login_required
+@admin_required
+def bw_task_template_test():
+    """Test changing ONE task's template. Captures the task (template_id + checklist)
+    before and after PATCHing template_id, so we can see if Breezeway re-templates it.
+    Usage: /admin/bw-task-template-test?task_id=123&template_id=456"""
+    from routes.briefing import _get_breezeway_token
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured"}), 503
+
+    src = request.get_json(silent=True) or request.args
+    task_id     = str(src.get("task_id") or "").strip()
+    template_id = src.get("template_id")
+    if not task_id or template_id in (None, ""):
+        return jsonify({"error": "task_id and template_id are required"}), 400
+    try:
+        template_id = int(template_id)
+    except (TypeError, ValueError):
+        pass
+
+    before = _task_template_snapshot(token, task_id)
+
+    headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
+    url     = f"https://api.breezeway.io/public/inventory/v1/task/{task_id}"
+    patch   = {}
+    try:
+        pr = requests.patch(url, headers=headers, json={"template_id": template_id}, timeout=15)
+        patch["status"] = pr.status_code
+        try:
+            patch["body"] = pr.json()
+        except Exception:
+            patch["body"] = pr.text[:400]
+    except Exception as e:
+        patch["status"] = None
+        patch["body"] = str(e)
+
+    after = _task_template_snapshot(token, task_id)
+    return jsonify({
+        "task_id":               task_id,
+        "requested_template_id": template_id,
+        "patch":                 patch,
+        "before":                before,
+        "after":                 after,
+        "template_id_changed":   before.get("template_id") != after.get("template_id"),
+        "checklist_changed":     before.get("requirements") != after.get("requirements"),
+    })

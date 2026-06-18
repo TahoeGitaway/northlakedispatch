@@ -187,24 +187,28 @@ def refresh_pri_banner_alerts(alert_days=3):
     if not token:
         return
 
-    today         = date_cls.today()
-    window_end    = today + timedelta(days=alert_days)
-    far_end       = today + timedelta(days=150)
-    reso_lookback = today - timedelta(days=30)
-    today_str     = today.isoformat()
+    today          = date_cls.today()
+    window_end     = today + timedelta(days=alert_days)
+    far_end        = today + timedelta(days=150)
+    # Look back far enough to catch a guest checkout whose owner/block ARRIVAL is
+    # only now coming due — the Owner Next alert keys off the arrival being imminent,
+    # not the checkout (so we don't nag weeks/months early).
+    lookback       = today - timedelta(days=90)
+    today_str      = today.isoformat()
+    window_end_str = window_end.isoformat()
 
     raw_checkouts = _fetch_bw_reservations(token, {
-        "checkout_date_ge": today_str,
-        "checkout_date_le": window_end.isoformat(),
+        "checkout_date_ge": lookback.isoformat(),
+        "checkout_date_le": window_end_str,
     })
     raw_upcoming = _fetch_bw_reservations(token, {
-        "checkin_date_ge": reso_lookback.isoformat(),
+        "checkin_date_ge": lookback.isoformat(),
         "checkin_date_le": far_end.isoformat(),
     })
 
     checkouts = [
         r for r in raw_checkouts
-        if today_str <= (r.get("checkout_date") or "")[:10] <= window_end.isoformat()
+        if lookback.isoformat() <= (r.get("checkout_date") or "")[:10] <= window_end_str
     ]
 
     by_prop = {}
@@ -244,15 +248,19 @@ def refresh_pri_banner_alerts(alert_days=3):
                 break
 
         if not next_r:
-            key = f"{prop_name}::{co_date_str}"
-            active_keys.add(key)
-            rows_to_upsert.append((key, prop_name, co_date_str, None, "vacancy_pri"))
+            # Vacancy PRI: only when the checkout itself is imminent.
+            if today <= co_date <= window_end:
+                key = f"{prop_name}::{co_date_str}"
+                active_keys.add(key)
+                rows_to_upsert.append((key, prop_name, co_date_str, None, "vacancy_pri"))
             continue
 
         next_kind = _classify_reservation(next_r)
         if next_kind not in ("owner", "block"):
             continue
-        if next_ci_date < today:
+        # Owner Next: only alert when the OWNER/BLOCK ARRIVAL is within the next
+        # `alert_days` — not just because the guest checkout is soon.
+        if not (today <= next_ci_date <= window_end):
             continue
 
         tag_names = [_extract_str(t) for t in (next_r.get("tags") or [])]
@@ -289,7 +297,9 @@ def refresh_pri_banner_alerts(alert_days=3):
         else:
             cur.execute("DELETE FROM pri_banner_alerts WHERE dismissed_at IS NULL")
         cutoff = (today - timedelta(days=7)).isoformat()
-        cur.execute("DELETE FROM pri_banner_alerts WHERE checkout_date < %s", (cutoff,))
+        # Use the alert's relevant date (arrival for owner-next, checkout for vacancy)
+        # so a valid owner-next with an old checkout but imminent arrival isn't purged.
+        cur.execute("DELETE FROM pri_banner_alerts WHERE COALESCE(next_checkin, checkout_date) < %s", (cutoff,))
         conn.commit()
     except Exception:
         conn.rollback()
