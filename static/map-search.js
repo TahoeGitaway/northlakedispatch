@@ -1051,15 +1051,27 @@ function _renderChangesHtml(d) {
     const byProp = {};
     for (const a of added) (byProp[a.property] = byProp[a.property] || []).push(a);
     for (const prop of Object.keys(byProp)) {
+      // A priority check-in (PCI) = arrive by noon. Mark it loudly: a badge on the
+      // house header AND a highlighted, badged line for each PCI task.
+      const propPci = byProp[prop].some(a => a.pci || _titleHasPci(a.task_name));
       h += `<div class="mb-1.5 leading-snug">`;
-      h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}</div>`;
+      h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}`
+         + (propPci ? ` <span class="inline-block align-middle bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">⚡ PRIORITY CHECK-IN</span>` : "")
+         + `</div>`;
       for (const a of byProp[prop]) {
+        const isPci = a.pci || _titleHasPci(a.task_name);
         const who  = a.history && a.history.who  ? _escHtml(a.history.who) : null;
         const when = a.history && a.history.when ? _fmtChangeWhen(a.history.when) : null;
         const note = (who || when)
           ? ` <span class="text-gray-400">(${when ? "added " + _escHtml(when) : "added"}${who ? " by " + who : ""})</span>`
           : ` <span class="text-gray-300 italic">(when/who not exposed)</span>`;
-        h += `<div class="text-[11px] text-gray-500 pl-3 leading-snug">• ${_escHtml(a.task_name)}${note}</div>`;
+        const pciBadge = isPci
+          ? ` <span class="inline-block bg-violet-600 text-white text-[10px] font-bold px-1 rounded">⚡ BY NOON</span>`
+          : "";
+        const lineCls = isPci
+          ? "text-[11px] text-violet-900 font-semibold bg-violet-50 border-l-2 border-violet-500 rounded-r pl-2 pr-1 py-0.5 leading-snug"
+          : "text-[11px] text-gray-500 pl-3 leading-snug";
+        h += `<div class="${lineCls}">• ${_escHtml(a.task_name)}${pciBadge}${note}</div>`;
       }
       h += `</div>`;
     }

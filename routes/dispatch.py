@@ -42,14 +42,19 @@ def _match_local_property_scored(bw_name: str, db_props: dict):
     key = bw_name.lower().strip()
     if key in db_props:
         return db_props[key], 1.0, "exact"
+    # Substring — WORD-aligned only, so "venture" can't match inside "ad-venture".
+    pk = " " + key + " "
     for dk, row in db_props.items():
-        if key in dk or dk in key:
+        pdk = " " + dk + " "
+        if pk in pdk or pdk in pk:
             return row, SequenceMatcher(None, key, dk).ratio(), "substring"
     kwords = set(key.split())
     for dk, row in db_props.items():
         if kwords and kwords.issubset(set(dk.split())):
             return row, SequenceMatcher(None, key, dk).ratio(), "keyword"
-    hits = get_close_matches(key, list(db_props.keys()), n=1, cutoff=0.6)
+    # Fuzzy — cutoff raised so near-misses like "Venture In" vs "Adventure Lodge"
+    # (~0.64) no longer register as a match at all.
+    hits = get_close_matches(key, list(db_props.keys()), n=1, cutoff=0.72)
     if hits:
         return db_props[hits[0]], SequenceMatcher(None, key, hits[0]).ratio(), "fuzzy"
     return None, 0.0, "none"
@@ -61,8 +66,12 @@ _MATCH_CONFIDENT = 0.72
 
 
 def _match_local_property(bw_name: str, db_props: dict):
-    """Back-compat: return just the matched row (or None)."""
-    return _match_local_property_scored(bw_name, db_props)[0]
+    """Return the matched row only when we're CONFIDENT. Low-confidence matches
+    return None here (used by the silent paths — discrepancy check, check-in
+    detection — which must never act on a shaky match). The import uses the
+    scored version directly so it can surface uncertain matches for confirmation."""
+    row, score, tier = _match_local_property_scored(bw_name, db_props)
+    return row if (tier == "exact" or score >= _MATCH_CONFIDENT) else None
 
 
 def _title_has_pci(title: str) -> bool:
@@ -1317,9 +1326,13 @@ def route_discrepancies():
     asgn_lower = assignee.lower()
     seen_ids, mine = set(), []
     for t in all_tasks:
-        # Date guard — only this route's date, never off-date tasks
+        # STRICT date guard — the per-property task query returns EVERY task for the
+        # house (Breezeway ignores the date param here), including recurring/undated
+        # tasks (e.g. "Biweekly Hot Tub Service") that carry no scheduled_date. Those
+        # must NOT appear: only tasks whose scheduled date is exactly this route's
+        # date belong. No date / off-date → drop it.
         t_date = (t.get("scheduled_date") or "")[:10]
-        if t_date and t_date != date_str:
+        if t_date != date_str:
             continue
         tid = t.get("id")
         if tid is not None and tid in seen_ids:
