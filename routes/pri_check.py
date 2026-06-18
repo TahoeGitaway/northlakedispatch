@@ -318,8 +318,25 @@ def api_pri_alerts():
         "FROM pri_banner_alerts WHERE dismissed_at IS NULL "
         "ORDER BY checkout_date ASC"
     )
-    alerts = [dict(r) for r in cur.fetchall()]
+    rows = [dict(r) for r in cur.fetchall()]
     cur.close(); conn.rollback(); conn.close()
+
+    # Defensive display filter (independent of when the alert table was last
+    # recomputed): an "Owner Next" alert is only shown if the OWNER/BLOCK ARRIVAL
+    # is within the next 3 days — never just because the guest checkout is soon.
+    today      = date_cls.today()
+    window_end = today + timedelta(days=3)
+    alerts = []
+    for d in rows:
+        if d.get("alert_type") == "needs_owner_next":
+            nci = (d.get("next_checkin") or "")[:10]
+            try:
+                nci_date = date_cls.fromisoformat(nci) if nci else None
+            except Exception:
+                nci_date = None
+            if not nci_date or not (today <= nci_date <= window_end):
+                continue
+        alerts.append(d)
     return jsonify({"alerts": alerts})
 
 

@@ -486,8 +486,13 @@ async function loadRouteById(loadId) {
     _updateStartEndPill();
     _highlightCustomDepot();
 
-    const lunchMins = hhmmToMinutes(document.querySelector('input[name="lunchTime"]:checked').value);
-    if (getLunchEnabled()) insertLunchAt(lunchMins);
+    // Do NOT auto-insert a lunch break on load — re-opening a saved route should
+    // show it as saved, not force a fresh lunch every time. Reflect that in the
+    // toggle so the UI stays consistent; the user can re-enable lunch if they want.
+    if (!optimizedSchedule.some(s => s.isLunch)) {
+      const le = document.getElementById("lunchEnabled");
+      if (le) le.checked = false;
+    }
 
     recalculateTimes();
     renderStops();
