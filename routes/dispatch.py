@@ -1442,6 +1442,7 @@ def bw_task_probe():
 
     # No id given → auto-find an already-assigned task so nobody has to hunt for one.
     if not task_id:
+        from concurrent.futures import ThreadPoolExecutor
         from datetime import date as _date
         _ensure_property_cache()
         prop_cache = _get_live_property_cache()
