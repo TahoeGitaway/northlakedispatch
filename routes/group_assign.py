@@ -216,6 +216,7 @@ def _scan_inner():
     # per-property query returns undated/off-date recurring tasks otherwise).
     seen, buckets, checkins = set(), {}, []
     hidden_cleaning = 0
+    dept_counts = {}        # every department value seen (for diagnostics)
     for t in all_tasks:
         tid = t.get("id")
         if tid in seen:
@@ -224,11 +225,13 @@ def _scan_inner():
         t_date = (t.get("scheduled_date") or "")[:10]
         if t_date != date_str:
             continue
-        # Hide cleaning-department tasks entirely — never touched from here.
+        # Hide cleaning / housekeeping department tasks entirely — never touched here.
         dept = t.get("type_department")
         if isinstance(dept, dict):
             dept = dept.get("code") or dept.get("name") or ""
-        if str(dept).strip().lower() == "cleaning":
+        dl = str(dept).strip().lower()
+        dept_counts[dl or "(none)"] = dept_counts.get(dl or "(none)", 0) + 1
+        if "clean" in dl or "housekeep" in dl:
             hidden_cleaning += 1
             continue
         home_id    = t.get("home_id") or t.get("property_id")
@@ -243,8 +246,10 @@ def _scan_inner():
             "time":      (str(t.get("scheduled_time") or "")[:5]) or None,
             "arrival":   is_arrival,
             "pci":       _title_has_pci(title),
-            "assignees": _assignee_names(t),
-            "group":     group,
+            "assignees":    _assignee_names(t),
+            "assignee_ids": [a.get("assignee_id") for a in (t.get("assignments") or [])
+                             if a.get("assignee_id") is not None],
+            "group":        group,
         }
         # Check-in houses get their OWN section (easy selection) — pulled out of the
         # group buckets so a task never appears, or is selected, twice.
@@ -267,6 +272,7 @@ def _scan_inner():
         "groups":      groups_out,
         "total_tasks": len(checkins) + sum(len(b["tasks"]) for b in groups_out),
         "hidden_cleaning": hidden_cleaning,
+        "dept_counts": dept_counts,
     })
 
 

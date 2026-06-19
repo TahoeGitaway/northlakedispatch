@@ -21,6 +21,10 @@
         Scan
       </button>
     </div>
+
+    <!-- Saved views: show only chosen people's tasks -->
+    <div id="viewsBar" class="flex items-center gap-1.5 flex-wrap mt-3"></div>
+    <div id="viewEditor" class="hidden mt-2 max-w-md"></div>
   </div>
 
   <!-- Loading -->
@@ -146,39 +150,73 @@ function buildGroup(group, isCheckin) {
       <span style="font-size:0.74rem;font-weight:700;color:${isUn ? '#b45309' : '#4b5563'};">👤 ${esc(key)}
         <span style="font-weight:500;color:#9ca3af;">· ${byUser[key].length}</span></span>
       <label style="font-size:0.7rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:4px;">
-        <input type="checkbox" class="subgroup-cb"> Select</label>`;
+        <input type="checkbox" class="subgroup-cb"> Select all</label>`;
     wrap.appendChild(sub);
 
-    const cbs = [];
-    byUser[key].forEach(t => {
-      const row = _taskRow(t, isCheckin);
-      wrap.appendChild(row);
-      cbs.push(row.querySelector('.task-cb'));
+    const userCbs = [];
+
+    // Under each user, sub-sort by property GROUP so you can select all of one
+    // group's tasks for that person. Group headers only show when the user's tasks
+    // span more than one group (e.g. in the Check-in section).
+    const byGrp = {};
+    byUser[key].forEach(t => { const gk = t.group || 'Ungrouped'; (byGrp[gk] = byGrp[gk] || []).push(t); });
+    const gkeys = Object.keys(byGrp).sort((a, b) =>
+      ((a === 'Ungrouped') - (b === 'Ungrouped')) || a.localeCompare(b));
+    const multiGroup = gkeys.length > 1;
+
+    gkeys.forEach(gk => {
+      let gsub = null;
+      const grpCbs = [];
+      if (multiGroup) {
+        gsub = document.createElement('div');
+        gsub.style.cssText = 'background:#fff;padding:4px 16px 4px 30px;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;justify-content:space-between;gap:10px;';
+        gsub.innerHTML = `
+          <span style="font-size:0.7rem;font-weight:600;color:#6b7280;">🏘 ${esc(gk)}
+            <span style="font-weight:500;color:#9ca3af;">· ${byGrp[gk].length}</span></span>
+          <label style="font-size:0.68rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" class="grpsub-cb"> Select</label>`;
+        wrap.appendChild(gsub);
+      }
+      byGrp[gk].forEach(t => {
+        const row = _taskRow(t, isCheckin);
+        wrap.appendChild(row);
+        const cb = row.querySelector('.task-cb');
+        grpCbs.push(cb); userCbs.push(cb);
+      });
+      if (gsub) {
+        gsub.querySelector('.grpsub-cb').addEventListener('change', e => {
+          grpCbs.forEach(cb => { cb.checked = e.target.checked; });
+          _refreshCount();
+        });
+      }
     });
+
     sub.querySelector('.subgroup-cb').addEventListener('change', e => {
-      cbs.forEach(cb => { cb.checked = e.target.checked; });
+      userCbs.forEach(cb => { cb.checked = e.target.checked; });
       _refreshCount();
     });
   });
 
   // Wire "select all in group"
   head.querySelector('.group-cb').addEventListener('change', e => {
-    wrap.querySelectorAll('.task-cb, .subgroup-cb').forEach(cb => { cb.checked = e.target.checked; });
+    wrap.querySelectorAll('.task-cb, .subgroup-cb, .grpsub-cb').forEach(cb => { cb.checked = e.target.checked; });
     _refreshCount();
   });
   wrap.querySelectorAll('.task-cb').forEach(cb => cb.addEventListener('change', _refreshCount));
   return wrap;
 }
 
-function renderScan(data) {
-  SCAN = data;
+function renderScan() {
+  _renderViewsBar();
+  if (!SCAN) return;
+  const data    = _applyView(SCAN);            // filter by the active view, if any
   const results = document.getElementById('results');
   results.innerHTML = '';
 
-  // People dropdown
+  // People dropdown (always the FULL roster, regardless of view)
   const sel = document.getElementById('personSel');
   sel.innerHTML = '<option value="">— pick a person —</option>';
-  (data.people || []).forEach(p => {
+  (SCAN.people || []).forEach(p => {
     const o = document.createElement('option');
     o.value = p.id; o.textContent = p.name;
     sel.appendChild(o);
@@ -186,18 +224,25 @@ function renderScan(data) {
 
   const checkins = data.checkins || [];
   const groups   = data.groups || [];
+  const empty    = document.getElementById('emptyBox');
   if (!data.total_tasks) {
-    document.getElementById('emptyBox').classList.remove('hidden');
+    empty.textContent = ACTIVE_VIEW
+      ? 'No tasks for the people in this view on that date.'
+      : 'No tasks found for the selected date.';
+    empty.classList.remove('hidden');
     document.getElementById('actionBar').classList.add('hidden');
     return;
   }
+  empty.classList.add('hidden');
 
   // Total count summary
+  const vName = ACTIVE_VIEW ? (VIEWS.find(v => v.id === ACTIVE_VIEW) || {}).name : null;
   const summary = document.createElement('div');
   summary.style.cssText = 'font-size:0.9rem;font-weight:600;color:#374151;';
-  summary.innerHTML = `${data.total_tasks} task${data.total_tasks!==1?'s':''} on ${esc(data.date)}` +
+  summary.innerHTML = `${data.total_tasks} task${data.total_tasks!==1?'s':''} on ${esc(SCAN.date)}` +
     ` · <span style="color:#15803d;">${checkins.length} at check-in house${checkins.length!==1?'s':''}</span>` +
-    (data.hidden_cleaning ? ` · <span style="color:#9ca3af;">${data.hidden_cleaning} cleaning hidden</span>` : '');
+    (SCAN.hidden_cleaning ? ` · <span style="color:#9ca3af;">${SCAN.hidden_cleaning} cleaning hidden</span>` : '') +
+    (vName ? ` · <span style="color:#7c3aed;">view: ${esc(vName)}</span>` : '');
   results.appendChild(summary);
 
   // Check-in houses get their own section first, for easy selection.
@@ -207,6 +252,129 @@ function renderScan(data) {
   // Then the group buckets (non-check-in tasks).
   groups.forEach(g => results.appendChild(buildGroup(g, false)));
   _refreshCount();
+}
+
+// ── Saved views (browser localStorage) ──────────────────────────────
+const VIEWS_KEY = 'ga_views', ACTIVE_KEY = 'ga_active_view';
+let VIEWS = _loadViews();
+let ACTIVE_VIEW = localStorage.getItem(ACTIVE_KEY) || null;
+
+function _loadViews() {
+  try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || '[]'); } catch { return []; }
+}
+function _saveViews() { localStorage.setItem(VIEWS_KEY, JSON.stringify(VIEWS)); }
+function _genId() { return 'v' + Date.now() + Math.floor(Math.random() * 1000); }
+
+// Filter a scan payload down to tasks assigned to the active view's people.
+function _applyView(data) {
+  if (!ACTIVE_VIEW) return data;
+  const v = VIEWS.find(x => x.id === ACTIVE_VIEW);
+  if (!v) return data;
+  const idSet = new Set((v.ids || []).map(Number));
+  const match = t => (t.assignee_ids || []).some(id => idSet.has(Number(id)));
+  const checkins = (data.checkins || []).filter(match);
+  const groups   = (data.groups || []).map(g => ({ group: g.group, tasks: g.tasks.filter(match) }))
+                                       .filter(g => g.tasks.length);
+  const total = checkins.length + groups.reduce((s, g) => s + g.tasks.length, 0);
+  return Object.assign({}, data, { checkins, groups, total_tasks: total });
+}
+
+function _chipCss(active) {
+  return 'font-size:0.78rem;font-weight:600;padding:3px 10px;border-radius:99px;cursor:pointer;' +
+    (active ? 'background:#7c3aed;color:#fff;border:1px solid #7c3aed;'
+            : 'background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;');
+}
+
+function _renderViewsBar() {
+  const bar = document.getElementById('viewsBar');
+  if (!bar) return;
+  bar.innerHTML = '<span style="color:#9ca3af;font-size:0.78rem;font-weight:600;margin-right:2px;">Views:</span>';
+
+  const all = document.createElement('button');
+  all.textContent = 'All'; all.style.cssText = _chipCss(!ACTIVE_VIEW);
+  all.onclick = () => { ACTIVE_VIEW = null; localStorage.removeItem(ACTIVE_KEY); renderScan(); };
+  bar.appendChild(all);
+
+  VIEWS.forEach(v => {
+    const chip = document.createElement('button');
+    chip.textContent = `${v.name} (${(v.ids || []).length})`;
+    chip.style.cssText = _chipCss(ACTIVE_VIEW === v.id);
+    chip.onclick = () => activateView(v.id);
+    bar.appendChild(chip);
+
+    const edit = document.createElement('button');
+    edit.textContent = '✎'; edit.title = 'Edit view';
+    edit.style.cssText = 'font-size:0.78rem;color:#6b7280;padding:2px 3px;cursor:pointer;background:none;border:none;';
+    edit.onclick = () => openViewEditor(v.id);
+    bar.appendChild(edit);
+
+    const del = document.createElement('button');
+    del.textContent = '✕'; del.title = 'Delete view';
+    del.style.cssText = 'font-size:0.78rem;color:#ef4444;padding:2px 6px 2px 0;cursor:pointer;background:none;border:none;';
+    del.onclick = () => { if (confirm(`Delete view "${v.name}"?`)) deleteView(v.id); };
+    bar.appendChild(del);
+  });
+
+  const add = document.createElement('button');
+  add.textContent = '＋ New view';
+  add.style.cssText = 'font-size:0.78rem;color:#4f46e5;font-weight:600;padding:3px 10px;cursor:pointer;background:none;border:1px dashed #c7d2fe;border-radius:99px;';
+  add.onclick = () => openViewEditor(null);
+  bar.appendChild(add);
+}
+
+function activateView(id) {
+  ACTIVE_VIEW = (ACTIVE_VIEW === id) ? null : id;   // click again to turn off
+  if (ACTIVE_VIEW) localStorage.setItem(ACTIVE_KEY, ACTIVE_VIEW);
+  else localStorage.removeItem(ACTIVE_KEY);
+  renderScan();
+}
+
+function deleteView(id) {
+  VIEWS = VIEWS.filter(v => v.id !== id);
+  _saveViews();
+  if (ACTIVE_VIEW === id) { ACTIVE_VIEW = null; localStorage.removeItem(ACTIVE_KEY); }
+  renderScan();
+}
+
+function openViewEditor(id) {
+  if (!SCAN || !(SCAN.people || []).length) { alert('Scan a date first so I have the list of people.'); return; }
+  const editor = document.getElementById('viewEditor');
+  const v = id ? VIEWS.find(x => x.id === id) : null;
+  const chosen = new Set((v ? v.ids : []).map(Number));
+
+  let html = '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;background:#fff;">';
+  html += `<div style="font-weight:700;font-size:0.85rem;margin-bottom:8px;">${v ? 'Edit view' : 'New view'}</div>`;
+  html += `<input id="viewName" placeholder="View name (e.g. My Crew)" value="${v ? esc(v.name) : ''}" style="width:100%;border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:0.85rem;margin-bottom:8px;">`;
+  html += '<div style="max-height:240px;overflow:auto;border:1px solid #f3f4f6;border-radius:8px;padding:6px;display:flex;flex-direction:column;gap:1px;">';
+  (SCAN.people || []).forEach(p => {
+    html += `<label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;padding:3px 4px;cursor:pointer;">`
+      + `<input type="checkbox" class="view-person" value="${p.id}" ${chosen.has(Number(p.id)) ? 'checked' : ''}> ${esc(p.name)}</label>`;
+  });
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">'
+    + `<button onclick="document.getElementById('viewEditor').classList.add('hidden')" style="font-size:0.8rem;color:#6b7280;padding:5px 10px;background:none;border:none;cursor:pointer;">Cancel</button>`
+    + `<button onclick="saveViewFromEditor('${id || ''}')" style="font-size:0.8rem;font-weight:600;color:#fff;background:#4f46e5;padding:5px 14px;border-radius:8px;border:none;cursor:pointer;">Save view</button>`
+    + '</div></div>';
+  editor.innerHTML = html;
+  editor.classList.remove('hidden');
+}
+
+function saveViewFromEditor(id) {
+  const name = (document.getElementById('viewName').value || '').trim();
+  const ids  = [...document.querySelectorAll('.view-person:checked')].map(cb => Number(cb.value));
+  if (!name)       { alert('Give the view a name.'); return; }
+  if (!ids.length) { alert('Pick at least one person.'); return; }
+  if (id) {
+    const v = VIEWS.find(x => x.id === id);
+    if (v) { v.name = name; v.ids = ids; }
+  } else {
+    const nv = { id: _genId(), name, ids };
+    VIEWS.push(nv);
+    ACTIVE_VIEW = nv.id; localStorage.setItem(ACTIVE_KEY, ACTIVE_VIEW);
+  }
+  _saveViews();
+  document.getElementById('viewEditor').classList.add('hidden');
+  renderScan();
 }
 
 async function runScan() {
@@ -231,7 +399,9 @@ async function runScan() {
       eb.classList.remove('hidden');
       return;
     }
-    renderScan(data);
+    SCAN = data;
+    if (data.dept_counts) console.log('Departments seen (after hiding cleaning):', data.dept_counts);
+    renderScan();
   } catch (e) {
     document.getElementById('loading').classList.add('hidden');
     const eb = document.getElementById('errorBox');
@@ -337,7 +507,8 @@ function _renderAssignResults(data, personName) {
   box.classList.remove('hidden');
 }
 
-// Default date = today. Scan only on click.
+// Default date = today. Scan only on click. Show saved views immediately.
 document.getElementById('theDate').value = _ymd(new Date());
+_renderViewsBar();
 </script>
 {% endblock %}
