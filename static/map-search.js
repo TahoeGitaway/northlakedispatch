@@ -772,8 +772,9 @@ function _fmtTaskDate(ds) {
 }
 
 // "PCI" as a standalone token in a task title = priority check-in (arrive by noon).
+// Any punctuation counts as a separator, so "(PCI)", "PCI.", "PCI*" all still match.
 function _titleHasPci(title) {
-  return (" " + String(title || "").toLowerCase().replace(/[-:/]/g, " ") + " ").includes(" pci ");
+  return (" " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ").includes(" pci ");
 }
 
 // Low-confidence name matches — let the user keep or reject each before it

@@ -77,7 +77,8 @@ function _applyHandled(card, handled) {
   }
 }
 
-function toggleHandled(btn, propName) {
+function toggleHandled(btn) {
+  const propName = btn.dataset.prop;
   const handled = _getHandled();
   const card    = btn.closest('.ht-card');
   if (handled.has(propName)) {
@@ -108,7 +109,8 @@ function _fmtTime(ts) {
 }
 
 function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                        .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 async function runScan() {
@@ -200,8 +202,8 @@ async function runScan() {
             <div style="font-size:0.75rem;color:#6b7280;text-align:right;">
               ${_fmtDate(r.last_date)} · ${daysText}
             </div>
-            <button class="handled-btn"
-                    onclick="toggleHandled(this, ${JSON.stringify(r.property)})"
+            <button class="handled-btn" data-prop="${esc(r.property)}"
+                    onclick="toggleHandled(this)"
                     style="font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:99px;cursor:pointer;
                            background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;">
               Mark handled

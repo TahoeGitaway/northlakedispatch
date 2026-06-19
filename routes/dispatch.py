@@ -77,8 +77,11 @@ def _match_local_property(bw_name: str, db_props: dict):
 def _title_has_pci(title: str) -> bool:
     """True if 'PCI' appears as a standalone token in a task title. A PCI Walk Thru
     is a priority check-in (must arrive by noon) — it lives only in the title and is
-    easy to overlook, so we surface it automatically."""
-    t = " " + (title or "").lower().replace("-", " ").replace(":", " ").replace("/", " ") + " "
+    easy to overlook, so we surface it automatically. ANY punctuation around the
+    token counts as a separator, so '(PCI)', 'PCI.', 'PCI*', 'Walk Thru-PCI' all
+    still match — a stray bracket must never let a noon arrival slip through."""
+    import re
+    t = " " + re.sub(r"[^a-z0-9]+", " ", (title or "").lower()) + " "
     return " pci " in t
 
 
@@ -1444,6 +1447,60 @@ def bw_task_probe():
                  f"/public/inventory/v1/task/{task_id}/log"):
         body, status = _bw_get_raw(token, path)
         out[path] = {"status": status, "body": body}
+    return jsonify(out)
+
+
+@dispatch_bp.route("/api/bw-property-probe")
+@login_required
+def bw_property_probe():
+    """Admin diagnostic (READ-ONLY): dump a property's full detail so we can find
+    whether Breezeway exposes a 'group' field (and its exact name) for the
+    batch-assign-by-group tool, plus try the likely group-list endpoints.
+    Usage: ?property_id=123  (omit to auto-dump the first active property)."""
+    from routes.briefing import _get_breezeway_token
+    if not getattr(current_user, "is_admin", False):
+        return jsonify({"error": "admin only"}), 403
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+
+    out = {}
+    pid = (request.args.get("property_id") or "").strip()
+
+    # No id given → grab the first active property's id from the list endpoint.
+    if not pid:
+        listing, st = _bw_get_raw(token, "/public/inventory/v1/property?limit=1&status=active")
+        items = []
+        if isinstance(listing, dict):
+            items = listing.get("results") or listing.get("data") or []
+        elif isinstance(listing, list):
+            items = listing
+        first = items[0] if items and isinstance(items[0], dict) else None
+        out["list_first"] = {"status": st,
+                             "keys": list(first.keys()) if first else None,
+                             "body": first}
+        if first:
+            pid = str(first.get("id") or "")
+
+    if pid:
+        detail, st = _bw_get_raw(token, f"/public/inventory/v1/property/{pid}")
+        out["property_detail"] = {"status": st,
+                                  "keys": list(detail.keys()) if isinstance(detail, dict) else None,
+                                  "body": detail}
+        # Surface any field whose NAME hints at a group/zone/area/tag.
+        if isinstance(detail, dict):
+            hints = ("group", "zone", "area", "region", "cluster", "tag", "portfolio")
+            out["group_like_fields"] = {k: v for k, v in detail.items()
+                                        if any(w in k.lower() for w in hints)}
+
+    # Try likely group-list endpoints so we can see every group + its id.
+    for path in ("/public/inventory/v1/group",
+                 "/public/inventory/v1/groups",
+                 "/public/inventory/v1/property-group",
+                 "/public/inventory/v1/property_group"):
+        body, status = _bw_get_raw(token, path)
+        if status is not None:
+            out[path] = {"status": status, "body": body}
     return jsonify(out)
 
 # ── Remove all assigned task times for a person on a day (admin, destructive) ──

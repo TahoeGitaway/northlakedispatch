@@ -14,7 +14,7 @@ import requests
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Blueprint, render_template, jsonify
+from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required
 
 from routes.auth import admin_required
@@ -226,12 +226,25 @@ def _lease_prep_scan_inner():
     from routes.briefing import _get_live_ref_cache, _ensure_property_cache
     _ensure_property_cache()
 
-    today   = date.today()
-    horizon = today + timedelta(days=30)
+    # Date span to scan for lease ARRIVALS. Defaults to today → +30 days, but the
+    # user can pick a shorter (or different) range. End before start is swapped.
+    today = date.today()
+
+    def _parse_date(val, default):
+        try:
+            return date.fromisoformat(str(val)[:10])
+        except (ValueError, TypeError):
+            return default
+
+    payload = request.get_json(silent=True) or {}
+    start   = _parse_date(payload.get("from"), today)
+    end     = _parse_date(payload.get("to"),   today + timedelta(days=30))
+    if end < start:
+        start, end = end, start
 
     # Step A: fetch reservations
     try:
-        reservations = _fetch_reservations(token, today, horizon)
+        reservations = _fetch_reservations(token, start, end)
     except Exception as e:
         import traceback; return jsonify({"error": f"STEP A (fetch reservations): {e}\n{traceback.format_exc()}"})
 
@@ -241,8 +254,9 @@ def _lease_prep_scan_inner():
     except Exception as e:
         import traceback; return jsonify({"error": f"STEP B (classify leases): {e}\n{traceback.format_exc()}"})
 
+    range_used = {"from": start.isoformat(), "to": end.isoformat()}
     if not leases:
-        return jsonify({"leases": []})
+        return jsonify({"leases": [], "range": range_used})
 
     ref_cache = _get_live_ref_cache()
 
@@ -314,4 +328,4 @@ def _lease_prep_scan_inner():
                             "debug": traceback.format_exc()[-300:]})
 
     results.sort(key=lambda x: x["checkin"])
-    return jsonify({"leases": results})
+    return jsonify({"leases": results, "range": range_used})
