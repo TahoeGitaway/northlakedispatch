@@ -1424,29 +1424,63 @@ def route_discrepancies():
 @dispatch_bp.route("/api/bw-task-probe")
 @login_required
 def bw_task_probe():
-    """Admin diagnostic: dump a task's detail + try history endpoints, so we can
-    discover what who/when data Breezeway actually exposes. Usage: ?task_id=123"""
-    from routes.briefing import _get_breezeway_token
+    """Admin diagnostic: dump a task's detail so we can see the `assignments` shape
+    (needed to learn the assignee-id field for batch assign). Usage: ?task_id=123 —
+    or NO args to AUTO-FIND a task that already has an assignee (optional
+    ?date=YYYY-MM-DD, default today)."""
+    from routes.briefing import (_get_breezeway_token, _fetch_bw_endpoint,
+                                  _ensure_property_cache, _get_live_property_cache,
+                                  _get_live_ref_cache)
     if not getattr(current_user, "is_admin", False):
         return jsonify({"error": "admin only"}), 403
-    task_id = (request.args.get("task_id") or "").strip()
-    if not task_id:
-        return jsonify({"error": "task_id required"}), 400
     token = _get_breezeway_token()
     if not token:
         return jsonify({"error": "Could not authenticate with Breezeway"}), 503
 
     out = {}
+    task_id = (request.args.get("task_id") or "").strip()
+
+    # No id given → auto-find an already-assigned task so nobody has to hunt for one.
+    if not task_id:
+        from datetime import date as _date
+        _ensure_property_cache()
+        prop_cache = _get_live_property_cache()
+        ref_cache  = _get_live_ref_cache()
+        date_str   = (request.args.get("date") or _date.today().isoformat())[:10]
+        ref_ids    = [ref_cache.get(p) or str(p) for p in prop_cache]
+
+        def _tasks(ref_id):
+            for dp in ({"scheduled_date": f"{date_str},{date_str}"},
+                       {"start_date": date_str, "end_date": date_str}):
+                r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
+                                                  {"reference_property_id": ref_id, **dp})
+                if status == 200:
+                    return r or []
+            return []
+
+        found = None
+        with ThreadPoolExecutor(max_workers=25) as ex:
+            for tasks in ex.map(_tasks, ref_ids):
+                for t in (tasks or []):
+                    if t.get("assignments"):
+                        found = t
+                        break
+                if found:
+                    break
+        if not found:
+            out["auto_find"] = (f"No assigned tasks found on {date_str}. "
+                                "Try ?date=YYYY-MM-DD with a busy day, or ?task_id=<id>.")
+            return jsonify(out)
+        out["auto_found"] = {"date": date_str, "task_id": found.get("id")}
+        task_id = str(found.get("id"))
+
     detail, st = _bw_get_raw(token, f"/public/inventory/v1/task/{task_id}")
-    out["task_detail"] = {"status": st,
-                          "keys": list(detail.keys()) if isinstance(detail, dict) else None,
-                          "body": detail}
-    for path in (f"/public/inventory/v1/task/{task_id}/history",
-                 f"/public/inventory/v1/task/{task_id}/audit",
-                 f"/public/inventory/v1/task/{task_id}/activity",
-                 f"/public/inventory/v1/task/{task_id}/log"):
-        body, status = _bw_get_raw(token, path)
-        out[path] = {"status": status, "body": body}
+    out["task_detail"] = {
+        "status":      st,
+        "keys":        list(detail.keys()) if isinstance(detail, dict) else None,
+        "assignments": detail.get("assignments") if isinstance(detail, dict) else None,
+        "body":        detail,
+    }
     return jsonify(out)
 
 
