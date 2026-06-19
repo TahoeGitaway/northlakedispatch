@@ -42,6 +42,15 @@ def _get_token():
     return _get_breezeway_token()
 
 
+def _results(data):
+    """Breezeway list endpoints return either a bare list or {results|data: [...]}."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("results") or data.get("data") or []
+    return []
+
+
 def _refresh_group_map(token: str):
     """Fetch every active property's `groups` array (the property list carries it)."""
     global _group_map_pid, _group_by_id, _group_ts
@@ -59,8 +68,7 @@ def _refresh_group_map(token: str):
             break
         if not r.ok:
             break
-        data  = r.json()
-        items = data.get("results", data.get("data", data if isinstance(data, list) else [])) or []
+        items = _results(r.json())
         for p in items:
             if not isinstance(p, dict):
                 continue
@@ -106,8 +114,7 @@ def _fetch_people(token: str) -> list:
             break
         if not r.ok:
             break
-        data  = r.json()
-        items = data.get("results", data.get("data", data if isinstance(data, list) else [])) or []
+        items = _results(r.json())
         for p in items:
             if not isinstance(p, dict):
                 continue
