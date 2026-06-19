@@ -1466,41 +1466,57 @@ def bw_property_probe():
 
     out = {}
     pid = (request.args.get("property_id") or "").strip()
-
-    # No id given → grab the first active property's id from the list endpoint.
-    if not pid:
-        listing, st = _bw_get_raw(token, "/public/inventory/v1/property?limit=1&status=active")
-        items = []
-        if isinstance(listing, dict):
-            items = listing.get("results") or listing.get("data") or []
-        elif isinstance(listing, list):
-            items = listing
-        first = items[0] if items and isinstance(items[0], dict) else None
-        out["list_first"] = {"status": st,
-                             "keys": list(first.keys()) if first else None,
-                             "body": first}
-        if first:
-            pid = str(first.get("id") or "")
-
     if pid:
         detail, st = _bw_get_raw(token, f"/public/inventory/v1/property/{pid}")
         out["property_detail"] = {"status": st,
                                   "keys": list(detail.keys()) if isinstance(detail, dict) else None,
                                   "body": detail}
-        # Surface any field whose NAME hints at a group/zone/area/tag.
-        if isinstance(detail, dict):
-            hints = ("group", "zone", "area", "region", "cluster", "tag", "portfolio")
-            out["group_like_fields"] = {k: v for k, v in detail.items()
-                                        if any(w in k.lower() for w in hints)}
 
-    # Try likely group-list endpoints so we can see every group + its id.
-    for path in ("/public/inventory/v1/group",
-                 "/public/inventory/v1/groups",
-                 "/public/inventory/v1/property-group",
-                 "/public/inventory/v1/property_group"):
-        body, status = _bw_get_raw(token, path)
-        if status is not None:
-            out[path] = {"status": status, "body": body}
+    # Breezeway embeds groups per-property (no group-list endpoint — those 404).
+    # Scan every active property to find ones that actually HAVE groups, so we can
+    # see the array's shape (id/name?) and collect the full list of distinct groups.
+    distinct = {}          # json-string -> group object (dedupes)
+    props_with_groups = 0
+    total_scanned = 0
+    sample_array = None
+    sample_property = None
+    page = 1
+    while page <= 5:
+        listing, st = _bw_get_raw(
+            token, f"/public/inventory/v1/property?limit=200&page={page}&status=active")
+        items = []
+        if isinstance(listing, dict):
+            items = listing.get("results") or listing.get("data") or []
+        elif isinstance(listing, list):
+            items = listing
+        if not items:
+            break
+        for p in items:
+            if not isinstance(p, dict):
+                continue
+            total_scanned += 1
+            groups = p.get("groups") or []
+            if groups:
+                props_with_groups += 1
+                if sample_array is None:
+                    sample_array    = groups
+                    sample_property = p.get("name")
+                for g in groups:
+                    try:
+                        distinct[json.dumps(g, sort_keys=True)] = g
+                    except Exception:
+                        distinct[str(g)] = g
+        if len(items) < 200:
+            break
+        page += 1
+
+    out["groups_scan"] = {
+        "total_scanned":          total_scanned,
+        "properties_with_groups": props_with_groups,
+        "sample_groups_array":    sample_array,      # shape of one property's groups
+        "sample_from_property":   sample_property,
+        "distinct_groups":        list(distinct.values()),  # every group seen
+    }
     return jsonify(out)
 
 # ── Remove all assigned task times for a person on a day (admin, destructive) ──
