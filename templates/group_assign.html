@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Assign by Group — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6 pb-32">
+
+  <div class="mb-5">
+    <h2 class="text-xl font-bold text-gray-800">Assign Tasks by Group</h2>
+    <p class="text-xs text-gray-400 mt-0.5">
+      Pick a date, then tick any tasks and assign them to a person. Tasks are
+      bucketed by the property's top-level group. Check-ins are flagged.
+    </p>
+
+    <div class="flex items-end gap-3 flex-wrap mt-3">
+      <div>
+        <label for="theDate" class="block text-[11px] font-semibold text-gray-500 mb-1">Date</label>
+        <input type="date" id="theDate"
+               class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none">
+      </div>
+      <button onclick="runScan()"
+              class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+        Scan
+      </button>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin"></div>
+    <span>Fetching tasks and groups…</span>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
+       style="background:#fef2f2;border:1px solid #fecaca;"></div>
+
+  <!-- Empty -->
+  <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
+       style="background:#f9fafb;border:1px solid #e5e7eb;">
+    No tasks found for the selected date.
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="space-y-5"></div>
+</div>
+
+<!-- Sticky action bar -->
+<div id="actionBar" class="hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40">
+  <div class="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+    <span id="selCount" class="text-sm font-semibold text-gray-700">0 selected</span>
+    <select id="personSel"
+            class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+      <option value="">— pick a person —</option>
+    </select>
+    <button onclick="assignSelected()"
+            class="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors">
+      Assign selected
+    </button>
+    <span class="text-[11px] text-amber-600">⚠ Writes to Breezeway · sets the task's assignee to the chosen person</span>
+  </div>
+</div>
+
+<script>
+let SCAN = null;   // last scan payload
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                        .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function _ymd(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function _fmtTime(ts) {
+  if (!ts) return null;
+  const p = String(ts).split(':'); if (p.length < 2) return ts;
+  let h = parseInt(p[0]); const suf = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+  return `${h}:${p[1]} ${suf}`;
+}
+
+function _selectedIds() {
+  return [...document.querySelectorAll('.task-cb:checked')].map(cb => Number(cb.dataset.tid));
+}
+function _refreshCount() {
+  const n = _selectedIds().length;
+  document.getElementById('selCount').textContent = `${n} selected`;
+  document.getElementById('actionBar').classList.toggle('hidden', !SCAN);
+}
+
+function buildGroup(group) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'border-radius:12px;border:1px solid #e5e7eb;background:#fff;overflow:hidden;';
+
+  const head = document.createElement('div');
+  head.style.cssText = 'background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;gap:12px;';
+  head.innerHTML = `
+    <div style="font-weight:700;font-size:0.92rem;color:#1f2937;">${esc(group.group)}
+      <span style="font-weight:500;color:#9ca3af;font-size:0.8rem;">· ${group.tasks.length} task${group.tasks.length!==1?'s':''}</span>
+    </div>
+    <label style="font-size:0.75rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:5px;">
+      <input type="checkbox" class="group-cb"> Select all
+    </label>`;
+  wrap.appendChild(head);
+
+  group.tasks.forEach(t => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:10px 16px;border-bottom:1px solid #f3f4f6;';
+    const when = [t.date ? t.date.slice(5).replace('-','/') : '', _fmtTime(t.time)].filter(Boolean).join(' ') || '—';
+    const who  = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'unassigned';
+    const arrivalBadge = t.arrival
+      ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">✓ CHECK-IN</span>` : '';
+    const pciBadge = t.pci
+      ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#7c3aed;color:#fff;">⚡ PCI · BY NOON</span>` : '';
+    row.innerHTML = `
+      <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+          <span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>
+          ${arrivalBadge}${pciBadge}
+        </div>
+        <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${esc(t.property)}</div>
+        <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;display:flex;gap:12px;flex-wrap:wrap;">
+          <span>📅 ${esc(when)}</span>
+          <span>👤 currently: ${esc(who)}</span>
+        </div>
+      </div>`;
+    wrap.appendChild(row);
+  });
+
+  // Wire "select all in group"
+  head.querySelector('.group-cb').addEventListener('change', e => {
+    wrap.querySelectorAll('.task-cb').forEach(cb => { cb.checked = e.target.checked; });
+    _refreshCount();
+  });
+  wrap.querySelectorAll('.task-cb').forEach(cb => cb.addEventListener('change', _refreshCount));
+  return wrap;
+}
+
+function renderScan(data) {
+  SCAN = data;
+  const results = document.getElementById('results');
+  results.innerHTML = '';
+
+  // People dropdown
+  const sel = document.getElementById('personSel');
+  sel.innerHTML = '<option value="">— pick a person —</option>';
+  (data.people || []).forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name;
+    sel.appendChild(o);
+  });
+
+  const groups = data.groups || [];
+  if (!groups.length || !data.total_tasks) {
+    document.getElementById('emptyBox').classList.remove('hidden');
+    document.getElementById('actionBar').classList.add('hidden');
+    return;
+  }
+  groups.forEach(g => results.appendChild(buildGroup(g)));
+  _refreshCount();
+}
+
+async function runScan() {
+  const date = document.getElementById('theDate').value;
+  SCAN = null;
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('emptyBox').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('actionBar').classList.add('hidden');
+  document.getElementById('results').innerHTML = '';
+
+  try {
+    const resp = await fetch('/admin/group-assign/scan', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ date }),
+    });
+    const data = await resp.json();
+    document.getElementById('loading').classList.add('hidden');
+    if (data.error) {
+      const eb = document.getElementById('errorBox');
+      eb.innerHTML = `<pre style="white-space:pre-wrap;font-size:0.75rem;margin:0;">${esc(data.error)}</pre>`;
+      eb.classList.remove('hidden');
+      return;
+    }
+    renderScan(data);
+  } catch (e) {
+    document.getElementById('loading').classList.add('hidden');
+    const eb = document.getElementById('errorBox');
+    eb.textContent = 'Network error: ' + e.message;
+    eb.classList.remove('hidden');
+  }
+}
+
+async function assignSelected() {
+  const ids = _selectedIds();
+  const sel = document.getElementById('personSel');
+  const assignee_id = sel.value;
+  const personName  = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
+  if (!ids.length)       { alert('Tick at least one task first.'); return; }
+  if (!assignee_id)      { alert('Pick a person to assign to.'); return; }
+  if (!confirm(`Assign ${ids.length} task(s) to ${personName}? This writes to Breezeway and sets the assignee.`)) return;
+
+  const eb = document.getElementById('errorBox');
+  eb.classList.add('hidden');
+  try {
+    const resp = await fetch('/admin/group-assign/assign', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ task_ids: ids, assignee_id: Number(assignee_id) }),
+    });
+    const data = await resp.json();
+    if (data.error) { eb.textContent = data.error; eb.classList.remove('hidden'); return; }
+
+    // Reflect results: re-scan so current assignees update, then report.
+    const ok = data.ok_count || 0, fail = data.fail_count || 0;
+    alert(`Assigned ${ok} task(s) to ${personName}.` + (fail ? `\n${fail} failed — see console.` : ''));
+    if (fail) console.log('Assign failures:', data.results.filter(r => !r.ok));
+    runScan();
+  } catch (e) {
+    eb.textContent = 'Network error: ' + e.message;
+    eb.classList.remove('hidden');
+  }
+}
+
+// Default date = today. Scan only on click.
+document.getElementById('theDate').value = _ymd(new Date());
+</script>
+{% endblock %}
