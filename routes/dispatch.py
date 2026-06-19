@@ -1485,6 +1485,91 @@ def bw_task_probe():
     return jsonify(out)
 
 
+@dispatch_bp.route("/api/bw-assign-test")
+@login_required
+def bw_assign_test():
+    """Admin diagnostic that WRITES — run ONLY on a throwaway task. Tries several
+    PATCH payload shapes to learn how Breezeway sets a task's assignee, re-reading
+    the task after each to see which one actually stuck (and whether it ADDS or
+    REPLACES). Also pulls staff-roster endpoints in the same call.
+      Usage: ?task_id=123                 (assignee defaults to 250595 / Brian Nigon)
+             ?task_id=123&assignee_id=250606
+    """
+    from routes.briefing import _get_breezeway_token
+    if not getattr(current_user, "is_admin", False):
+        return jsonify({"error": "admin only"}), 403
+    task_id = (request.args.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id required — use a THROWAWAY task; this WRITES."}), 400
+    try:
+        assignee_id = int(request.args.get("assignee_id") or 250595)
+    except ValueError:
+        return jsonify({"error": "assignee_id must be a number"}), 400
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+
+    headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
+    url = f"https://api.breezeway.io/public/inventory/v1/task/{task_id}"
+
+    def _assignees_now():
+        d, _ = _bw_get_raw(token, f"/public/inventory/v1/task/{task_id}")
+        if isinstance(d, dict):
+            return [a.get("assignee_id") for a in (d.get("assignments") or [])]
+        return None
+
+    before = _assignees_now()
+    attempts, winner = [], None
+    payloads = [
+        {"assignments": [{"assignee_id": assignee_id}]},
+        {"assignee_ids": [assignee_id]},
+        {"assignments": [assignee_id]},
+        {"assigned_to":  [assignee_id]},
+    ]
+    for p in payloads:
+        try:
+            r = requests.patch(url, headers=headers, json=p, timeout=15)
+            after = _assignees_now()
+            stuck = bool(after and assignee_id in after)
+            attempts.append({"PATCH": p, "status": r.status_code,
+                             "assignees_after": after, "stuck": stuck,
+                             "resp": (r.text or "")[:200]})
+            if stuck:
+                winner = {"PATCH": p}
+                break
+        except Exception as e:
+            attempts.append({"PATCH": p, "error": str(e)})
+
+    if not winner:
+        for sub in (f"{url}/assignment", f"{url}/assignments"):
+            try:
+                r = requests.post(sub, headers=headers,
+                                  json={"assignee_id": assignee_id}, timeout=15)
+                after = _assignees_now()
+                stuck = bool(after and assignee_id in after)
+                attempts.append({"POST": sub, "status": r.status_code,
+                                 "assignees_after": after, "stuck": stuck,
+                                 "resp": (r.text or "")[:200]})
+                if stuck:
+                    winner = {"POST": sub, "body": {"assignee_id": assignee_id}}
+                    break
+            except Exception as e:
+                attempts.append({"POST": sub, "error": str(e)})
+
+    # Staff roster — try the likely list endpoints so the tool's dropdown has names.
+    rosters = {}
+    for path in ("/public/inventory/v1/user", "/public/inventory/v1/users",
+                 "/public/inventory/v1/employee", "/public/inventory/v1/supplier"):
+        body, status = _bw_get_raw(token, path)
+        if status is not None:
+            rosters[path] = {"status": status,
+                             "sample": body[:3] if isinstance(body, list) else body}
+
+    return jsonify({"task_id": task_id, "assignee_id": assignee_id,
+                    "assignees_before": before, "winner": winner,
+                    "attempts": attempts, "rosters": rosters})
+
+
 @dispatch_bp.route("/api/bw-property-probe")
 @login_required
 def bw_property_probe():
