@@ -214,7 +214,8 @@ def _scan_inner():
 
     # Bucket by top-level group. STRICT date guard (only this exact date — the
     # per-property query returns undated/off-date recurring tasks otherwise).
-    seen, buckets = set(), {}
+    seen, buckets, checkins = set(), {}, []
+    hidden_cleaning = 0
     for t in all_tasks:
         tid = t.get("id")
         if tid in seen:
@@ -223,19 +224,34 @@ def _scan_inner():
         t_date = (t.get("scheduled_date") or "")[:10]
         if t_date != date_str:
             continue
-        home_id = t.get("home_id") or t.get("property_id")
-        title   = _bw_task_title(t)
-        group   = _top_group_name(_group_map_pid.get(str(home_id), []))
-        buckets.setdefault(group, []).append({
+        # Hide cleaning-department tasks entirely — never touched from here.
+        dept = t.get("type_department")
+        if isinstance(dept, dict):
+            dept = dept.get("code") or dept.get("name") or ""
+        if str(dept).strip().lower() == "cleaning":
+            hidden_cleaning += 1
+            continue
+        home_id    = t.get("home_id") or t.get("property_id")
+        title      = _bw_task_title(t)
+        group      = _top_group_name(_group_map_pid.get(str(home_id), []))
+        is_arrival = str(home_id) in arrival_pids
+        entry = {
             "task_id":   tid,
             "name":      title,
             "property":  _get_property_name(home_id),
             "date":      t_date,
             "time":      (str(t.get("scheduled_time") or "")[:5]) or None,
-            "arrival":   str(home_id) in arrival_pids,
+            "arrival":   is_arrival,
             "pci":       _title_has_pci(title),
             "assignees": _assignee_names(t),
-        })
+            "group":     group,
+        }
+        # Check-in houses get their OWN section (easy selection) — pulled out of the
+        # group buckets so a task never appears, or is selected, twice.
+        if is_arrival:
+            checkins.append(entry)
+        else:
+            buckets.setdefault(group, []).append(entry)
 
     groups_out = []
     for g in sorted(buckets, key=lambda x: (x == "Ungrouped", x.lower())):
@@ -243,11 +259,14 @@ def _scan_inner():
                                                   (x["name"] or "").lower()))
         groups_out.append({"group": g, "tasks": tasks})
 
+    checkins.sort(key=lambda x: ((x["property"] or "").lower(), (x["name"] or "").lower()))
     return jsonify({
         "date":        date_str,
         "people":      _fetch_people(token),
+        "checkins":    checkins,
         "groups":      groups_out,
-        "total_tasks": sum(len(b["tasks"]) for b in groups_out),
+        "total_tasks": len(checkins) + sum(len(b["tasks"]) for b in groups_out),
+        "hidden_cleaning": hidden_cleaning,
     })
 
 

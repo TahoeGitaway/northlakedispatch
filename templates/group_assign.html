@@ -33,6 +33,10 @@
   <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
        style="background:#fef2f2;border:1px solid #fecaca;"></div>
 
+  <!-- Assignment result (raw per-task feedback) -->
+  <div id="assignResult" class="hidden rounded-xl px-5 py-4 text-sm mb-4"
+       style="background:#fff;border:1px solid #e5e7eb;"></div>
+
   <!-- Empty -->
   <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
        style="background:#f9fafb;border:1px solid #e5e7eb;">
@@ -85,14 +89,39 @@ function _refreshCount() {
   document.getElementById('actionBar').classList.toggle('hidden', !SCAN);
 }
 
-function buildGroup(group) {
+function _taskRow(t, isCheckin) {
+  const row = document.createElement('div');
+  row.className = 'task-row';
+  row.dataset.tid = t.task_id;
+  row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:8px 16px 8px 26px;border-bottom:1px solid #f3f4f6;transition:opacity 0.2s;';
+  const when = [t.date ? t.date.slice(5).replace('-','/') : '', _fmtTime(t.time)].filter(Boolean).join(' ') || '—';
+  const arrivalBadge = t.arrival
+    ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">✓ CHECK-IN</span>` : '';
+  const pciBadge = t.pci
+    ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#7c3aed;color:#fff;">⚡ PCI · BY NOON</span>` : '';
+  // In the check-in section, show the property's group so it's still clear where it belongs.
+  const propLine = esc(t.property) + (isCheckin && t.group ? ` <span style="color:#9ca3af;">· ${esc(t.group)}</span>` : '');
+  row.innerHTML = `
+    <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
+    <div style="flex:1;min-width:0;">
+      <div class="task-badges" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+        <span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>
+        ${arrivalBadge}${pciBadge}
+      </div>
+      <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${propLine}</div>
+      <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;">📅 ${esc(when)}</div>
+    </div>`;
+  return row;
+}
+
+function buildGroup(group, isCheckin) {
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'border-radius:12px;border:1px solid #e5e7eb;background:#fff;overflow:hidden;';
+  wrap.style.cssText = `border-radius:12px;border:1px solid ${isCheckin ? '#86efac' : '#e5e7eb'};background:#fff;overflow:hidden;`;
 
   const head = document.createElement('div');
-  head.style.cssText = 'background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;gap:12px;';
+  head.style.cssText = `padding:10px 16px;border-bottom:1px solid ${isCheckin ? '#bbf7d0' : '#e5e7eb'};display:flex;align-items:center;justify-content:space-between;gap:12px;background:${isCheckin ? '#f0fdf4' : '#f8fafc'};`;
   head.innerHTML = `
-    <div style="font-weight:700;font-size:0.92rem;color:#1f2937;">${esc(group.group)}
+    <div style="font-weight:700;font-size:0.92rem;color:${isCheckin ? '#15803d' : '#1f2937'};">${esc(group.group)}
       <span style="font-weight:500;color:#9ca3af;font-size:0.8rem;">· ${group.tasks.length} task${group.tasks.length!==1?'s':''}</span>
     </div>
     <label style="font-size:0.75rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:5px;">
@@ -100,34 +129,41 @@ function buildGroup(group) {
     </label>`;
   wrap.appendChild(head);
 
+  // Separate within the group by CURRENT assignee, each with its own "Select".
+  const byUser = {};
   group.tasks.forEach(t => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:10px 16px;border-bottom:1px solid #f3f4f6;';
-    const when = [t.date ? t.date.slice(5).replace('-','/') : '', _fmtTime(t.time)].filter(Boolean).join(' ') || '—';
-    const who  = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'unassigned';
-    const arrivalBadge = t.arrival
-      ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">✓ CHECK-IN</span>` : '';
-    const pciBadge = t.pci
-      ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#7c3aed;color:#fff;">⚡ PCI · BY NOON</span>` : '';
-    row.innerHTML = `
-      <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
-      <div style="flex:1;min-width:0;">
-        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-          <span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>
-          ${arrivalBadge}${pciBadge}
-        </div>
-        <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${esc(t.property)}</div>
-        <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;display:flex;gap:12px;flex-wrap:wrap;">
-          <span>📅 ${esc(when)}</span>
-          <span>👤 currently: ${esc(who)}</span>
-        </div>
-      </div>`;
-    wrap.appendChild(row);
+    const key = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'Unassigned';
+    (byUser[key] = byUser[key] || []).push(t);
+  });
+  const keys = Object.keys(byUser).sort((a, b) =>
+    ((a === 'Unassigned') - (b === 'Unassigned')) || a.localeCompare(b));
+
+  keys.forEach(key => {
+    const isUn = key === 'Unassigned';
+    const sub  = document.createElement('div');
+    sub.style.cssText = 'background:#fafafa;padding:6px 16px;border-top:1px solid #eef0f2;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;justify-content:space-between;gap:10px;';
+    sub.innerHTML = `
+      <span style="font-size:0.74rem;font-weight:700;color:${isUn ? '#b45309' : '#4b5563'};">👤 ${esc(key)}
+        <span style="font-weight:500;color:#9ca3af;">· ${byUser[key].length}</span></span>
+      <label style="font-size:0.7rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" class="subgroup-cb"> Select</label>`;
+    wrap.appendChild(sub);
+
+    const cbs = [];
+    byUser[key].forEach(t => {
+      const row = _taskRow(t, isCheckin);
+      wrap.appendChild(row);
+      cbs.push(row.querySelector('.task-cb'));
+    });
+    sub.querySelector('.subgroup-cb').addEventListener('change', e => {
+      cbs.forEach(cb => { cb.checked = e.target.checked; });
+      _refreshCount();
+    });
   });
 
   // Wire "select all in group"
   head.querySelector('.group-cb').addEventListener('change', e => {
-    wrap.querySelectorAll('.task-cb').forEach(cb => { cb.checked = e.target.checked; });
+    wrap.querySelectorAll('.task-cb, .subgroup-cb').forEach(cb => { cb.checked = e.target.checked; });
     _refreshCount();
   });
   wrap.querySelectorAll('.task-cb').forEach(cb => cb.addEventListener('change', _refreshCount));
@@ -148,13 +184,28 @@ function renderScan(data) {
     sel.appendChild(o);
   });
 
-  const groups = data.groups || [];
-  if (!groups.length || !data.total_tasks) {
+  const checkins = data.checkins || [];
+  const groups   = data.groups || [];
+  if (!data.total_tasks) {
     document.getElementById('emptyBox').classList.remove('hidden');
     document.getElementById('actionBar').classList.add('hidden');
     return;
   }
-  groups.forEach(g => results.appendChild(buildGroup(g)));
+
+  // Total count summary
+  const summary = document.createElement('div');
+  summary.style.cssText = 'font-size:0.9rem;font-weight:600;color:#374151;';
+  summary.innerHTML = `${data.total_tasks} task${data.total_tasks!==1?'s':''} on ${esc(data.date)}` +
+    ` · <span style="color:#15803d;">${checkins.length} at check-in house${checkins.length!==1?'s':''}</span>` +
+    (data.hidden_cleaning ? ` · <span style="color:#9ca3af;">${data.hidden_cleaning} cleaning hidden</span>` : '');
+  results.appendChild(summary);
+
+  // Check-in houses get their own section first, for easy selection.
+  if (checkins.length) {
+    results.appendChild(buildGroup({ group: '🔑 Check-in houses', tasks: checkins }, true));
+  }
+  // Then the group buckets (non-check-in tasks).
+  groups.forEach(g => results.appendChild(buildGroup(g, false)));
   _refreshCount();
 }
 
@@ -198,25 +249,92 @@ async function assignSelected() {
   if (!assignee_id)      { alert('Pick a person to assign to.'); return; }
   if (!confirm(`Assign ${ids.length} task(s) to ${personName}? This writes to Breezeway and sets the assignee.`)) return;
 
-  const eb = document.getElementById('errorBox');
+  const eb  = document.getElementById('errorBox');
+  const box = document.getElementById('assignResult');
   eb.classList.add('hidden');
+  box.classList.remove('hidden');
+  box.innerHTML = '<div style="color:#6b7280;">Assigning…</div>';
   try {
     const resp = await fetch('/admin/group-assign/assign', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ task_ids: ids, assignee_id: Number(assignee_id) }),
     });
     const data = await resp.json();
-    if (data.error) { eb.textContent = data.error; eb.classList.remove('hidden'); return; }
+    if (data.error) {
+      box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">${esc(data.error)}</div>`;
+      return;
+    }
+    _renderAssignResults(data, personName);
 
-    // Reflect results: re-scan so current assignees update, then report.
+    // No full re-fetch — just gray out the tasks that went through, in place,
+    // so you can keep selecting. A mini toast confirms the result.
     const ok = data.ok_count || 0, fail = data.fail_count || 0;
-    alert(`Assigned ${ok} task(s) to ${personName}.` + (fail ? `\n${fail} failed — see console.` : ''));
-    if (fail) console.log('Assign failures:', data.results.filter(r => !r.ok));
-    runScan();
+    (data.results || []).forEach(r => { if (r.ok) _markAssigned(r.task_id, personName); });
+    _refreshCount();
+    _toast(`✓ ${ok} task${ok!==1?'s':''} → ${personName}` + (fail ? ` · ${fail} failed` : ''), fail === 0);
   } catch (e) {
-    eb.textContent = 'Network error: ' + e.message;
-    eb.classList.remove('hidden');
+    box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">Network error: ${esc(e.message)}</div>`;
   }
+}
+
+// Gray out a reassigned task row in place (no re-fetch) and lock its checkbox.
+function _markAssigned(taskId, personName) {
+  const row = document.querySelector(`.task-row[data-tid="${taskId}"]`);
+  if (!row) return;
+  const cb = row.querySelector('.task-cb');
+  if (cb) { cb.checked = false; cb.disabled = true; }
+  row.style.opacity = '0.45';
+  if (!row.querySelector('.reassigned-badge')) {
+    const b = document.createElement('span');
+    b.className = 'reassigned-badge';
+    b.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;';
+    b.textContent = '→ ' + personName;
+    const badges = row.querySelector('.task-badges');
+    if (badges) badges.appendChild(b);
+  }
+}
+
+// Brief auto-dismissing confirmation near the action bar.
+function _toast(msg, ok) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.style.cssText = 'position:fixed;bottom:74px;right:20px;z-index:60;padding:10px 16px;border-radius:10px;font-size:0.85rem;font-weight:600;color:#fff;box-shadow:0 6px 18px rgba(0,0,0,0.18);transition:opacity 0.3s;';
+    document.body.appendChild(t);
+  }
+  t.style.background = ok ? '#059669' : '#b45309';
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.opacity = '0'; }, 3500);
+}
+
+// Raw per-task confirmation that each assignment did or did not go through.
+function _renderAssignResults(data, personName) {
+  const box = document.getElementById('assignResult');
+  const results = data.results || [];
+  const ok = data.ok_count || 0, fail = data.fail_count || 0;
+
+  let html = `<div style="font-weight:700;font-size:0.9rem;margin-bottom:8px;color:${fail ? '#b45309' : '#15803d'};">`
+    + `Assign → ${esc(personName)} · ${ok} succeeded${fail ? ` · ${fail} FAILED` : ''}</div>`;
+
+  html += '<div style="display:flex;flex-direction:column;gap:3px;">';
+  results.forEach(r => {
+    const now = (r.assignees_after && r.assignees_after.length) ? r.assignees_after.join(', ') : '—';
+    html += `<div style="font-size:0.74rem;color:${r.ok ? '#374151' : '#b91c1c'};">`
+      + `${r.ok ? '✓' : '✗'} task <b>${esc(r.task_id)}</b> — ${esc(r.detail || '')}`
+      + (r.ok ? ` — now assigned to: <b>${esc(now)}</b>` : '')
+      + `</div>`;
+  });
+  html += '</div>';
+
+  // Full raw payload, collapsed, for absolute confirmation.
+  html += `<details style="margin-top:10px;"><summary style="font-size:0.72rem;color:#6b7280;cursor:pointer;">Raw response data</summary>`
+    + `<pre style="white-space:pre-wrap;font-size:0.68rem;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:4px;">${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+
+  box.innerHTML = html;
+  box.classList.remove('hidden');
 }
 
 // Default date = today. Scan only on click.
