@@ -281,7 +281,12 @@ function _applyView(data) {
   const v = VIEWS.find(x => x.id === ACTIVE_VIEW);
   if (!v) return data;
   const idSet = new Set((v.ids || []).map(Number));
-  const match = t => (t.assignee_ids || []).some(id => idSet.has(Number(id)));
+  // A view shows its people's tasks PLUS all unassigned tasks — you always need
+  // to be able to delegate the unassigned ones, whatever view you're in.
+  const match = t => {
+    const ids = t.assignee_ids || [];
+    return ids.length === 0 || ids.some(id => idSet.has(Number(id)));
+  };
   const checkins = (data.checkins || []).filter(match);
   const groups   = (data.groups || []).map(g => ({ group: g.group, tasks: g.tasks.filter(match) }))
                                        .filter(g => g.tasks.length);
@@ -401,7 +406,21 @@ async function runScan() {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ date }),
     });
-    const data = await resp.json();
+    const raw = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      // Non-JSON (e.g. "upstream error" = the proxy timed out before the scan
+      // finished). The backend caches its result, so a second Scan returns fast.
+      document.getElementById('loading').classList.add('hidden');
+      const eb = document.getElementById('errorBox');
+      eb.innerHTML = `<div style="font-weight:600;">The scan took too long for the server to return in time`
+        + ` (it replied: "${esc(raw.slice(0, 80))}").</div>`
+        + `<div style="margin-top:4px;">It likely finished in the background — <b>click Scan again</b> and it should load instantly.</div>`;
+      eb.classList.remove('hidden');
+      return;
+    }
     document.getElementById('loading').classList.add('hidden');
     if (data.error) {
       const eb = document.getElementById('errorBox');

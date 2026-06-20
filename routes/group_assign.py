@@ -36,6 +36,16 @@ _group_map_pid: dict = {}   # {str(property_id): [group dicts]}
 _group_by_id:   dict = {}   # {group_id: group dict}  (to walk the hierarchy)
 _group_ts:      float = 0.0
 
+# Per-date scan-result cache. The per-property task sweep (~hundreds of Breezeway
+# calls) can run long enough that the hosting proxy times out ("upstream error")
+# even though the backend finishes — caching the result means the retry returns
+# instantly. Cleared whenever an assignment is written.
+_scan_cache:   dict  = {}   # date_str -> (timestamp, result_dict)
+_SCAN_TTL            = 300
+
+# Staff roster cache (fetched on every scan otherwise).
+_people_cache: dict  = {"ts": 0.0, "data": []}
+
 
 def _get_token():
     from routes.briefing import _get_breezeway_token
@@ -102,7 +112,9 @@ def _top_group_name(groups: list) -> str:
 
 
 def _fetch_people(token: str) -> list:
-    """Active staff roster: [{id, name}], sorted by name."""
+    """Active staff roster: [{id, name}], sorted by name. Cached for 1 hour."""
+    if _people_cache["data"] and time.time() - _people_cache["ts"] < 3600:
+        return _people_cache["data"]
     people, page = [], 1
     while page <= 10:
         try:
@@ -128,6 +140,8 @@ def _fetch_people(token: str) -> list:
             break
         page += 1
     people.sort(key=lambda x: x["name"].lower())
+    _people_cache["data"] = people
+    _people_cache["ts"]   = time.time()
     return people
 
 
@@ -173,6 +187,11 @@ def _scan_inner():
     payload  = request.get_json(silent=True) or {}
     date_str = (payload.get("date") or date.today().isoformat())[:10]
 
+    # Serve a fresh cached result instantly (also rescues a prior proxy timeout).
+    cached = _scan_cache.get(date_str)
+    if cached and time.time() - cached[0] < _SCAN_TTL:
+        return jsonify(cached[1])
+
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
     ref_cache  = _get_live_ref_cache()
@@ -195,7 +214,7 @@ def _scan_inner():
         return []
 
     all_tasks = []
-    with ThreadPoolExecutor(max_workers=25) as ex:
+    with ThreadPoolExecutor(max_workers=40) as ex:
         for tasks in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 
@@ -265,7 +284,7 @@ def _scan_inner():
         groups_out.append({"group": g, "tasks": tasks})
 
     checkins.sort(key=lambda x: ((x["property"] or "").lower(), (x["name"] or "").lower()))
-    return jsonify({
+    result = {
         "date":        date_str,
         "people":      _fetch_people(token),
         "checkins":    checkins,
@@ -273,7 +292,11 @@ def _scan_inner():
         "total_tasks": len(checkins) + sum(len(b["tasks"]) for b in groups_out),
         "hidden_cleaning": hidden_cleaning,
         "dept_counts": dept_counts,
-    })
+    }
+    # Cache before returning — so even if the proxy already timed out, the retry
+    # gets this result instantly instead of re-running the whole sweep.
+    _scan_cache[date_str] = (time.time(), result)
+    return jsonify(result)
 
 
 @group_assign_bp.route("/admin/group-assign/assign", methods=["POST"])
@@ -315,6 +338,7 @@ def group_assign_apply():
             return {"task_id": tid, "ok": False, "assignees_after": None, "detail": str(e)}
 
     results = list(ThreadPoolExecutor(max_workers=10).map(_assign_one, task_ids))
+    _scan_cache.clear()   # assignees changed — next scan should be fresh
     return jsonify({
         "results":    results,
         "ok_count":   sum(1 for x in results if x["ok"]),
