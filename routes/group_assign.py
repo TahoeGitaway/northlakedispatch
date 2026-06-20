@@ -347,6 +347,8 @@ def group_assign_apply():
                                    json={"assignments": [assignee_id]}, timeout=20)
                 last = f"status={r.status_code}"
                 if r.status_code in (200, 201):
+                    # Re-read from Breezeway so the raw panel shows who is actually
+                    # assigned now — confirmation, not just the PATCH status.
                     after = None
                     try:
                         g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
