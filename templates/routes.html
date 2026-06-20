@@ -293,6 +293,15 @@
       <!-- Routes list (populated by JS when a day is selected) -->
       <div id="dayDetailRoutes" class="space-y-3"></div>
 
+      <!-- Archived routes — kept for the record, hidden from the day view + AI summary -->
+      <div id="archivedWrap" class="hidden mt-6">
+        <button id="archivedToggle" onclick="toggleArchived()"
+                class="text-xs font-semibold text-gray-400 hover:text-gray-600 flex items-center gap-1">
+          <span id="archivedChevron">▸</span> <span id="archivedLabel">Archived</span>
+        </button>
+        <div id="archivedList" class="hidden space-y-2 mt-2"></div>
+      </div>
+
       {% else %}
 
       <div class="text-center py-20 text-gray-400">
@@ -705,7 +714,8 @@ const allRoutes = [
     created_at: {{ (r.created_at or '') | tojson }},
     total_duration: {{ r.total_duration or 0 }},
     distance: {{ r.distance or 0 }},
-    team_id: {{ r.team_id if r.team_id else 'null' }}
+    team_id: {{ r.team_id if r.team_id else 'null' }},
+    archived: {{ 1 if r.archived else 0 }}
   }{{ "," if not loop.last }}
   {% endfor %}
 ];
@@ -729,17 +739,22 @@ ALL_TEAMS.forEach(t => {
 /* ── Build a filtered map: dateStr → [route, ...] ── */
 let routesByDate   = {};
 let activityByDate = {};
+let archivedRoutes = [];
 
 function buildRoutesByDate() {
   routesByDate = {};
   const filtered = selectedTeamId
     ? allRoutes.filter(r => r.team_id === selectedTeamId)
     : allRoutes;
-  filtered.forEach(r => {
+  // Archived routes are kept for the record but stay OUT of the day view,
+  // the calendar dots, and (server-side) the AI summary.
+  archivedRoutes = filtered.filter(r => r.archived);
+  filtered.filter(r => !r.archived).forEach(r => {
     const d = r.route_date || "no-date";
     if (!routesByDate[d]) routesByDate[d] = [];
     routesByDate[d].push(r);
   });
+  if (typeof renderArchived === "function") renderArchived();
 }
 
 function selectTeam(teamId) {
@@ -956,6 +971,29 @@ function selectDay(ds) {
     shareBtn.onclick = () => shareRoute(route.id, route.name);
     btns.appendChild(shareBtn);
 
+    const archBtn = document.createElement("button");
+    archBtn.className = "text-gray-400 hover:text-gray-700 text-sm px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors";
+    archBtn.textContent = "Archive";
+    archBtn.title = "Cancel this route but keep a record — hidden here and left out of the AI summary";
+    archBtn.onclick = async () => {
+      if (!confirm(`Archive "${route.name}"? It'll be hidden here and left out of the AI summary, but kept under Archived.`)) return;
+      archBtn.disabled = true; archBtn.textContent = "Archiving…";
+      try {
+        const res = await fetch(`/routes/${route.id}/archive`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ archived: true }),
+        });
+        const data = await res.json();
+        if (data.error) { alert("Archive failed: " + data.error); archBtn.disabled = false; archBtn.textContent = "Archive"; return; }
+        const ar = allRoutes.find(r => r.id === route.id); if (ar) ar.archived = 1;
+        buildRoutesByDate(); buildCalendar(); selectDay(selectedDate);
+      } catch (e) {
+        alert("Archive failed: " + e.message);
+        archBtn.disabled = false; archBtn.textContent = "Archive";
+      }
+    };
+    btns.appendChild(archBtn);
+
     const delBtn = document.createElement("button");
     delBtn.className = "text-red-400 hover:text-red-600 text-sm px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors";
     delBtn.textContent = "Delete";
@@ -980,6 +1018,93 @@ function selectDay(ds) {
     div.appendChild(btns);
     container.appendChild(div);
   });
+}
+
+/* ── ARCHIVED ROUTES ── */
+function toggleArchived() {
+  const list = document.getElementById("archivedList");
+  const chev = document.getElementById("archivedChevron");
+  if (!list) return;
+  const hidden = list.classList.toggle("hidden");
+  if (chev) chev.textContent = hidden ? "▸" : "▾";
+}
+
+function renderArchived() {
+  const wrap  = document.getElementById("archivedWrap");
+  const list  = document.getElementById("archivedList");
+  const label = document.getElementById("archivedLabel");
+  if (!wrap || !list) return;
+  if (!archivedRoutes.length) { wrap.classList.add("hidden"); return; }
+  wrap.classList.remove("hidden");
+  if (label) label.textContent = `Archived (${archivedRoutes.length})`;
+
+  list.innerHTML = "";
+  archivedRoutes.slice()
+    .sort((a, b) => (b.route_date || "").localeCompare(a.route_date || ""))
+    .forEach(route => {
+      const div = document.createElement("div");
+      div.className = "bg-gray-50 rounded-xl border border-gray-100 px-4 py-3 flex items-center justify-between gap-3";
+
+      const info = document.createElement("div");
+      info.className = "flex-1 min-w-0";
+      const dateStr = route.route_date
+        ? new Date(route.route_date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+        : "no date";
+      const nameEl = document.createElement("div");
+      nameEl.className = "font-medium text-gray-700 truncate";
+      nameEl.textContent = route.name;
+      const metaEl = document.createElement("div");
+      metaEl.className = "text-xs text-gray-400 mt-0.5";
+      metaEl.textContent = (route.assigned_to ? "👤 " + route.assigned_to + " · " : "") + dateStr;
+      info.appendChild(nameEl); info.appendChild(metaEl);
+      div.appendChild(info);
+
+      const btns = document.createElement("div");
+      btns.className = "flex items-center gap-2 shrink-0";
+
+      const loadBtn = document.createElement("a");
+      loadBtn.href = `/?load=${route.id}`;
+      loadBtn.className = "bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors";
+      loadBtn.textContent = "Load";
+      btns.appendChild(loadBtn);
+
+      const unBtn = document.createElement("button");
+      unBtn.className = "bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors";
+      unBtn.textContent = "Unarchive";
+      unBtn.onclick = async () => {
+        unBtn.disabled = true;
+        try {
+          const res = await fetch(`/routes/${route.id}/archive`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ archived: false }),
+          });
+          const data = await res.json();
+          if (data.error) { alert("Unarchive failed: " + data.error); unBtn.disabled = false; return; }
+          const ar = allRoutes.find(r => r.id === route.id); if (ar) ar.archived = 0;
+          buildRoutesByDate(); buildCalendar(); selectDay(selectedDate);
+        } catch (e) { alert("Unarchive failed: " + e.message); unBtn.disabled = false; }
+      };
+      btns.appendChild(unBtn);
+
+      const delBtn = document.createElement("button");
+      delBtn.className = "text-red-400 hover:text-red-600 text-xs px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors";
+      delBtn.textContent = "Delete";
+      delBtn.onclick = async () => {
+        if (!confirm(`Permanently delete "${route.name}"? This cannot be undone.`)) return;
+        delBtn.disabled = true;
+        try {
+          const res = await fetch(`/routes/${route.id}/delete`, { method: "POST" });
+          const data = await res.json();
+          if (data.error) { alert("Delete failed: " + data.error); delBtn.disabled = false; return; }
+          const i = allRoutes.findIndex(r => r.id === route.id); if (i >= 0) allRoutes.splice(i, 1);
+          buildRoutesByDate(); buildCalendar(); selectDay(selectedDate);
+        } catch (e) { alert("Delete failed: " + e.message); delBtn.disabled = false; }
+      };
+      btns.appendChild(delBtn);
+
+      div.appendChild(btns);
+      list.appendChild(div);
+    });
 }
 
 /* ── BRIEFING NOTES + STAFF LIST ── */

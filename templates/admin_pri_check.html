@@ -3,6 +3,22 @@
 {% block content %}
 <div class="max-w-3xl mx-auto px-4 py-6">
 
+  <!-- PRI workflow tabs -->
+  <div class="mb-4">
+    <div class="flex gap-1 border-b border-gray-200">
+      <a href="{{ url_for('admin.pri_check_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-amber-600 text-amber-700">
+        PRI Check
+      </a>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('pri_rename.pri_rename_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+        Rename PRIs
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
   <!-- Header -->
   <div class="flex items-center justify-between mb-4">
     <div>

@@ -276,6 +276,7 @@ def saved_routes():
     cur.execute("""
         SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
                r.total_duration, r.driving_duration, r.distance, r.team_id,
+               COALESCE(r.archived, 0) AS archived,
                COALESCE(r.created_by_display, u.name) AS created_by_name,
                lu.name AS last_edited_by_name
         FROM saved_routes r
@@ -477,6 +478,25 @@ def delete_route(route_id):
     if not deleted:
         return jsonify({"error": f"Route {route_id} not found."}), 404
     return jsonify({"success": True})
+
+
+@dispatch_bp.route("/routes/<int:route_id>/archive", methods=["POST"])
+@login_required
+def archive_route(route_id):
+    """Soft-cancel a route: keep the record but hide it from the saved-routes
+    tiles AND exclude it from the AI day summary. Body {archived: false} to undo."""
+    data     = request.get_json(silent=True) or {}
+    archived = 0 if data.get("archived") is False else 1   # default: archive it
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("UPDATE saved_routes SET archived = %s WHERE id = %s RETURNING id",
+                (archived, route_id))
+    row = cur.fetchone()
+    conn.commit()
+    cur.close(); conn.close()
+    if not row:
+        return jsonify({"error": f"Route {route_id} not found."}), 404
+    return jsonify({"success": True, "archived": archived})
 
 
 # ── OR-Tools solver ───────────────────────────────────────────────
@@ -976,7 +996,7 @@ def routes_for_date():
     cur.execute("""
         SELECT id, name, assigned_to, route_date
         FROM saved_routes
-        WHERE route_date = %s
+        WHERE route_date = %s AND COALESCE(archived, 0) = 0
         ORDER BY assigned_to ASC, name ASC
     """, (date_str,))
     rows = cur.fetchall()

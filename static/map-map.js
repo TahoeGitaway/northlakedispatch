@@ -46,11 +46,9 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
 // Mirror the sidebar's assignee + date onto the map pill. Call this after any
 // programmatic change to those fields (import, route load).
 function updateRouteMapOverlay() {
-  const el = document.getElementById("routeMapOverlay");
-  if (!el) return;
+  const el   = document.getElementById("routeMapOverlay");
   const who  = (document.getElementById("assignedToField")?.value || "").trim();
   const date = (document.getElementById("routeDateField")?.value || "").trim();
-  if (!who && !date) { el.style.display = "none"; return; }
 
   let dateLabel = "";
   if (date) {
@@ -59,6 +57,15 @@ function updateRouteMapOverlay() {
       ? date
       : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   }
+
+  // Browser tab title: lead with first name + date so an open saved route is
+  // distinguishable among many "North Lake Dispatch" tabs. Resets when cleared.
+  const firstName = who ? who.split(/\s+/)[0] : "";
+  const titleBits = [firstName, dateLabel].filter(Boolean).join(" · ");
+  document.title  = titleBits ? `${titleBits} — North Lake Dispatch` : "North Lake Dispatch";
+
+  if (!el) return;
+  if (!who && !date) { el.style.display = "none"; return; }
   el.innerHTML =
     (who ? `<span>👤 ${who}</span>` : "") +
     (who && dateLabel ? `<span style="color:#d1d5db;">·</span>` : "") +

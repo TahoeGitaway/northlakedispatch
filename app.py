@@ -60,6 +60,7 @@ from routes.hot_tub          import hot_tub_bp
 from routes.lease_prep         import lease_prep_bp
 from routes.quick_complete     import quick_complete_bp
 from routes.group_assign       import group_assign_bp
+from routes.pri_rename         import pri_rename_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
@@ -79,6 +80,7 @@ app.register_blueprint(hot_tub_bp)
 app.register_blueprint(lease_prep_bp)
 app.register_blueprint(quick_complete_bp)
 app.register_blueprint(group_assign_bp)
+app.register_blueprint(pri_rename_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():

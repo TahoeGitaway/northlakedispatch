@@ -1175,7 +1175,10 @@ function reapproachWithChanges() {
   document.getElementById("recalcFreeBtn")?.classList.add("hidden");
   document.getElementById("warningBox").classList.add("hidden");
   renderStops();
-  if (typeof redrawRouteOnMap === "function") redrawRouteOnMap();
+  // Show the applied stops on the map before optimize. redrawRouteOnMap only
+  // renders the OPTIMIZED schedule (just cleared to []), so it would draw no
+  // stops — _bwPlaceMarkers drops a marker per selected stop and fits the view.
+  if (typeof _bwPlaceMarkers === "function") _bwPlaceMarkers();
 
   let msg = `Applied: +${addedCount} added, −${removedCount} removed. `
           + `Now reorder, set times, and optimize.`;

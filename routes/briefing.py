@@ -420,7 +420,7 @@ def _fetch_todays_routes(date_str: str, team_id=None) -> list:
         cur.execute(
             """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
                FROM saved_routes r JOIN users u ON r.created_by = u.id
-               WHERE r.route_date = %s AND r.team_id = %s
+               WHERE r.route_date = %s AND r.team_id = %s AND COALESCE(r.archived, 0) = 0
                ORDER BY r.updated_at DESC""",
             (date_str, team_id),
         )
@@ -428,7 +428,7 @@ def _fetch_todays_routes(date_str: str, team_id=None) -> list:
         cur.execute(
             """SELECT r.id, r.name, r.assigned_to, r.stops_json, r.notes, u.name AS created_by_name
                FROM saved_routes r JOIN users u ON r.created_by = u.id
-               WHERE r.route_date = %s
+               WHERE r.route_date = %s AND COALESCE(r.archived, 0) = 0
                ORDER BY r.updated_at DESC""",
             (date_str,),
         )

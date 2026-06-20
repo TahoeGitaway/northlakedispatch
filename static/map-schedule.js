@@ -309,10 +309,12 @@ function renderStops() {
     serviceEl.addEventListener("change", () => { s.serviceMinutes = parseInt(serviceEl.value); });
     removeBtn.addEventListener("click", () => {
       selectedStops = selectedStops.filter(x => x._id !== s._id);
-      div.remove();
-      countEl.textContent = selectedStops.length ? `(${selectedStops.length})` : "";
-      if (!selectedStops.length)
-        container.innerHTML = '<p class="text-sm text-gray-400">No stops added yet.</p>';
+      // Drop the stale map marker, then re-render so the left list, cost hint,
+      // and right-sidebar numbered list all reflect the removal.
+      if (typeof markers === "object" && markers[s.name]) {
+        map.removeLayer(markers[s.name]); delete markers[s.name];
+      }
+      renderStops();
     });
 
     container.appendChild(div);
@@ -329,6 +331,10 @@ function renderStops() {
       hint.textContent = `~$${cost} / ${n} stop${n !== 1 ? "s" : ""}`;
     }
   }
+
+  // Keep the right-sidebar numbered task list in sync with the current stops,
+  // so added/removed houses appear/disappear there too — not just on the left.
+  if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
 }
 
 /* ── MOVE UP / DOWN ── */
