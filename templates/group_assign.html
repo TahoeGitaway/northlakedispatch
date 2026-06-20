@@ -245,9 +245,19 @@ function renderScan() {
     (vName ? ` · <span style="color:#7c3aed;">view: ${esc(vName)}</span>` : '');
   results.appendChild(summary);
 
-  // Check-in houses get their own section first, for easy selection.
+  // Check-in houses get their own section first — organized by ZONE, then person
+  // (same layout as the group buckets below), for easy selection.
   if (checkins.length) {
-    results.appendChild(buildGroup({ group: '🔑 Check-in houses', tasks: checkins }, true));
+    const hd = document.createElement('div');
+    hd.style.cssText = 'font-size:0.82rem;font-weight:700;color:#15803d;margin-top:2px;';
+    hd.textContent = `🔑 Check-ins (${checkins.length})`;
+    results.appendChild(hd);
+
+    const byZone = {};
+    checkins.forEach(t => { const z = t.group || 'Ungrouped'; (byZone[z] = byZone[z] || []).push(t); });
+    Object.keys(byZone)
+      .sort((a, b) => ((a === 'Ungrouped') - (b === 'Ungrouped')) || a.localeCompare(b))
+      .forEach(z => results.appendChild(buildGroup({ group: z, tasks: byZone[z] }, true)));
   }
   // Then the group buckets (non-check-in tasks).
   groups.forEach(g => results.appendChild(buildGroup(g, false)));
