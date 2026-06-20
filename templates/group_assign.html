@@ -16,9 +16,13 @@
         <input type="date" id="theDate"
                class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none">
       </div>
-      <button onclick="runScan()"
+      <button onclick="runScan(false)"
               class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
         Scan
+      </button>
+      <button onclick="runScan(true)" title="Re-fetch fresh from Breezeway, ignoring the cache — use if tasks were still loading"
+              class="px-3 py-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors">
+        ↻ Force refresh
       </button>
     </div>
 
@@ -36,6 +40,10 @@
   <!-- Error -->
   <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
        style="background:#fef2f2;border:1px solid #fecaca;"></div>
+
+  <!-- Warning (e.g. some properties failed to load) -->
+  <div id="warnBox" class="hidden rounded-xl px-5 py-3 text-amber-800 text-sm mb-4"
+       style="background:#fffbeb;border:1px solid #fde68a;"></div>
 
   <!-- Assignment result (raw per-task feedback) -->
   <div id="assignResult" class="hidden rounded-xl px-5 py-4 text-sm mb-4"
@@ -212,6 +220,18 @@ function renderScan() {
   const data    = _applyView(SCAN);            // filter by the active view, if any
   const results = document.getElementById('results');
   results.innerHTML = '';
+
+  // Loud warning if Breezeway couldn't load some properties — those tasks would
+  // otherwise be silently missing. Offer a one-click force rescan.
+  const wb = document.getElementById('warnBox');
+  if (SCAN.failed_properties) {
+    wb.innerHTML = `⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties couldn't be loaded from Breezeway`
+      + ` (it throttled or errored), so some tasks may be missing. `
+      + `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">Force a fresh rescan</button>.`;
+    wb.classList.remove('hidden');
+  } else {
+    wb.classList.add('hidden');
+  }
 
   // People dropdown (always the FULL roster, regardless of view)
   const sel = document.getElementById('personSel');
@@ -392,19 +412,20 @@ function saveViewFromEditor(id) {
   renderScan();
 }
 
-async function runScan() {
+async function runScan(force) {
   const date = document.getElementById('theDate').value;
   SCAN = null;
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('emptyBox').classList.add('hidden');
   document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('warnBox').classList.add('hidden');
   document.getElementById('actionBar').classList.add('hidden');
   document.getElementById('results').innerHTML = '';
 
   try {
     const resp = await fetch('/admin/group-assign/scan', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ date }),
+      body: JSON.stringify({ date, force: !!force }),
     });
     const raw = await resp.text();
     let data;
@@ -465,12 +486,22 @@ async function assignSelected() {
     }
     _renderAssignResults(data, personName);
 
-    // No full re-fetch — just gray out the tasks that went through, in place,
-    // so you can keep selecting. A mini toast confirms the result.
+    // Gray out the successes; mark FAILURES red and keep them selected so they're
+    // impossible to miss and one click (Assign) retries them.
     const ok = data.ok_count || 0, fail = data.fail_count || 0;
-    (data.results || []).forEach(r => { if (r.ok) _markAssigned(r.task_id, personName); });
+    (data.results || []).forEach(r => {
+      if (r.ok) _markAssigned(r.task_id, personName);
+      else      _markFailed(r.task_id);
+    });
     _refreshCount();
-    _toast(`✓ ${ok} task${ok!==1?'s':''} → ${personName}` + (fail ? ` · ${fail} failed` : ''), fail === 0);
+    if (fail) {
+      const eb = document.getElementById('errorBox');
+      eb.innerHTML = `<b>⚠ ${fail} assignment${fail !== 1 ? 's' : ''} FAILED.</b> `
+        + `${fail === 1 ? 'It is' : 'They are'} highlighted red and still selected — click `
+        + `<b>Assign selected</b> to retry, or open “Raw response data” for details.`;
+      eb.classList.remove('hidden');
+    }
+    _toast(`✓ ${ok} task${ok !== 1 ? 's' : ''} → ${personName}` + (fail ? ` · ${fail} FAILED` : ''), fail === 0);
   } catch (e) {
     box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">Network error: ${esc(e.message)}</div>`;
   }
@@ -483,6 +514,10 @@ function _markAssigned(taskId, personName) {
   const cb = row.querySelector('.task-cb');
   if (cb) { cb.checked = false; cb.disabled = true; }
   row.style.opacity = '0.45';
+  // Clear any prior FAILED styling (e.g. a retry that now succeeded).
+  row.style.background = '';
+  row.style.boxShadow = '';
+  const fb = row.querySelector('.failed-badge'); if (fb) fb.remove();
   if (!row.querySelector('.reassigned-badge')) {
     const b = document.createElement('span');
     b.className = 'reassigned-badge';
@@ -491,6 +526,28 @@ function _markAssigned(taskId, personName) {
     const badges = row.querySelector('.task-badges');
     if (badges) badges.appendChild(b);
   }
+}
+
+// Mark a FAILED assignment in place — red, badged, and left SELECTED so the next
+// Assign click retries exactly the ones that didn't go through.
+function _markFailed(taskId) {
+  const row = document.querySelector(`.task-row[data-tid="${taskId}"]`);
+  if (!row) return;
+  const cb = row.querySelector('.task-cb');
+  if (cb) { cb.checked = true; cb.disabled = false; }
+  row.style.background = '#fef2f2';
+  row.style.boxShadow = 'inset 3px 0 0 #ef4444';
+  let badge = row.querySelector('.failed-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'failed-badge';
+    badge.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;';
+    const badges = row.querySelector('.task-badges');
+    if (badges) badges.appendChild(badge);
+  }
+  badge.textContent = '✗ FAILED';
+  // Remove any stale "assigned" badge from a prior attempt.
+  const ab = row.querySelector('.reassigned-badge'); if (ab) ab.remove();
 }
 
 // Brief auto-dismissing confirmation near the action bar.

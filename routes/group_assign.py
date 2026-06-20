@@ -41,7 +41,7 @@ _group_ts:      float = 0.0
 # even though the backend finishes — caching the result means the retry returns
 # instantly. Cleared whenever an assignment is written.
 _scan_cache:   dict  = {}   # date_str -> (timestamp, result_dict)
-_SCAN_TTL            = 300
+_SCAN_TTL            = 60
 
 # Staff roster cache (fetched on every scan otherwise).
 _people_cache: dict  = {"ts": 0.0, "data": []}
@@ -186,10 +186,12 @@ def _scan_inner():
 
     payload  = request.get_json(silent=True) or {}
     date_str = (payload.get("date") or date.today().isoformat())[:10]
+    force    = bool(payload.get("force"))
 
-    # Serve a fresh cached result instantly (also rescues a prior proxy timeout).
+    # Serve a fresh cached result instantly (also rescues a prior proxy timeout) —
+    # UNLESS the caller forced a fresh sweep (e.g. tasks were still loading in BW).
     cached = _scan_cache.get(date_str)
-    if cached and time.time() - cached[0] < _SCAN_TTL:
+    if cached and not force and time.time() - cached[0] < _SCAN_TTL:
         return jsonify(cached[1])
 
     _ensure_property_cache()
@@ -204,19 +206,33 @@ def _scan_inner():
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
     def _tasks_for_ref(ref_id):
-        for dp in ({"scheduled_date": f"{date_str},{date_str}"},
-                   {"start_date": date_str, "end_date": date_str},
-                   {"date": date_str}):
-            r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
-                                              {"reference_property_id": ref_id, **dp})
+        """Return (tasks, ok). ok=False means we could NOT load this property
+        (throttled / errored) — so its tasks must NOT be silently treated as 'none'."""
+        for attempt in range(3):
+            r, _, status = _fetch_bw_endpoint(
+                token, "/public/inventory/v1/task",
+                {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
             if status == 200:
-                return r or []
-        return []
+                return (r or [], True)
+            # Throttle / transient server error / no response → back off and retry.
+            if status is None or status == 429 or status >= 500:
+                time.sleep(0.3 * (attempt + 1))
+                continue
+            # Other non-200 (e.g. 400) → try the alternate date param once, else fail.
+            r2, _, st2 = _fetch_bw_endpoint(
+                token, "/public/inventory/v1/task",
+                {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
+            return (r2 or [], True) if st2 == 200 else ([], False)
+        return ([], False)
 
-    all_tasks = []
-    with ThreadPoolExecutor(max_workers=40) as ex:
-        for tasks in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+    # Moderate concurrency + the retry/backoff above so the sweep doesn't trip
+    # Breezeway rate limits, which would silently drop a property's whole list.
+    all_tasks, failed_props = [], 0
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for tasks, ok in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
             all_tasks.extend(tasks)
+            if not ok:
+                failed_props += 1
 
     # Guest/owner arrivals that day → BW property ids (for the CHECK-IN badge).
     # Matched by property_id directly — no local name-matching needed.
@@ -292,6 +308,8 @@ def _scan_inner():
         "total_tasks": len(checkins) + sum(len(b["tasks"]) for b in groups_out),
         "hidden_cleaning": hidden_cleaning,
         "dept_counts": dept_counts,
+        "failed_properties": failed_props,
+        "scanned_properties": len(pid_candidates),
     }
     # Cache before returning — so even if the proxy already timed out, the retry
     # gets this result instantly instead of re-running the whole sweep.
@@ -320,24 +338,37 @@ def group_assign_apply():
 
     def _assign_one(tid):
         url = f"{BW_BASE}/public/inventory/v1/task/{tid}"
-        try:
-            r  = requests.patch(url, headers=headers,
-                                json={"assignments": [assignee_id]}, timeout=20)
-            ok = r.status_code in (200, 201)
-            after = None
-            if ok:
-                try:
-                    g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
-                    if g.ok:
-                        after = _assignee_names(g.json())
-                except Exception:
-                    pass
-            return {"task_id": tid, "ok": ok, "assignees_after": after,
-                    "detail": f"status={r.status_code}" + ("" if ok else f" {r.text[:160]}")}
-        except Exception as e:
-            return {"task_id": tid, "ok": False, "assignees_after": None, "detail": str(e)}
+        last = "no attempt"
+        # Retry on throttle / transient server errors so an assignment never gets
+        # silently dropped because Breezeway was momentarily busy.
+        for attempt in range(3):
+            try:
+                r = requests.patch(url, headers=headers,
+                                   json={"assignments": [assignee_id]}, timeout=20)
+                last = f"status={r.status_code}"
+                if r.status_code in (200, 201):
+                    after = None
+                    try:
+                        g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+                        if g.ok:
+                            after = _assignee_names(g.json())
+                    except Exception:
+                        pass
+                    return {"task_id": tid, "ok": True, "assignees_after": after, "detail": last}
+                if r.status_code == 429 or r.status_code >= 500:
+                    last += f" {r.text[:120]}"
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                # Non-retryable (e.g. 400/404)
+                return {"task_id": tid, "ok": False, "assignees_after": None,
+                        "detail": f"{last} {r.text[:160]}"}
+            except Exception as e:
+                last = str(e)
+                time.sleep(0.4 * (attempt + 1))
+        return {"task_id": tid, "ok": False, "assignees_after": None,
+                "detail": f"failed after retries — {last}"}
 
-    results = list(ThreadPoolExecutor(max_workers=10).map(_assign_one, task_ids))
+    results = list(ThreadPoolExecutor(max_workers=8).map(_assign_one, task_ids))
     _scan_cache.clear()   # assignees changed — next scan should be fresh
     return jsonify({
         "results":    results,
