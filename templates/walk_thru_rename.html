@@ -213,17 +213,40 @@ async function applyRenames() {
     const failed    = (data.results || []).length - succeeded;
     const box       = document.getElementById('resultsBox');
     box.innerHTML   = '';
-    const summary   = document.createElement('div');
-    summary.style.cssText = 'font-size:0.85rem;font-weight:600;color:#374151;margin-bottom:8px;';
-    summary.textContent   = `${succeeded} renamed${failed ? `, ${failed} failed` : ''} — rescan when ready`;
+
+    const summary = document.createElement('div');
+    summary.style.cssText = `font-size:0.85rem;font-weight:700;color:${failed ? '#b91c1c' : '#15803d'};margin-bottom:8px;`;
+    summary.textContent = failed
+      ? `${succeeded} renamed · ${failed} FAILED — see red rows below`
+      : `${succeeded} renamed — all approved by Breezeway · rescan when ready`;
     box.appendChild(summary);
-    (data.results || []).filter(r => !r.success).forEach(r => {
+
+    // Per-task confirmation (success AND fail), each with Breezeway's raw response.
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
+    (data.results || []).forEach(r => {
       const div = document.createElement('div');
-      div.style.cssText = 'border-radius:8px;padding:10px 14px;font-size:0.8rem;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;';
-      div.textContent = `✗ ${r.property} — "${r.proposed_title}" · ${r.detail}`;
-      box.appendChild(div);
+      div.style.cssText = `font-size:0.76rem;border-left:3px solid ${r.success ? '#16a34a' : '#ef4444'};`
+        + `background:${r.success ? '#f0fdf4' : '#fef2f2'};padding:5px 8px;border-radius:0 6px 6px 0;`
+        + `color:${r.success ? '#374151' : '#b91c1c'};`;
+      div.innerHTML = `${r.success ? '✓' : '✗'} <b>${esc(r.property)}</b> → "${esc(r.proposed_title)}"`
+        + `<div style="color:#6b7280;font-family:monospace;font-size:0.7rem;margin-top:1px;">Breezeway: ${esc(r.detail)}</div>`;
+      list.appendChild(div);
     });
+    box.appendChild(list);
+
+    // Full raw payload, collapsible.
+    const raw = document.createElement('details');
+    raw.style.cssText = 'margin-top:8px;';
+    raw.innerHTML = `<summary style="font-size:0.72rem;color:#6b7280;cursor:pointer;">Raw response data from Breezeway</summary>`
+      + `<pre style="white-space:pre-wrap;word-break:break-word;font-size:0.68rem;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:4px;max-height:320px;overflow:auto;">${esc(JSON.stringify(data, null, 2))}</pre>`;
+    box.appendChild(raw);
+
     box.classList.remove('hidden');
+
+    if (failed) {
+      alert(`⚠ ${failed} rename${failed !== 1 ? 's' : ''} FAILED in Breezeway — see the red rows / raw data. ${succeeded} succeeded.`);
+    }
 
     document.getElementById('applyBtn').textContent = 'Rename Selected';
     document.getElementById('applyBtn').disabled = false;
