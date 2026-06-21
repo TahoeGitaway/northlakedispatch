@@ -26,7 +26,8 @@ walk_thru_bp = Blueprint("walk_thru", __name__)
 BW_BASE = "https://api.breezeway.io"
 
 WALK_THRU_PATTERNS = re.compile(
-    r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|arrival[\s\-]?task|guest[\s\-]?arrival)\b",
+    r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|"
+    r"arrival[\s\-]?task|guest[\s\-]?arrival|managed[\s\-]?services?[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
 ALREADY_DATED = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
