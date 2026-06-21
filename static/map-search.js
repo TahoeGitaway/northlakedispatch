@@ -991,8 +991,10 @@ function _appendRouteChanges(content) {
 }
 
 function _renderRouteChangesInto(routeId, body) {
-  if (_routeChangesCache.routeId === routeId && _routeChangesCache.html != null) {
-    body.innerHTML = _routeChangesCache.html;
+  // Re-render from cached DATA (not a frozen html string) so the panel reflects
+  // the CURRENT list each time — manual or applied fixes clear resolved changes.
+  if (_routeChangesCache.routeId === routeId && _routeChangesCache.data) {
+    body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
     return;
   }
   body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
@@ -1039,7 +1041,15 @@ function _escHtml(s) {
 }
 
 function _renderChangesHtml(d) {
-  const added = d.added || [], removed = d.removed || [], moved = d.moved || [];
+  // Show only what's still OUTSTANDING vs the CURRENT working list — once a stop
+  // is added or removed (by hand or via Apply), it drops out of this panel.
+  const _cur = new Set(
+    (isOptimized ? optimizedSchedule.filter(s => !s.isLunch && !s.isGap) : selectedStops)
+      .map(s => (s.name || "").toLowerCase())
+  );
+  const added   = (d.added   || []).filter(a => !_cur.has((a.property || "").toLowerCase()));
+  const removed = (d.removed || []).filter(r =>  _cur.has((r.property || "").toLowerCase()));
+  const moved   = d.moved || [];
   let h = "";
 
   // ── What changed since the route was saved ──
@@ -1092,40 +1102,40 @@ function _renderChangesHtml(d) {
   // Apply-to-route button: add the added properties / drop the removed ones,
   // then leave the route in the editable state for manual reorder + optimize.
   // Hidden once applied (until the next Recheck).
-  if ((added.length || removed.length) && !_appliedRouteChanges.has(d.route_id)) {
+  // Button reflects only OUTSTANDING changes — it disappears on its own once the
+  // list matches (manual fix or Apply), no separate "applied" flag needed.
+  if (added.length || removed.length) {
     const nAdd = new Set(added.map(a => a.property)).size;
     h += `<button onclick="reapproachWithChanges()"
             class="w-full mt-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs
                    font-semibold py-2 rounded-lg transition-colors">`
        + `↘ Apply to route — add ${nAdd}, remove ${removed.length}</button>`;
-  } else if ((added.length || removed.length) && _appliedRouteChanges.has(d.route_id)) {
-    h += `<div class="mt-3 text-xs text-green-600 font-medium">✓ Applied — Recheck to refresh.</div>`;
   }
   return h;
 }
 
-// Apply the right-panel changes to the LEFT sidebar route: add the added
-// properties, drop the removed ones, then drop back into the editable state so
-// the user can reorder, set times, and optimize manually. Keeps the route's
-// identity (name/assignee/date/id) so a re-save updates the same route.
-function reapproachWithChanges() {
+// Apply the right-panel changes to the route. When the route is OPTIMIZED, each
+// added stop is WORKED IN at the end (just like the Work-In feature) and removed
+// stops are dropped in place — the optimized order is preserved, nothing is undone.
+// When not yet optimized, it just builds the editable list. Only OUTSTANDING
+// changes (vs the current list) are applied, so a manual fix is never re-applied.
+async function reapproachWithChanges() {
   const data = _routeChangesCache.data;
   if (!data) { alert("Open the route first so the Breezeway changes have loaded."); return; }
-  const added   = data.added   || [];
-  const removed = data.removed || [];
-  if (!added.length && !removed.length) { alert("No added or removed properties to apply."); return; }
 
-  // Keep current stops except the removed ones (preserve their existing settings)
+  const curNames = new Set(
+    (isOptimized ? optimizedSchedule.filter(s => !s.isLunch && !s.isGap) : selectedStops)
+      .map(s => (s.name || "").toLowerCase())
+  );
+  const added   = (data.added   || []).filter(a => !curNames.has((a.property || "").toLowerCase()));
+  const removed = (data.removed || []).filter(r =>  curNames.has((r.property || "").toLowerCase()));
+  if (!added.length && !removed.length) {
+    if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
+    alert("Nothing left to apply — the list already matches.");
+    return;
+  }
+
   const removedSet = new Set(removed.map(r => (r.property || "").toLowerCase()));
-  const origReal   = optimizedSchedule.filter(s => !s.isLunch && !s.isGap);
-  const kept = origReal
-    .filter(s => !removedSet.has((s.name || "").toLowerCase()))
-    .map(s => ({ _id: s._id || makeStopId(), name: s.name, lat: s.lat, lng: s.lng,
-                 arrival: s.arrival, priority_checkin: s.priority_checkin || false,
-                 serviceMinutes: s.serviceMinutes || 60 }));
-  const removedCount = origReal.length - kept.length;
-
-  // Arrival / PCI status per added property (OR-combined across its tasks)
   const meta = {};
   for (const a of added) {
     const k = (a.property || "").toLowerCase();
@@ -1133,57 +1143,66 @@ function reapproachWithChanges() {
     if (a.arrival) meta[k].arrival = true;
     if (a.pci)     meta[k].pci     = true;
   }
+  const addedNames = [...new Set(added.map(a => a.property).filter(Boolean))];
+  const notFound = [];
+  let addedCount = 0, removedCount = 0;
 
-  // Add the added properties — look up coordinates in the property DB
-  const have       = new Set(kept.map(s => (s.name || "").toLowerCase()));
-  const addedProps = [...new Set(added.map(a => a.property).filter(Boolean))];
-  const notFound   = [];
-  let addedCount   = 0;
-  for (const name of addedProps) {
-    const key = name.toLowerCase();
-    if (have.has(key)) continue;                       // already on the list
-    const p = (typeof properties !== "undefined")
-      ? properties.find(pr => (pr.name || "").toLowerCase() === key) : null;
-    if (!p) { notFound.push(name); continue; }
-    const m = meta[key] || {};
-    kept.push({ _id: makeStopId(), name: p.name, lat: p.lat, lng: p.lng,
-                arrival: !!(m.arrival || m.pci), priority_checkin: !!m.pci, serviceMinutes: 60 });
-    have.add(key);
-    addedCount++;
+  const _lookup = name => (typeof properties !== "undefined")
+    ? properties.find(pr => (pr.name || "").toLowerCase() === name.toLowerCase()) : null;
+
+  if (isOptimized) {
+    // ── Preserve the optimized route ──
+    // 1) Drop removed properties in place (same as removing a stop).
+    if (removedSet.size) {
+      const before = optimizedSchedule.filter(s => !s.isLunch && !s.isGap).length;
+      optimizedSchedule
+        .filter(s => !s.isLunch && !s.isGap && removedSet.has((s.name || "").toLowerCase()))
+        .forEach(s => { if (markers[s.name]) { map.removeLayer(markers[s.name]); delete markers[s.name]; } });
+      optimizedSchedule = optimizedSchedule.filter(s => s.isLunch || s.isGap || !removedSet.has((s.name || "").toLowerCase()));
+      selectedStops     = selectedStops.filter(s => !removedSet.has((s.name || "").toLowerCase()));
+      removedCount = before - optimizedSchedule.filter(s => !s.isLunch && !s.isGap).length;
+    }
+    // 2) Work each added property in AT THE END (Work-In behaviour).
+    const present = new Set(optimizedSchedule.filter(s => !s.isLunch && !s.isGap).map(s => (s.name || "").toLowerCase()));
+    for (const name of addedNames) {
+      const key = name.toLowerCase();
+      if (present.has(key)) continue;
+      const p = _lookup(name);
+      if (!p) { notFound.push(name); continue; }
+      const m = meta[key] || {};
+      await workInStop(p, !!(m.arrival || m.pci), !!m.pci);   // appends + updates drive times
+      present.add(key); addedCount++;
+    }
+    recalculateTimes(); renderSchedule(); redrawRouteOnMap();
+  } else {
+    // ── Not optimized — build the editable list, stay pre-optimize ──
+    const origReal = selectedStops.filter(s => !s.isLunch && !s.isGap);
+    const kept = origReal.filter(s => !removedSet.has((s.name || "").toLowerCase()));
+    removedCount = origReal.length - kept.length;
+    const have = new Set(kept.map(s => (s.name || "").toLowerCase()));
+    for (const name of addedNames) {
+      const key = name.toLowerCase();
+      if (have.has(key)) continue;
+      const p = _lookup(name);
+      if (!p) { notFound.push(name); continue; }
+      const m = meta[key] || {};
+      kept.push({ _id: makeStopId(), name: p.name, lat: p.lat, lng: p.lng,
+                  arrival: !!(m.arrival || m.pci), priority_checkin: !!m.pci, serviceMinutes: 60 });
+      have.add(key); addedCount++;
+    }
+    selectedStops = kept;
+    renderStops();
+    if (typeof _bwPlaceMarkers === "function") _bwPlaceMarkers();
   }
 
-  // Mark these changes applied so the Apply button disappears (until next Recheck).
-  // Regenerate the cached HTML too — the panel re-renders from cache.
-  if (currentRouteId) {
-    _appliedRouteChanges.add(currentRouteId);
-    if (_routeChangesCache.data) _routeChangesCache.html = _renderChangesHtml(_routeChangesCache.data);
+  // The changes panel re-renders against the current list (resolved items vanish,
+  // button hides on its own). Make sure it repaints now.
+  if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
+
+  if (notFound.length) {
+    alert(`Applied: +${addedCount} added, −${removedCount} removed.\n\n`
+        + `Couldn't add (not in your property DB): ${notFound.join(", ")}`);
   }
-
-  // Drop back into the editable (pre-optimize) state — keep route identity
-  selectedStops = kept;
-  optimizedSchedule = []; isOptimized = false; durationMatrix = [];
-  clearRouteMarkers();
-  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-  document.getElementById("preOptSection").classList.remove("hidden");
-  document.getElementById("preOptSearch").classList.remove("hidden");
-  document.getElementById("scheduleSection").classList.add("hidden");
-  document.getElementById("workInSection").classList.add("hidden");
-  document.getElementById("addMoreBtn").classList.add("hidden");
-  document.getElementById("saveRouteBtn").classList.add("hidden");
-  document.getElementById("updateRouteBtn").classList.add("hidden");
-  document.getElementById("recalcTimesBtn").classList.add("hidden");
-  document.getElementById("recalcFreeBtn")?.classList.add("hidden");
-  document.getElementById("warningBox").classList.add("hidden");
-  renderStops();
-  // Show the applied stops on the map before optimize. redrawRouteOnMap only
-  // renders the OPTIMIZED schedule (just cleared to []), so it would draw no
-  // stops — _bwPlaceMarkers drops a marker per selected stop and fits the view.
-  if (typeof _bwPlaceMarkers === "function") _bwPlaceMarkers();
-
-  let msg = `Applied: +${addedCount} added, −${removedCount} removed. `
-          + `Now reorder, set times, and optimize.`;
-  if (notFound.length) msg += `\n\nCouldn't add (not in your property DB): ${notFound.join(", ")}`;
-  alert(msg);
 }
 
 /* ── BREEZEWAY TASK OVERLAY (after import) ─────────────────────── */
