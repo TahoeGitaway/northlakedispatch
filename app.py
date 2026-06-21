@@ -61,7 +61,7 @@ from routes.lease_prep         import lease_prep_bp
 from routes.quick_complete     import quick_complete_bp
 from routes.group_assign       import group_assign_bp
 from routes.pri_rename         import pri_rename_bp
-from routes.pest_check         import pest_check_bp
+from pest_control              import pest_check_bp   # self-contained feature package
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)

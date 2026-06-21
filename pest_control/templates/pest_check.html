@@ -51,10 +51,11 @@ function buildCard(m){
   const card = document.createElement('div');
   card.style.cssText = 'border-radius:12px;border:1px solid #e5e7eb;background:#fff;overflow:hidden;';
 
-  const v = m.vendor_involved;
-  const verdict = v
-    ? `<span style="display:inline-block;font-size:0.72rem;font-weight:800;padding:3px 10px;border-radius:99px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;">VENDOR INVOLVED</span>`
-    : `<span style="display:inline-block;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">No vendor — internal</span>`;
+  const pill = (bg,fg,bd,txt)=>`<span style="display:inline-block;font-size:0.72rem;font-weight:800;padding:3px 10px;border-radius:99px;background:${bg};color:${fg};border:1px solid ${bd};">${txt}</span>`;
+  const verdict =
+    m.vendor_verdict === 'vendor'   ? pill('#fee2e2','#b91c1c','#fca5a5','VENDOR — by assignee role') :
+    m.vendor_verdict === 'internal' ? pill('#dcfce7','#15803d','#86efac','Internal staff — by assignee role') :
+                                      pill('#fffbeb','#b45309','#fde68a','Can’t confirm — role not in data');
 
   // Evidence — plain meaning + the exact Breezeway field + the raw value.
   let ev = '';

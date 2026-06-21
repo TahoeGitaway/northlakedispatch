@@ -799,6 +799,53 @@ def my_bot_chat():
             cut = limit
         return content[:cut] + "\n[…truncated — bot will re-fetch if needed]"
 
+    def _approx_chars(msgs):
+        total = 0
+        for m in msgs:
+            c = m.get("content")
+            if isinstance(c, str):
+                total += len(c)
+            elif isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict):
+                        if isinstance(b.get("content"), str):
+                            total += len(b["content"])
+                        if isinstance(b.get("text"), str):
+                            total += len(b["text"])
+                        if b.get("input") is not None:
+                            total += len(json.dumps(b["input"], default=str))
+                    else:
+                        total += len(str(b))
+        return total
+
+    def _fit_context(msgs, budget=500000):
+        """Keep the prompt under Claude's 200k-token context limit by truncating the
+        LARGEST tool_result blocks first (one get_my_asana_tasks can exceed 200k by
+        itself). ~500k chars ≈ 130k tokens, leaving room for the system prompt,
+        tool schemas and the reply."""
+        for _ in range(60):
+            if _approx_chars(msgs) <= budget:
+                break
+            longest = None   # (length, msg_idx, block_idx)
+            for mi, m in enumerate(msgs):
+                c = m.get("content")
+                if isinstance(c, list):
+                    for bi, b in enumerate(c):
+                        if (isinstance(b, dict) and b.get("type") == "tool_result"
+                                and isinstance(b.get("content"), str)):
+                            L = len(b["content"])
+                            if longest is None or L > longest[0]:
+                                longest = (L, mi, bi)
+            if not longest or longest[0] < 4000:
+                break
+            L, mi, bi = longest
+            s = msgs[mi]["content"][bi]["content"]
+            keep = max(2000, L // 2)
+            msgs[mi]["content"][bi]["content"] = (
+                s[:keep] + "\n[…truncated to fit the model's context limit — ask for a "
+                "smaller batch (a single property, or 'overdue only') to see everything].")
+        return msgs
+
     def generate():
         def sse(obj):
             return f"data: {json.dumps(obj)}\n\n"
@@ -901,6 +948,7 @@ def my_bot_chat():
             for _turn in range(6):
                 turn_text    = ""
                 asst_content = []
+                _fit_context(trimmed)   # never let the prompt exceed the context limit
                 with ai_client.messages.stream(
                     model="claude-haiku-4-5-20251001", max_tokens=4096,
                     system=system_prompt, messages=trimmed, tools=tools,

@@ -1,5 +1,8 @@
 """
-routes/pest_check.py — Pest / Rodent task lookup (hidden page, any logged-in user).
+pest_control/routes.py — Pest / Rodent task lookup (hidden page, any logged-in user).
+
+Self-contained package: this blueprint + its own templates/ live under pest_control/
+so the feature is isolated from the rest of the codebase.
 
 Finds Breezeway tasks named "Rodent Mitigation" or "Pest Control" between two
 dates and shows the useful data — with a best-effort answer to "was a VENDOR
@@ -24,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required
 
-pest_check_bp = Blueprint("pest_check", __name__)
+pest_check_bp = Blueprint("pest_check", __name__, template_folder="templates")
 
 BW_BASE = "https://api.breezeway.io"
 
@@ -87,13 +90,16 @@ def _assignee_role_fields(person: dict) -> dict:
 
 
 def _vendor_verdict(task: dict, people_by_id: dict):
-    """Returns (is_vendor, evidence). Each evidence item is
-    {label, field, value, means, vendor} — plain English + the exact Breezeway
-    field + the raw value, for both vendor signals AND clean checks."""
+    """Returns (verdict, evidence). verdict ∈ {'vendor','internal','unknown'} and is
+    decided SOLELY by the assignee's Breezeway role — the only thing that actually
+    proves who did the work. Costs / bill-to / rate are shown as CONTEXT only; they
+    never set the verdict (internal tasks have those too). Each evidence item is
+    {label, field, value, means, vendor}."""
     evidence = []
-    vendor = False
+    any_vendor    = False
+    any_role_read = False
 
-    # 1) WHO performed it — the strongest signal (vendor vs staff is a person ROLE).
+    # WHO performed it — the role on the assignee's person record is the proof.
     assignments = task.get("assignments") or []
     if not assignments:
         evidence.append({"label": "No one is assigned", "field": "task.assignments",
@@ -102,47 +108,39 @@ def _vendor_verdict(task: dict, people_by_id: dict):
         person = people_by_id.get(a.get("assignee_id")) or {}
         field, value = _person_role(person)
         is_v = _value_is_vendor(value) if value is not None else False
-        vendor = vendor or is_v
+        if value is not None:
+            any_role_read = True
+        if is_v:
+            any_vendor = True
         evidence.append({
             "label": f"Assigned to “{a.get('name') or 'unknown'}”",
-            "field": (f"person record → {field}" if field else "person record (no role field present)"),
-            "value": value if value is not None else "(role not found)",
-            "means": ("set up in Breezeway as an outside vendor / provider — NOT internal staff" if is_v
-                      else "internal staff" if value is not None
-                      else "couldn't read this person's role"),
+            "field": (f"person record → {field}" if field else "person record (no role/type field present)"),
+            "value": value if value is not None else "(role not found in the person record)",
+            "means": ("this person's Breezeway role reads as an OUTSIDE VENDOR / provider" if is_v
+                      else "this person's Breezeway role reads as INTERNAL staff" if value is not None
+                      else "couldn't read a role here — can't tell vendor vs staff from this"),
             "vendor": is_v,
         })
 
-    # 2) Cost recorded on the task.
+    # CONTEXT only — never decides the verdict (internal tasks can have these too).
     costs = task.get("costs") or []
     if costs:
         amts = [str(c.get("amount") or c.get("cost") or c.get("total") or c.get("value") or "?")
                 for c in costs[:6] if isinstance(c, dict)]
-        vendor = True
-        evidence.append({"label": "Cost recorded on the task", "field": "task.costs",
+        evidence.append({"label": "Cost recorded (context)", "field": "task.costs",
                          "value": f"{len(costs)} line(s)" + (f" — {', '.join(amts)}" if amts else ""),
-                         "means": "a charge was logged — how outside/vendor costs usually appear", "vendor": True})
-    else:
-        evidence.append({"label": "No cost recorded", "field": "task.costs", "value": "empty",
-                         "means": "no charge logged on the task", "vendor": False})
-
-    # 3) Bill-to.
+                         "means": "a charge was logged — NOT proof of a vendor on its own", "vendor": False})
     bt = task.get("bill_to")
     if bt and str(bt).strip().lower() not in ("", "review", "none", "null"):
-        vendor = True
-        evidence.append({"label": "Bill-to is set", "field": "task.bill_to", "value": bt,
-                         "means": "billed to a party — often set when outside work is charged through", "vendor": True})
-    else:
-        evidence.append({"label": "No bill-to", "field": "task.bill_to",
-                         "value": bt if bt else "empty", "means": "not billed out", "vendor": False})
-
-    # 4) Pay rate (informational — staff can have rates too).
+        evidence.append({"label": "Bill-to set (context)", "field": "task.bill_to", "value": bt,
+                         "means": "billed to a party — NOT proof of a vendor on its own", "vendor": False})
     if task.get("rate_paid"):
-        evidence.append({"label": "Pay rate recorded", "field": "task.rate_paid / rate_type",
+        evidence.append({"label": "Pay rate (context)", "field": "task.rate_paid / rate_type",
                          "value": f"{task.get('rate_paid')} ({task.get('rate_type')})",
-                         "means": "a pay rate was recorded for whoever performed it (staff or vendor)", "vendor": False})
+                         "means": "a pay rate — staff or vendor, not decisive", "vendor": False})
 
-    return (vendor, evidence)
+    verdict = "vendor" if any_vendor else ("internal" if any_role_read else "unknown")
+    return (verdict, evidence)
 
 
 @pest_check_bp.route("/pest-check")
@@ -239,7 +237,7 @@ def _scan_inner():
                 "person_raw": person,                     # full record for verification
             })
 
-        is_vendor, evidence = _vendor_verdict(t, people)
+        verdict, evidence = _vendor_verdict(t, people)
         status_obj = t.get("type_task_status") or {}
         status_str = (status_obj.get("name") if isinstance(status_obj, dict) else status_obj) or ""
 
@@ -253,7 +251,8 @@ def _scan_inner():
             "finished_at": (str(t.get("finished_at") or "")[:16]) or None,
             "department":  t.get("type_department"),
             "assignees":   assignees,
-            "vendor_involved": is_vendor,
+            "vendor_verdict":  verdict,            # 'vendor' | 'internal' | 'unknown'
+            "vendor_involved": verdict == "vendor",
             "evidence":        evidence,
             # Task-level vendor/cost signals, surfaced plainly:
             "bill_to":     t.get("bill_to"),
