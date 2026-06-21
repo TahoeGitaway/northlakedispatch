@@ -527,13 +527,15 @@ def _build_prompt(date_str: str, routes: list, checkins: list,
                 entry += f" (checkout {out_date})"
             arr_lines.append(entry)
 
+        total_arr = len(checkins)
         summary = []
         if counts["guest"]:  summary.append(f"{counts['guest']} guest arrival{'s' if counts['guest']!=1 else ''}")
         if counts["owner"]:  summary.append(f"{counts['owner']} owner stay{'s' if counts['owner']!=1 else ''}")
         if counts["lease"]:  summary.append(f"{counts['lease']} lease arrival{'s' if counts['lease']!=1 else ''}")
-        lines.append(f"Arrivals today ({', '.join(summary)}):\n" + "\n".join(arr_lines))
+        head = f"TOTAL ARRIVALS TODAY: {total_arr}" + (f" ({', '.join(summary)})" if summary else "")
+        lines.append(head + ":\n" + "\n".join(arr_lines))
     else:
-        lines.append("No arrivals scheduled for today.")
+        lines.append("TOTAL ARRIVALS TODAY: 0 — no arrivals scheduled.")
 
     if not checkins and not _get_breezeway_token():
         lines[-1] = "(Breezeway data not available — credentials not configured.)"
@@ -551,7 +553,7 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
         prompt = _build_prompt(date_str, routes, checkins, checkouts, notes)
         client = anthropic.Anthropic(api_key=key)
         msg    = client.messages.create(
-            model      = "claude-sonnet-4-6",
+            model      = "claude-opus-4-8",   # smartest model — briefing is tiny so cost is negligible
             max_tokens = 240,
             system     = (
                 "You are a terse operations briefer for a vacation rental cleaning company "
@@ -559,14 +561,16 @@ def _generate_briefing(date_str: str, routes: list, checkins: list,
                 "SECOND sentence ONLY when dispatcher notes (FACTS TO INCLUDE or INSTRUCTIONS) "
                 "are present — that second sentence conveys the notes. If there are no notes, "
                 "write only the one sentence.\n\n"
-                "First sentence: state the single most operationally important fact — a "
-                "priority check-in deadline, a lease or owner arrival, or anything that "
-                "affects timing — AND how many arrivals (check-ins) are on each list.\n"
+                "First sentence: ALWAYS lead with the TOTAL number of arrivals (check-ins) "
+                "for the day from 'TOTAL ARRIVALS TODAY' (e.g. 'Thursday has 9 arrivals'), "
+                "then state the single most operationally important fact — a priority "
+                "check-in deadline, a lease or owner arrival, or anything that affects "
+                "timing. You MAY also break the arrivals down per list (by assignee).\n"
                 "Second sentence (only when notes are present): follow the INSTRUCTIONS "
                 "exactly and weave in the FACTS TO INCLUDE.\n\n"
                 "Rules:\n"
                 "- One sentence, or two only when dispatcher notes are present. No bullet lists, no paragraphs.\n"
-                "- Do mention how many arrivals are on each list.\n"
+                "- ALWAYS state the day's TOTAL arrival count. You may also give per-list counts.\n"
                 "- NEVER mention departures or checkouts — not relevant to operations.\n"
                 "- NEVER characterize the workload. Do not use: heavy, busy, light, big, "
                 "significant, demanding, packed, full, or any similar word.\n"

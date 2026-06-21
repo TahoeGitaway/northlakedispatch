@@ -650,7 +650,7 @@ function reOptimize() {
     ...currentReal.map(s => ({
       _id: s._id, name: s.name, lat: s.lat, lng: s.lng,
       arrival: s.arrival, priority_checkin: s.priority_checkin || false,
-      serviceMinutes: s.serviceMinutes
+      go_first: s.go_first || false, serviceMinutes: s.serviceMinutes
     })),
     ...addMoreStops
   ];
@@ -659,6 +659,27 @@ function reOptimize() {
   durationMatrix = [];
   closeAddMore();
   optimizeRoute();
+}
+
+/* ── ESTIMATED SERVICE TIME (tentative on import; editable after) ── */
+// Per task-type estimates. A stop's tentative time = sum of its tasks' estimates.
+function estTaskMinutes(name) {
+  const t = " " + String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  if (t.includes(" light walk thru ") || t.includes(" light walk through ")) return 15;
+  if (t.includes(" walk thru ") || t.includes(" walk through ")) return 30;
+  if (t.includes(" hot tub ")) return 30;
+  if (t.includes(" post rental inspection ") || t.includes(" pri ")) return 60;  // PRI
+  if (t.includes(" managed service")) return 60;                                  // inspection or arrival
+  if (t.includes(" bear fence ")) return 0;                                       // disarm bear fence — no time
+  if (t.includes(" property check ")) return 15;
+  return 30;   // unknown task — modest default
+}
+function estServiceMinutes(tasks) {
+  if (!tasks || !tasks.length) return 60;
+  let sum = 0;
+  for (const t of tasks) sum += estTaskMinutes(t.task_name || t.name || t);
+  sum = Math.round(sum / 15) * 15;             // snap to 15-min steps (the dropdown's increments)
+  return Math.max(15, Math.min(240, sum));     // clamp to the dropdown range (15–240)
 }
 
 /* ── BREEZEWAY IMPORT ── */
@@ -719,6 +740,7 @@ async function runBwImport() {
       let added = 0;
       for (const p of (data.matched || [])) {
         if (!selectedStops.find(s => s.name === p.name)) {
+          p.serviceMinutes = estServiceMinutes(p.tasks);   // tentative — editable after
           addStop(p, !!p.arrival, !!p.priority_checkin);
           added++;
         }
@@ -734,6 +756,10 @@ async function runBwImport() {
       if (unmatched.length) {
         msg  += ` Not found: ${unmatched.join(", ")}.`;
         color = added > 0 ? "amber" : "red";
+      }
+      if (data.failed_properties) {
+        msg  += ` ⚠ ${data.failed_properties} propert${data.failed_properties === 1 ? "y" : "ies"} couldn't be loaded from Breezeway — re-import to retry so no tasks are missed.`;
+        color = "amber";
       }
       _bwImportMsg(msg, color);
       _bwShowTaskSidebar(date, data.matched || []);
@@ -812,7 +838,10 @@ function _bwRenderUncertain(date, list) {
     keep.className = "flex-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded px-2 py-1 font-medium";
     keep.textContent = "Keep";
     keep.addEventListener("click", () => {
-      if (!selectedStops.find(s => s.name === p.name)) addStop(p, !!p.arrival, !!p.priority_checkin);
+      if (!selectedStops.find(s => s.name === p.name)) {
+        p.serviceMinutes = estServiceMinutes(p.tasks);   // tentative — editable after
+        addStop(p, !!p.arrival, !!p.priority_checkin);
+      }
       _bwTasksByPropName[p.name] = p.tasks || [];
       _syncSidebarToSchedule();
       _bwPlaceMarkers();

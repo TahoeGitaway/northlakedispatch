@@ -7,11 +7,13 @@
   <div class="mb-6">
     <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Tools</div>
     <div class="flex flex-wrap gap-2">
+      {# Hidden per request — Spring Property Inspections tracker (doesn't work). Restore by un-commenting.
       <a href="{{ url_for('spi.spi_page') }}"
          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-green-200
                 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100 transition-colors">
         🌿 Spring Property Inspections 2026
       </a>
+      #}
       <a href="{{ url_for('admin.pri_check_page') }}"
          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200
                 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors">

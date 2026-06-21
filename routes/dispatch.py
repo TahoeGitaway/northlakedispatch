@@ -505,7 +505,7 @@ def _solve_route(
     duration_matrix, service_times_sec, checkin_flags, priority_flags,
     deadline_offset_sec=None, priority_deadline_offset_sec=None,
     hard_deadline=False, soft_deadline_penalty=False,
-    end_node=0,
+    end_node=0, front_flags=None,
 ):
     size    = len(duration_matrix)
     if end_node == 0:
@@ -554,6 +554,19 @@ def _solve_route(
             if hard_deadline:         time_dim.CumulVar(idx).SetRange(0, latest)
             if soft_deadline_penalty: time_dim.SetCumulVarSoftUpperBound(idx, latest, PENALTY)
 
+    # "Go first" stops form a FRONT BLOCK: every front stop is visited before every
+    # non-front stop (pure ordering, no deadline). The solver still optimizes the
+    # order WITHIN the front block and WITHIN the rest. Applied in every pass.
+    if front_flags and any(front_flags[1:]):
+        cp_solver = routing.solver()
+        front_idx = [manager.NodeToIndex(n) for n in range(1, size)
+                     if n != end_node and front_flags[n]]
+        rear_idx  = [manager.NodeToIndex(n) for n in range(1, size)
+                     if n != end_node and not front_flags[n]]
+        for fi in front_idx:
+            for ri in rear_idx:
+                cp_solver.Add(time_dim.CumulVar(fi) <= time_dim.CumulVar(ri))
+
     params = pywrapcp.DefaultRoutingSearchParameters()
     params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
 
@@ -563,7 +576,7 @@ def _solve_route(
     # *feasible* position, so it respects hard deadlines from the start and gives
     # GLS a valid solution to improve. For unconstrained passes PATH_CHEAPEST_ARC
     # is fine and slightly faster.
-    if hard_deadline or soft_deadline_penalty:
+    if hard_deadline or soft_deadline_penalty or (front_flags and any(front_flags[1:])):
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.LOCAL_CHEAPEST_INSERTION
     else:
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -716,15 +729,18 @@ def optimize():
         stop_service = [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
         stop_checkin = [bool(s.get("arrival", False)) for s in cleaned_stops]
         stop_priority= [bool(s.get("priority_checkin", False)) for s in cleaned_stops]
+        stop_front   = [bool(s.get("go_first", False)) for s in cleaned_stops]
         # End node (when different from start) gets zero service time / no flags
         if same_depot:
             service_times_sec = [0] + stop_service
             checkin_flags     = [False] + stop_checkin
             priority_flags    = [False] + stop_priority
+            front_flags       = [False] + stop_front
         else:
             service_times_sec = [0] + stop_service + [0]
             checkin_flags     = [False] + stop_checkin + [False]
             priority_flags    = [False] + stop_priority + [False]
+            front_flags       = [False] + stop_front + [False]
 
         has_checkins = any(checkin_flags[1:])
         has_priority = any(priority_flags[1:])
@@ -750,7 +766,7 @@ def optimize():
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec if before_checkin_deadline else None,
                 priority_deadline_offset_sec=priority_deadline_sec if before_priority_deadline else None,
-                hard_deadline=True, end_node=end_node
+                hard_deadline=True, end_node=end_node, front_flags=front_flags
             )
             if ordered_nodes is not None:
                 used_deadline_constraints = True
@@ -761,16 +777,16 @@ def optimize():
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec,
                 priority_deadline_offset_sec=priority_deadline_sec,
-                soft_deadline_penalty=True, end_node=end_node
+                soft_deadline_penalty=True, end_node=end_node, front_flags=front_flags
             )
             if ordered_nodes is not None:
                 used_soft_penalties = True
 
-        # Pass 3 — unconstrained fallback.
+        # Pass 3 — fallback (no deadlines, but still honor the go-first front block).
         if ordered_nodes is None:
             ordered_nodes, arrival_times_sec = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
-                end_node=end_node
+                end_node=end_node, front_flags=front_flags
             )
             if ordered_nodes is None:
                 return jsonify({"error": "The route optimizer failed on all three passes (hard constraints, soft penalties, and unconstrained). This is unexpected — check that OR-Tools is installed correctly and that the stop coordinates are in a reachable area."}), 500
@@ -822,6 +838,7 @@ def optimize():
             "name":             stop.get("name"),
             "arrival":          is_checkin,
             "priority_checkin": is_priority,
+            "go_first":         False if drive_only else bool(stop.get("go_first", False)),
             "late":             is_late,
             "priority_late":    is_priority_late,
             "serviceMinutes":   service_min,
@@ -1004,6 +1021,30 @@ def routes_for_date():
     return jsonify({"routes": [dict(r) for r in rows]})
 
 
+def _robust_property_tasks(token, ref_id, date_str):
+    """Fetch ONE property's tasks for a date with retry/backoff, so a momentary
+    Breezeway throttle (429 / 5xx) doesn't SILENTLY drop the whole property's
+    tasks. Returns (tasks, ok); ok=False means it genuinely couldn't be loaded.
+    Shared by the import, the discrepancy check, and clear-times."""
+    from routes.briefing import _fetch_bw_endpoint
+    import time as _time
+    for attempt in range(3):
+        r, _, status = _fetch_bw_endpoint(
+            token, "/public/inventory/v1/task",
+            {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
+        if status == 200:
+            return (r or [], True)
+        if status is None or status == 429 or status >= 500:
+            _time.sleep(0.3 * (attempt + 1))
+            continue
+        # Non-throttle error (e.g. 400) → try the alternate date param once.
+        r2, _, st2 = _fetch_bw_endpoint(
+            token, "/public/inventory/v1/task",
+            {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
+        return (r2 or [], True) if st2 == 200 else ([], False)
+    return ([], False)
+
+
 @dispatch_bp.route("/api/bw-import", methods=["POST"])
 @login_required
 def bw_import():
@@ -1047,29 +1088,21 @@ def bw_import():
         if candidate not in pid_candidates:
             pid_candidates[candidate] = bw_pid
 
-    def _tasks_for_ref(ref_id):
-        for dp in [
-            {"scheduled_date": f"{date_str},{date_str}"},
-            {"start_date": date_str, "end_date": date_str},
-            {"date": date_str},
-        ]:
-            r, _, status = _fetch_bw_endpoint(
-                token, "/public/inventory/v1/task",
-                {"reference_property_id": ref_id, **dp},
-            )
-            if status == 200:
-                return r
-        return []
-
-    # Fetch tasks for all properties in parallel (25 workers to stay within timeout)
-    all_results = []
-    with ThreadPoolExecutor(max_workers=25) as executor:
-        for tasks in executor.map(_tasks_for_ref, list(pid_candidates.keys())):
+    # Fetch tasks per property in parallel — retry/backoff so a throttled house
+    # isn't silently dropped (which made the sidebar show fewer tasks than reality).
+    all_results, failed_props = [], 0
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        for tasks, ok in executor.map(
+                lambda ref: _robust_property_tasks(token, ref, date_str),
+                list(pid_candidates.keys())):
             all_results.extend(tasks)
+            if not ok:
+                failed_props += 1
 
     if not all_results:
-        return jsonify({"matched": [], "unmatched": [],
-                        "message": "No Breezeway tasks found for that date."})
+        return jsonify({"matched": [], "unmatched": [], "failed_properties": failed_props,
+                        "message": "No Breezeway tasks found for that date."
+                                   + (f" (⚠ {failed_props} properties couldn't be loaded — retry.)" if failed_props else "")})
 
     # Load DB properties once
     conn = get_db()
@@ -1177,14 +1210,15 @@ def bw_import():
         for asgn in assignees:
             matched, uncertain, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
             by_assignee[asgn] = {"matched": matched, "uncertain": uncertain, "unmatched": unmatched}
-        return jsonify({"by_assignee": by_assignee})
+        return jsonify({"by_assignee": by_assignee, "failed_properties": failed_props})
 
     subset = _filter_by_assignee(all_results, assignees[0].lower()) if assignees else all_results
     matched, uncertain, unmatched = _matched_for(subset)
     if not matched and not uncertain and not unmatched:
-        return jsonify({"matched": [], "uncertain": [], "unmatched": [],
+        return jsonify({"matched": [], "uncertain": [], "unmatched": [], "failed_properties": failed_props,
                         "message": "No Breezeway tasks found for that date/assignee."})
-    return jsonify({"matched": matched, "uncertain": uncertain, "unmatched": unmatched})
+    return jsonify({"matched": matched, "uncertain": uncertain, "unmatched": unmatched,
+                    "failed_properties": failed_props})
 
 
 # ── Route discrepancy check ───────────────────────────────────────
@@ -1331,19 +1365,12 @@ def route_discrepancies():
         ref_id = ref_cache.get(bw_pid)
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
-    def _tasks_for_ref(ref_id):
-        for dp in ({"scheduled_date": f"{date_str},{date_str}"},
-                   {"start_date": date_str, "end_date": date_str},
-                   {"date": date_str}):
-            r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
-                                              {"reference_property_id": ref_id, **dp})
-            if status == 200:
-                return r or []
-        return []
-
+    # Per-property fetch with retry/backoff (shared helper) so a throttled house
+    # isn't silently dropped — same fix as the import.
     all_tasks = []
-    with ThreadPoolExecutor(max_workers=25) as ex:
-        for tasks in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for tasks, _ok in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
+                                 list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 
     asgn_lower = assignee.lower()
@@ -1687,11 +1714,18 @@ def clear_task_times():
 
     body     = request.get_json() or {}
     date_str = (body.get("date") or "").strip()
-    assignee = (body.get("assignee") or "").strip()
+    # Accept multiple people: "assignees" (list) or legacy "assignee" (single).
+    raw = body.get("assignees")
+    if isinstance(raw, list):
+        assignees = [a.strip() for a in raw if a and str(a).strip()]
+    else:
+        single = (body.get("assignee") or "").strip()
+        assignees = [single] if single else []
     if not date_str:
         return jsonify({"error": "A date is required."}), 400
-    if not assignee:
-        return jsonify({"error": "A person is required."}), 400
+    if not assignees:
+        return jsonify({"error": "At least one person is required."}), 400
+    asgn_lowers = [a.lower() for a in assignees]
 
     token = _get_breezeway_token()
     if not token:
@@ -1707,22 +1741,14 @@ def clear_task_times():
         ref_id = ref_cache.get(bw_pid)
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
-    def _tasks_for_ref(ref_id):
-        for dp in ({"scheduled_date": f"{date_str},{date_str}"},
-                   {"start_date": date_str, "end_date": date_str},
-                   {"date": date_str}):
-            r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
-                                              {"reference_property_id": ref_id, **dp})
-            if status == 200:
-                return r or []
-        return []
-
+    # Per-property fetch with retry/backoff (shared helper) so a throttled house
+    # isn't silently dropped — same fix as the import.
     all_tasks = []
-    with ThreadPoolExecutor(max_workers=25) as ex:
-        for tasks in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for tasks, _ok in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
+                                 list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 
-    asgn_lower = assignee.lower()
     seen, mine = set(), []
     for t in all_tasks:
         t_date = (t.get("scheduled_date") or "")[:10]
@@ -1732,7 +1758,7 @@ def clear_task_times():
         if tid is None or tid in seen:
             continue
         seen.add(tid)
-        if _bw_assignee_match(t, asgn_lower):
+        if any(_bw_assignee_match(t, al) for al in asgn_lowers):
             mine.append(t)
 
     # Clear the times in PARALLEL — the person can have many tasks, and a
@@ -1758,7 +1784,8 @@ def clear_task_times():
     cleared = sum(1 for r in results if r["ok"])
     failed  = sum(1 for r in results if not r["ok"])
 
-    return jsonify({"date": date_str, "assignee": assignee,
+    return jsonify({"date": date_str, "assignee": ", ".join(assignees),
+                    "assignees": assignees,
                     "total": len(mine), "cleared": cleared, "failed": failed,
                     "results": results})
 

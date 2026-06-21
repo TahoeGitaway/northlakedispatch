@@ -287,6 +287,11 @@ function renderStops() {
                  ${s.priority_checkin ? "checked" : ""}>
           <span class="text-violet-700 font-medium text-xs">Priority (by 12PM)</span>
         </label>
+        <label class="flex items-center gap-1 cursor-pointer">
+          <input type="checkbox" class="accent-indigo-600" data-role="gofirst"
+                 ${s.go_first ? "checked" : ""}>
+          <span class="text-indigo-700 font-medium text-xs">📌 Go first</span>
+        </label>
         <select class="border rounded px-1 py-0.5 text-xs" data-role="service">
           ${generateTimeOptions(s.serviceMinutes)}
         </select>
@@ -298,6 +303,7 @@ function renderStops() {
     const priorityCb  = div.querySelector('[data-role="priority"]');
     const priorityLbl = div.querySelector('.priority-label');
     const serviceEl   = div.querySelector('[data-role="service"]');
+    const gofirstCb   = div.querySelector('[data-role="gofirst"]');
     const removeBtn   = div.querySelector('[data-role="remove"]');
 
     checkinCb.addEventListener("change", () => {
@@ -307,6 +313,7 @@ function renderStops() {
     });
     priorityCb.addEventListener("change", () => { s.priority_checkin = priorityCb.checked; });
     serviceEl.addEventListener("change", () => { s.serviceMinutes = parseInt(serviceEl.value); });
+    gofirstCb.addEventListener("change", () => { s.go_first = gofirstCb.checked; });
     removeBtn.addEventListener("click", () => {
       selectedStops = selectedStops.filter(x => x._id !== s._id);
       // Drop the stale map marker, then re-render so the left list, cost hint,
@@ -607,15 +614,16 @@ function renderSchedule() {
       list.appendChild(driveEl);
     }
 
-    let badge = "";
+    let badge = stop.go_first
+      ? `<span class="priority-badge" style="background:#e0e7ff;color:#4338ca;">📌 FIRST</span>` : "";
     if (stop.priority_checkin && stop.priority_late)
-      badge = `<span class="late-badge">PRIORITY LATE</span>`;
+      badge += `<span class="late-badge">PRIORITY LATE</span>`;
     else if (stop.priority_checkin)
-      badge = `<span class="checkin-badge">CHECK-IN</span><span class="priority-badge">by 12PM</span>`;
+      badge += `<span class="checkin-badge">CHECK-IN</span><span class="priority-badge">by 12PM</span>`;
     else if (stop.arrival && stop.late)
-      badge = `<span class="late-badge">LATE</span>`;
+      badge += `<span class="late-badge">LATE</span>`;
     else if (stop.arrival)
-      badge = `<span class="checkin-badge">CHECK-IN</span>`;
+      badge += `<span class="checkin-badge">CHECK-IN</span>`;
 
     // Always render BOTH toggles (active or muted) so every card has the same
     // controls in the same place — no content-driven wrapping between cards.

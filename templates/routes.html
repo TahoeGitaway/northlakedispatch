@@ -214,13 +214,14 @@
               </div>
               <div class="px-4 py-3 space-y-2.5">
                 <div>
-                  <label class="text-xs font-medium text-gray-500 block mb-1">Person</label>
-                  <input id="clearTimesPerson" type="text" placeholder="e.g. Chris Marin"
+                  <label class="text-xs font-medium text-gray-500 block mb-1">Person(s) — separate with commas</label>
+                  <input id="clearTimesPerson" type="text" placeholder="e.g. Chris Marin, Jonah, Drew"
                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
                                 focus:outline-none focus:ring-2 focus:ring-red-300">
                 </div>
-                <div class="text-xs text-gray-500">
-                  Date: <span id="clearTimesDate" class="font-semibold text-gray-700">—</span>
+                <div class="rounded-lg px-3 py-2" style="background:#fef2f2;border:1px solid #fecaca;">
+                  <div class="text-[11px] font-semibold text-red-500 uppercase tracking-wide">Date being cleared</div>
+                  <div id="clearTimesDate" class="text-lg font-extrabold text-red-700 leading-tight">—</div>
                 </div>
                 <div class="text-xs text-red-600 flex items-start gap-1.5 leading-snug">
                   <span class="shrink-0">⚠️</span>
@@ -327,6 +328,8 @@
                style="background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);">
             <span class="text-indigo-400 font-bold text-base leading-none">✦</span>
             <span class="text-sm font-semibold text-indigo-700 tracking-wide">{% if current_user.is_admin %}AI Briefing{% else %}Today's Notes{% endif %}</span>
+            <span id="briefingHeaderDate"
+                  class="ml-auto text-sm font-extrabold text-indigo-900 bg-white border border-indigo-300 rounded-full px-3 py-1 shadow-sm">—</span>
           </div>
 
           <!-- Notes -->
@@ -560,25 +563,27 @@ function _clearTimesMsg(text, color) {
 }
 
 async function removeAllTimes() {
-  const person = (document.getElementById("clearTimesPerson").value || "").trim();
-  const date   = selectedDate || TODAY_STR;
-  if (!person) { _clearTimesMsg("Enter a person's name first.", "red"); return; }
-  if (!date)   { _clearTimesMsg("Select a day first.", "red"); return; }
+  const raw  = (document.getElementById("clearTimesPerson").value || "").trim();
+  const date = selectedDate || TODAY_STR;
+  const people = raw.split(",").map(s => s.trim()).filter(Boolean);
+  if (!people.length) { _clearTimesMsg("Enter at least one person's name first.", "red"); return; }
+  if (!date)          { _clearTimesMsg("Select a day first.", "red"); return; }
 
-  const fmt = new Date(date + "T00:00:00").toLocaleDateString("en-US",
+  const fmt   = new Date(date + "T00:00:00").toLocaleDateString("en-US",
     { weekday:"short", month:"short", day:"numeric" });
-  if (!confirm(`⚠️ Remove ALL assigned times for ${person} on ${fmt}?\n\n`
-    + `This clears the start time of every task in ${person}'s name that day in Breezeway. It cannot be undone.`)) return;
+  const names = people.join(", ");
+  if (!confirm(`⚠️ Remove ALL assigned times for ${names} on ${fmt}?\n\n`
+    + `This clears the start time of every task in their name(s) that day in Breezeway. It cannot be undone.`)) return;
 
-  _clearTimesMsg("Removing times in Breezeway… this can take a moment.", "gray");
+  _clearTimesMsg(`Removing times for ${names} on ${fmt} in Breezeway… this can take a moment.`, "gray");
   try {
     const r = await fetch("/admin/clear-task-times", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date, assignee: person }),
+      body: JSON.stringify({ date, assignees: people }),
     });
     const data = await r.json();
     if (data.error) { _clearTimesMsg(data.error, "red"); return; }
-    if (!data.total) { _clearTimesMsg(`No tasks found for ${person} on that day.`, "gray"); return; }
+    if (!data.total) { _clearTimesMsg(`No tasks found for ${names} on that day.`, "gray"); return; }
     _renderClearTimesResults(data);
   } catch (e) {
     _clearTimesMsg("Could not reach the server.", "red");
@@ -875,6 +880,11 @@ async function loadCalendarActivity(year, month) {
 function selectDay(ds) {
   selectedDate = ds;
   buildCalendar();
+
+  // AI Briefing header — show the date it's looking at, prominently.
+  const bhd = document.getElementById("briefingHeaderDate");
+  if (bhd) bhd.textContent = new Date(ds + "T00:00:00")
+    .toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
 
   // Admin "remove times" block — reflect the selected day, reset its state
   const ctd = document.getElementById("clearTimesDate");

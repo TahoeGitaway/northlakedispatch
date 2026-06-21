@@ -79,7 +79,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
       .map(s => ({
         _id: s._id, name: s.name, lat: s.lat, lng: s.lng,
         arrival: s.arrival, priority_checkin: s.priority_checkin || false,
-        serviceMinutes: s.serviceMinutes
+        go_first: s.go_first || false, serviceMinutes: s.serviceMinutes
       }));
     isOptimized      = false;
     optimizedSchedule = [];
@@ -99,7 +99,7 @@ async function optimizeRoute(useGoogleMatrix = false) {
       body: JSON.stringify({
         stops: selectedStops.map(s => ({
           name:s.name, lat:s.lat, lng:s.lng,
-          arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes
+          arrival:s.arrival, priority_checkin:s.priority_checkin, go_first:s.go_first||false, serviceMinutes:s.serviceMinutes
         })),
         start:             startLocation,
         end:               endLocation,
@@ -407,7 +407,7 @@ async function loadRouteById(loadId) {
 
     selectedStops = optimizedSchedule.map(s => ({
       _id: s._id, name:s.name, lat:s.lat, lng:s.lng,
-      arrival:s.arrival, priority_checkin:s.priority_checkin || false, serviceMinutes:s.serviceMinutes
+      arrival:s.arrival, priority_checkin:s.priority_checkin || false, go_first:s.go_first||false, serviceMinutes:s.serviceMinutes
     }));
 
     isOptimized = true;
@@ -548,7 +548,7 @@ async function recalcDriveTimes(useGoogle = true) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        stops:             real.map(s => ({ name:s.name, lat:s.lat, lng:s.lng, arrival:s.arrival, priority_checkin:s.priority_checkin, serviceMinutes:s.serviceMinutes })),
+        stops:             real.map(s => ({ name:s.name, lat:s.lat, lng:s.lng, arrival:s.arrival, priority_checkin:s.priority_checkin, go_first:s.go_first||false, serviceMinutes:s.serviceMinutes })),
         start:             startLocation,
         end:               endLocation,
         startTime:         minutesToHHMM24(startMinutes),
