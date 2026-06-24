@@ -25,6 +25,13 @@ hot_tub_bp = Blueprint("hot_tub", __name__)
 
 BW_BASE = "https://api.breezeway.io"
 
+# Scan-result cache: the all-properties tag sweep can run past the hosting proxy's
+# timeout (→ "upstream error"); caching means the backend finishes and a retry
+# returns instantly. The scan takes no params, so one entry is enough.
+import time as _time
+_scan_cache = {"ts": 0.0, "data": None}
+_SCAN_TTL = 300
+
 HOT_TUB_PATTERN = re.compile(
     r"(?=.*\bhot[\s\-]?tub\b)(?=.*\b(arrival|biweekly|bi[\s\-]?weekly|lease|d\s*&\s*s)\b)",
     re.IGNORECASE,
@@ -132,6 +139,11 @@ def hot_tub_scan():
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 500
 
+    # Serve a fresh cached result instantly (also rescues a prior proxy timeout).
+    if not (request.get_json(silent=True) or {}).get("force") \
+            and _scan_cache["data"] is not None and _time.time() - _scan_cache["ts"] < _SCAN_TTL:
+        return jsonify(_scan_cache["data"])
+
     from routes.briefing import _get_live_property_cache, _get_live_ref_cache, _ensure_property_cache
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
@@ -156,7 +168,7 @@ def hot_tub_scan():
 
     all_pids = list(prop_cache.keys())
     tagged_pids = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:
         futures = {ex.submit(has_hot_tub_tag, pid): pid for pid in all_pids}
         for future in as_completed(futures):
             if future.result():
@@ -175,7 +187,7 @@ def hot_tub_scan():
         return pid, _fetch_tasks_for_property(token, pid, ref_cache.get(pid, ""), lookback, lookahead)
 
     tasks_by_pid: dict[str, list] = {}
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:
         for pid, tasks in ex.map(lambda p: fetch_tasks(p), tagged_pids):
             tasks_by_pid[pid] = tasks
 
@@ -255,4 +267,7 @@ def hot_tub_scan():
 
     # Sort: overdue first, then by days_since descending
     results.sort(key=lambda x: (not x["overdue"], -(x["days_since"] or 9999)))
-    return jsonify({"results": results})
+    payload = {"results": results}
+    _scan_cache["data"] = payload          # cache before returning (survives proxy timeout)
+    _scan_cache["ts"]   = _time.time()
+    return jsonify(payload)

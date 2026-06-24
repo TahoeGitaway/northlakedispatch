@@ -30,6 +30,11 @@ pri_rename_bp = Blueprint("pri_rename", __name__)
 
 BW_BASE = "https://api.breezeway.io"
 
+# Per date-range scan cache — survives a proxy timeout so a retry is instant.
+import time as _time
+_scan_cache: dict = {}      # (start_iso, end_iso) -> (timestamp, result_dict)
+_SCAN_TTL = 90
+
 # How far ahead to look for the next owner/hold/block arrival — it can be well
 # beyond the inspection's own date.
 LOOKAHEAD_DAYS = 180
@@ -94,7 +99,7 @@ def _fetch_tasks_for_pids(token, pids, start, end):
     from routes.briefing import _get_live_ref_cache
     ref_cache = _get_live_ref_cache()
     all_tasks, seen = [], set()
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:
         futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
                    for pid in pids}
         for fut in as_completed(futures):
@@ -174,6 +179,11 @@ def pri_rename_scan():
     except ValueError:
         start, end = today, today + timedelta(days=30)
 
+    ck     = (start.isoformat(), end.isoformat())
+    cached = _scan_cache.get(ck)
+    if cached and not body.get("force") and _time.time() - cached[0] < _SCAN_TTL:
+        return jsonify(cached[1])
+
     # Homeowner / hold / block arrivals across a wide forward window (the next such
     # arrival can be well past the inspection date). Holds fold into "block".
     reservations = _fetch_reservations_range(token, start, end + timedelta(days=LOOKAHEAD_DAYS))
@@ -229,7 +239,9 @@ def pri_rename_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    return jsonify({"proposals": proposals})
+    result = {"proposals": proposals}
+    _scan_cache[ck] = (_time.time(), result)
+    return jsonify(result)
 
 
 @pri_rename_bp.route("/admin/pri-rename/apply", methods=["POST"])
@@ -251,4 +263,5 @@ def pri_rename_apply():
             "success":        ok,
             "detail":         msg,
         })
+    _scan_cache.clear()   # names changed — next scan should be fresh
     return jsonify({"results": results})

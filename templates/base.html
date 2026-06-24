@@ -120,7 +120,8 @@
       try {
         const res  = await fetch("/api/pri-alerts");
         const data = await res.json();
-        const alerts = (data.alerts || []);
+        const snoozed = _priSnoozedKeys();
+        const alerts = (data.alerts || []).filter(a => !snoozed.has(a.item_key));
         if (!alerts.length) return;
         const banner = document.getElementById("priAlertBanner");
         banner.innerHTML = "";
@@ -143,22 +144,27 @@
           row.innerHTML = `<span>${msg}</span>
             <button onclick="dismissPriAlert('${a.item_key}', this.closest('div'))"
                     class="flex-shrink-0 text-red-500 hover:text-red-700 font-bold text-base leading-none px-1"
-                    title="Dismiss for everyone">✕</button>`;
+                    title="Hide the banner for today — the PRI stays on the PRI Check page">✕</button>`;
           banner.appendChild(row);
         });
         banner.classList.remove("hidden");
       } catch {}
     })();
 
-    async function dismissPriAlert(key, rowEl) {
-      rowEl.style.opacity = "0.4";
-      try {
-        const res = await fetch("/api/pri-alert/dismiss", {
-          method: "POST", headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({key}),
-        });
-        if (!res.ok) { rowEl.style.opacity = "1"; return; }
-      } catch { rowEl.style.opacity = "1"; return; }
+    function _priSnoozeStorageKey() {
+      return "pri_banner_snooze_" + new Date().toISOString().slice(0, 10);  // resets daily
+    }
+    function _priSnoozedKeys() {
+      try { return new Set(JSON.parse(localStorage.getItem(_priSnoozeStorageKey()) || "[]")); }
+      catch { return new Set(); }
+    }
+    // The banner ✕ only HIDES the nag for today in THIS browser — it does NOT
+    // dismiss the PRI. The PRI stays on the PRI Check page; mark it done THERE.
+    function dismissPriAlert(key, rowEl) {
+      const sk = _priSnoozeStorageKey();
+      let arr; try { arr = JSON.parse(localStorage.getItem(sk) || "[]"); } catch { arr = []; }
+      if (!arr.includes(key)) arr.push(key);
+      localStorage.setItem(sk, JSON.stringify(arr));
       rowEl.remove();
       const banner = document.getElementById("priAlertBanner");
       if (!banner.querySelector("[onclick]")) banner.classList.add("hidden");

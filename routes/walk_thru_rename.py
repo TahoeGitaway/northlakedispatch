@@ -25,6 +25,13 @@ walk_thru_bp = Blueprint("walk_thru", __name__)
 
 BW_BASE = "https://api.breezeway.io"
 
+# Per date-range scan cache. The per-property sweep can run past the hosting
+# proxy's timeout (→ "upstream error"); caching means the backend finishes and a
+# retry returns instantly. Cleared after any rename.
+import time as _time
+_scan_cache: dict = {}      # (start_iso, end_iso) -> (timestamp, result_dict)
+_SCAN_TTL = 90
+
 WALK_THRU_PATTERNS = re.compile(
     r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|"
     r"arrival[\s\-]?task|guest[\s\-]?arrival|managed[\s\-]?services?[\s\-]?arrival)\b",
@@ -84,7 +91,7 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date, end: date) -
     all_tasks = []
     seen_ids: set = set()
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:
         futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
                    for pid in pids}
         for future in as_completed(futures):
@@ -167,6 +174,13 @@ def walk_thru_scan():
     except ValueError:
         start, end = today, today + timedelta(days=7)
 
+    # Serve a fresh cached result instantly (also rescues a prior proxy timeout).
+    ck     = (start.isoformat(), end.isoformat())
+    force  = bool(body.get("force"))
+    cached = _scan_cache.get(ck)
+    if cached and not force and _time.time() - cached[0] < _SCAN_TTL:
+        return jsonify(cached[1])
+
     reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
 
     reso_by_prop: dict[str, list[date]] = {}
@@ -221,7 +235,11 @@ def walk_thru_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    return jsonify({"proposals": proposals})
+    result = {"proposals": proposals}
+    # Cache before returning — even if the proxy already timed out, the backend
+    # finishes and a retry gets this instantly.
+    _scan_cache[ck] = (_time.time(), result)
+    return jsonify(result)
 
 
 @walk_thru_bp.route("/admin/walk-thru-rename/apply", methods=["POST"])
@@ -244,4 +262,5 @@ def walk_thru_apply():
             "detail":         msg,
         })
 
+    _scan_cache.clear()   # names changed — next scan should be fresh
     return jsonify({"results": results})

@@ -67,7 +67,12 @@ def pri_check():
     if win_end < win_start:
         win_start, win_end = win_end, win_start
 
-    lookback_start    = win_start                        # checkout window lower bound (From)
+    # Owner-next PRIs key off the upcoming owner/block ARRIVAL — and the guest often
+    # checked out BEFORE the selected window (e.g. owner arrives in 3 days, guest
+    # left last week). So we look back 90 days for checkouts (mirrors the banner),
+    # or the start of the user's window if that's earlier. Vacancies stay scoped to
+    # the user's [From, To] window below.
+    co_fetch_start    = min(win_start, today - timedelta(days=90))
     reso_lookback     = win_start - timedelta(days=180)  # wider window for upcoming — catches long owner stays
     report_end        = win_end                          # checkout window upper bound (To)
     far_end           = win_end + timedelta(days=150)
@@ -76,14 +81,14 @@ def pri_check():
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 500
 
-    lookback_str      = lookback_start.isoformat()
-    reso_lookback_str = reso_lookback.isoformat()
-    today_str         = today.isoformat()
-    report_end_str    = report_end.isoformat()
-    far_end_str       = far_end.isoformat()
+    co_fetch_start_str = co_fetch_start.isoformat()
+    reso_lookback_str  = reso_lookback.isoformat()
+    today_str          = today.isoformat()
+    report_end_str     = report_end.isoformat()
+    far_end_str        = far_end.isoformat()
 
     raw_checkouts = _fetch_bw_reservations(token, {
-        "checkout_date_ge": lookback_str,
+        "checkout_date_ge": co_fetch_start_str,
         "checkout_date_le": report_end_str,
     })
     raw_upcoming = _fetch_bw_reservations(token, {
@@ -93,7 +98,7 @@ def pri_check():
 
     checkouts = [
         r for r in raw_checkouts
-        if lookback_str <= (r.get("checkout_date") or "")[:10] <= report_end_str
+        if co_fetch_start_str <= (r.get("checkout_date") or "")[:10] <= report_end_str
     ]
 
     by_prop = {}
@@ -134,13 +139,17 @@ def pri_check():
                 next_ci_date = ci_date
                 break
 
+        # Vacancy is only meaningful for checkouts INSIDE the selected window —
+        # past checkouts are only scanned to surface upcoming owner-next PRIs.
+        in_window = win_start <= co_date <= win_end
         vacancy_cutoff = co_date + timedelta(days=60)
         if not next_r or not next_ci_date or next_ci_date > vacancy_cutoff:
-            no_booking.append({
-                "property":      prop_name,
-                "checkout_date": co_date_str,
-                "vacancy_days":  60,
-            })
+            if in_window:
+                no_booking.append({
+                    "property":      prop_name,
+                    "checkout_date": co_date_str,
+                    "vacancy_days":  60,
+                })
             continue
 
         next_kind = _classify_reservation(next_r)
@@ -171,7 +180,7 @@ def pri_check():
         "needs_tag":       needs_tag,
         "already_tagged":  already_done,
         "no_booking":      no_booking,
-        "scanned_from":    lookback_str,
+        "scanned_from":    win_start.isoformat(),
         "scanned_through": report_end_str,
     })
 

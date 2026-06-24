@@ -130,8 +130,23 @@ async function runScan() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start, end }),
     });
-    const data = await resp.json();
+    const rawBody = await resp.text();
     document.getElementById('loading').classList.add('hidden');
+
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch (_) {
+      // Non-JSON (e.g. "upstream error") = the server took longer than allowed.
+      // Explain it plainly so nobody panics — it's not broken.
+      const eb = document.getElementById('errorBox');
+      eb.innerHTML =
+        `<div style="font-weight:700;margin-bottom:3px;">This isn't broken — the scan just took longer than the server waits.</div>`
+        + `<div>It happens when the date range is wide or Breezeway is busy. The scan most likely finished in the background — `
+        + `<b>click “Scan” again</b> and it should load instantly, or choose a <b>shorter date range</b> (a week or less) and scan.</div>`;
+      eb.classList.remove('hidden');
+      return;
+    }
 
     if (data.error) {
       const eb = document.getElementById('errorBox');

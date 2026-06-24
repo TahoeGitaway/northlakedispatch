@@ -156,11 +156,32 @@ function _card(bg, border, html) {
   return li;
 }
 
-function buildSection(title, color, items, cardFn) {
+function buildSection(title, color, items, cardFn, collapsed) {
   if (!items.length) return null;
   const wrap = document.createElement("div");
   const hdr  = _section(`${title} (${items.length})`, color);
   hdr.textContent = `${title} (${items.length})`;
+
+  if (collapsed) {
+    // Collapsed by default; click the header to expand/collapse.
+    hdr.style.cursor = "pointer";
+    hdr.style.userSelect = "none";
+    const caret = document.createElement("span");
+    caret.textContent = "  ▸";
+    hdr.appendChild(caret);
+    const body = document.createElement("div");
+    body.style.display = "none";
+    items.forEach(p => body.appendChild(cardFn(p)));
+    hdr.addEventListener("click", () => {
+      const open = body.style.display === "none";
+      body.style.display = open ? "" : "none";
+      caret.textContent = open ? "  ▾" : "  ▸";
+    });
+    wrap.appendChild(hdr);
+    wrap.appendChild(body);
+    return wrap;
+  }
+
   wrap.appendChild(hdr);
   items.forEach(p => wrap.appendChild(cardFn(p)));
   return wrap;
@@ -203,7 +224,6 @@ function orangeCard(p) {
         <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${p.property}</div>
         <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
         ${vacLine}
-        <div style="font-size:0.75rem;font-weight:500;color:#ea580c;margin-top:4px;">Create vacancy PRI manually</div>
       </div>
       <button class="dismiss-btn" data-key="${key}"
               style="flex-shrink:0;font-size:0.7rem;font-weight:600;color:#92400e;
@@ -281,7 +301,7 @@ async function load() {
         No PRIs flagged in this window.</div>`;
     } else {
       const s1 = buildSection("🔴 Needs Owner Next tag", "#ef4444", needs, redCard);
-      const s2 = buildSection("🟠 Create vacancy PRI",   "#f97316", vacant, orangeCard);
+      const s2 = buildSection("🟠 No upcoming booking",  "#f97316", vacant, orangeCard, true);
       const s3 = buildSection("🟢 Already tagged",       "#059669", done, greenCard);
       if (s1) resultsEl.appendChild(s1);
       if (hiddenOnCt > 0) {
@@ -310,7 +330,7 @@ async function load() {
         // All vacancies dismissed — show a note even with no section header
         const note = document.createElement("div");
         note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-bottom:14px;";
-        note.innerHTML = `${hiddenCt} vacancy PRI${hiddenCt === 1 ? "" : "s"} dismissed ·
+        note.innerHTML = `${hiddenCt} no-booking flag${hiddenCt === 1 ? "" : "s"} dismissed ·
           <button onclick="clearAllDismissed()"
                   style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
             Show all
