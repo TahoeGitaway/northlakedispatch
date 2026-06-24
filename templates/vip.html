@@ -57,6 +57,17 @@ const VIP = [
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+// Escape first (XSS-safe), then turn URLs into clickable links.
+function _linkify(s){
+  return esc(s).replace(/(https?:\/\/[^\s<]+|www\.[^\s<]+)/g, (m) => {
+    let trail = '';
+    const tm = m.match(/[.,;:!?]+$/);            // don't swallow trailing punctuation
+    if(tm){ trail = tm[0]; m = m.slice(0, -trail.length); }
+    const href = m.indexOf('www.') === 0 ? 'http://' + m : m;
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#4f46e5;text-decoration:underline;word-break:break-all;">${m}</a>` + trail;
+  });
+}
+
 const ME = {{ current_user.id | tojson }};   // current user id — gates edit/delete to your own notes
 let STATE = {};      // item_key -> {done}
 let COMMENTS = {};   // item_key -> [{id, author, author_id, body, created_at}]
@@ -99,7 +110,7 @@ function _renderComments(box, key){
         + `<button class="vip-c-cancel" style="font-size:0.66rem;color:#6b7280;background:none;border:none;cursor:pointer;padding:0;">Cancel</button>`
         + `</div>`;
     } else {
-      bodyPart = `<div style="white-space:pre-wrap;margin-top:1px;">${esc(c.body)}</div>`
+      bodyPart = `<div style="white-space:pre-wrap;word-break:break-word;margin-top:1px;">${_linkify(c.body)}</div>`
         + (mine
             ? `<div style="margin-top:3px;display:flex;gap:12px;">`
               + `<button class="vip-c-edit" data-id="${c.id}" style="font-size:0.62rem;color:#4f46e5;background:none;border:none;cursor:pointer;padding:0;">Edit</button>`
@@ -203,8 +214,7 @@ function buildCard(v){
           <span>${v.nts} nights</span>
           <span>👥 ${esc(v.guests)}</span>
         </div>
-        <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;">Notes</div>
-        <div style="font-size:0.68rem;color:#9ca3af;margin-bottom:4px;">What you inspected and did, owner contact, condition. Visible to the whole team — each note shows who added it.</div>
+        <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;margin-bottom:4px;">Notes</div>
         <div class="vip-comments" style="display:flex;flex-direction:column;gap:5px;"></div>
         <div style="display:flex;gap:6px;margin-top:6px;">
           <input class="vip-comment-input" placeholder="Add a note — saved with your name…"
