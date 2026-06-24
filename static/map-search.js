@@ -803,6 +803,42 @@ function _titleHasPci(title) {
   return (" " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ").includes(" pci ");
 }
 
+// A loaded saved route stores priority_checkin from when it was saved — which can
+// be stale (e.g. a PCI added in Breezeway later, or saved before PCI detection).
+// So whenever we have the route's LIVE Breezeway tasks, re-detect PCI per property
+// and flag those stops as priority — no matter what was saved. This guarantees a
+// PCI is never overlooked on an already-built route.
+function _flagPciFromTasks(currentTasks) {
+  if (!Array.isArray(currentTasks) || !currentTasks.length) return;
+  const pciProps = new Set();
+  for (const c of currentTasks) {
+    const has = (c.tasks || []).some(t =>
+      _titleHasPci(typeof t === "string" ? t : ((t && (t.task_name || t.title)) || "")));
+    if (has) pciProps.add((c.property || "").toLowerCase());
+  }
+  if (!pciProps.size) return;
+
+  let changed = false;
+  const apply = s => {
+    if (s && pciProps.has((s.name || "").toLowerCase()) && !s.priority_checkin) {
+      s.priority_checkin = true;
+      s.arrival = true;
+      changed = true;
+    }
+  };
+  (typeof selectedStops !== "undefined" ? selectedStops : []).forEach(apply);
+  (typeof optimizedSchedule !== "undefined" ? optimizedSchedule : []).forEach(apply);
+  if (!changed) return;
+
+  if (typeof isOptimized !== "undefined" && isOptimized) {
+    if (typeof recalculateTimes === "function") recalculateTimes();
+    if (typeof renderSchedule === "function") renderSchedule();
+    if (typeof redrawRouteOnMap === "function") redrawRouteOnMap();
+  } else if (typeof renderStops === "function") {
+    renderStops();
+  }
+}
+
 // Low-confidence name matches — let the user keep or reject each before it
 // becomes a stop. Prevents a Breezeway house that isn't in the system yet from
 // silently matching the closest wrong home.
@@ -1040,6 +1076,7 @@ function _renderRouteChangesInto(routeId, body) {
     body.innerHTML = html;
     if (!data.error) {
       _routeChangesCache = { routeId, html, data };
+      _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
       _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
     }
   }).catch(e => {

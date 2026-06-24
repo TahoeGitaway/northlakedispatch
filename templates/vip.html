@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}VIP Arrivals — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6 pb-24">
+
+  <div class="mb-4">
+    <h2 class="text-xl font-bold text-gray-800">⭐ VIP Arrivals — Inspect Early</h2>
+    <p class="text-sm text-gray-500 mt-1 leading-relaxed">
+      Extra-special VIP reservations needing more than a card and a bottle of wine.
+      <strong class="text-blue-700">Blue</strong> homes have <strong>no recent bookings</strong> — get eyes on
+      them now, inspect thoroughly, and contact the owner ahead of time if needed. Don't wait until the last minute.
+    </p>
+    <div class="mt-3 rounded-xl px-4 py-2.5 text-sm" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;">
+      🔑 Biggest check-in day is <strong>7/1</strong> — <strong>5</strong> high-value reservations arriving.
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="flex items-center justify-between mb-4 text-sm">
+    <span id="progress" class="font-semibold text-gray-700">—</span>
+    <span id="saveStatus" class="text-xs text-gray-400"></span>
+  </div>
+
+  <div id="list" class="space-y-3"></div>
+</div>
+
+<script>
+const VIP = [
+  {key:"vip-01", name:"Sachin Rajpal",     ci:"6/24", nts:31, co:"7/25", guests:"5 | 3",  room:"Fleur Du Lac 18",                  total:"$53,250.00", blue:true},
+  {key:"vip-02", name:"Kristina Klimaitis",ci:"6/24", nts:7,  co:"7/1",  guests:"8 | 5",  room:"Beyond The Blue Lakefront Escape", total:"$41,235.00"},
+  {key:"vip-03", name:"Jason Van Voorhis", ci:"6/24", nts:52, co:"8/15", guests:"2 | 1",  room:"Clearwater Lake View",             total:"$32,000.00", first:true},
+  {key:"vip-04", name:"Sherry Saxton",     ci:"6/25", nts:7,  co:"7/2",  guests:"4 | 2",  room:"Towering Pines Lakefront",         total:"$17,539.30"},
+  {key:"vip-05", name:"Dan Carvalho",      ci:"6/26", nts:42, co:"8/7",  guests:"2 | 0",  room:"Rockwood Lodge at Lahontan",       total:"$64,500.00", blue:true},
+  {key:"vip-06", name:"John Lupusor",      ci:"6/26", nts:31, co:"7/27", guests:"2 | 4",  room:"Fleur Du Lac 16",                  total:"$54,250.00", blue:true},
+  {key:"vip-07", name:"Maya Leabman",      ci:"6/26", nts:31, co:"7/27", guests:"3 | 1",  room:"Glenbrook at Martis Camp",         total:"$47,845.00", blue:true},
+  {key:"vip-08", name:"Linda Platt",       ci:"6/27", nts:8,  co:"7/5",  guests:"8 | 4",  room:"Sky Rocks",                        total:"$22,792.06"},
+  {key:"vip-09", name:"Traci Thomas",      ci:"6/28", nts:7,  co:"7/5",  guests:"6 | 4",  room:"Beach Haven Lakefront",            total:"$19,890.26"},
+  {key:"vip-10", name:"Josh Thornton",     ci:"6/29", nts:7,  co:"7/6",  guests:"2 | 3",  room:"Cathedral Pines Lakefront",        total:"$43,221.10"},
+  {key:"vip-11", name:"Rachael Fry",       ci:"6/29", nts:16, co:"7/15", guests:"8 | 2",  room:"Tahoe Point of View",              total:"$19,125.37"},
+  {key:"vip-12", name:"Brian Fyda",        ci:"7/1",  nts:11, co:"7/12", guests:"8 | 0",  room:"Aqua Vista Lakefront Estate",      total:"$71,700.75"},
+  {key:"vip-13", name:"Jennifer Barsotti", ci:"7/1",  nts:33, co:"8/3",  guests:"8 | 0",  room:"Fleur Du Lac 7",                   total:"$78,650.00", blue:true},
+  {key:"vip-14", name:"Yvonne Valiquette", ci:"7/1",  nts:7,  co:"7/8",  guests:"12 | 2", room:"Beyond The Blue Lakefront Escape", total:"$66,223.32"},
+  {key:"vip-15", name:"Carl Hansen",       ci:"7/1",  nts:7,  co:"7/8",  guests:"6 | 4",  room:"Glistening Shores Lakefront",      total:"$56,047.00", blue:true},
+  {key:"vip-16", name:"Sara Doughty",      ci:"7/1",  nts:31, co:"8/1",  guests:"3 | 0",  room:"Crown Peak at Olympic Valley",     total:"$23,300.00", first:true},
+  {key:"vip-17", name:"Rebecca Gruss",     ci:"7/2",  nts:8,  co:"7/10", guests:"6 | 0",  room:"Sapphire Shores Lakefront",        total:"$20,231.71"},
+  {key:"vip-18", name:"Andrew Hinkelman",  ci:"7/3",  nts:7,  co:"7/10", guests:"12 | 0", room:"Valhalla Lakefront on the West Shore", total:"$36,599.68"},
+  {key:"vip-19", name:"Tami Campbell",     ci:"7/6",  nts:5,  co:"7/11", guests:"8 | 3",  room:"Cathedral Pines Lakefront",        total:"$23,041.72"},
+  {key:"vip-20", name:"Jane Etcheverry",   ci:"7/8",  nts:7,  co:"7/15", guests:"10 | 4", room:"Beyond The Blue Lakefront Escape", total:"$57,672.05"},
+  {key:"vip-21", name:"Ashley Eastwood",   ci:"7/10", nts:7,  co:"7/17", guests:"10 | 0", room:"Valhalla Lakefront on the West Shore", total:"$32,774.23"},
+  {key:"vip-22", name:"Steven Brotherton", ci:"7/10", nts:31, co:"8/10", guests:"2 | 2",  room:"Little Chief at Martis Camp",      total:"$21,850.00"},
+  {key:"vip-23", name:"Robert Mandel",     ci:"7/11", nts:15, co:"7/26", guests:"2 | 2",  room:"Glistening Shores Lakefront",      total:"$95,000.00", blue:true},
+  {key:"vip-24", name:"Jorge Velasquez",   ci:"7/11", nts:7,  co:"7/18", guests:"12 | 0", room:"Cathedral Pines Lakefront",        total:"$30,129.30"},
+  {key:"vip-25", name:"Kathryn Mossawir",  ci:"7/11", nts:7,  co:"7/18", guests:"5 | 4",  room:"Aerial Grace Lakeside Retreat",    total:"$21,017.51"},
+  {key:"vip-26", name:"Craig Casca",       ci:"7/11", nts:62, co:"9/11", guests:"2 | 0",  room:"Lonestar Ranch",                   total:"$20,650.00"},
+  {key:"vip-27", name:"Kyle Bardet",       ci:"7/14", nts:8,  co:"7/22", guests:"5 | 4",  room:"Beach Haven Lakefront",            total:"$20,094.03"},
+];
+
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+let STATE = {};   // item_key -> {done, notes}
+const _timers = {};
+
+function _setSaveStatus(t){ document.getElementById('saveStatus').textContent = t; }
+
+async function _save(key, done, notes){
+  _setSaveStatus('Saving…');
+  try{
+    const r = await fetch('/vip/save', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item_key:key, done, notes})});
+    const d = await r.json();
+    _setSaveStatus(d.ok ? '✓ Saved' : 'Save failed');
+  }catch(e){ _setSaveStatus('Save failed — check connection'); }
+}
+
+function _updateProgress(){
+  const done = VIP.filter(v => STATE[v.key] && STATE[v.key].done).length;
+  document.getElementById('progress').textContent = `${done} of ${VIP.length} inspected`;
+}
+
+function buildCard(v){
+  const st = STATE[v.key] || {done:false, notes:''};
+  const card = document.createElement('div');
+  const bg = v.blue ? '#eff6ff' : '#fff';
+  const bd = v.blue ? '#93c5fd' : '#e5e7eb';
+  card.style.cssText = `border-radius:12px;border:1px solid ${bd};background:${bg};padding:13px 16px;${v.blue?'box-shadow:inset 4px 0 0 #2563eb;':''}`;
+
+  const badges =
+    (v.blue  ? `<span style="display:inline-block;font-size:0.62rem;font-weight:800;padding:1px 7px;border-radius:99px;background:#2563eb;color:#fff;">⚠ NO RECENT BOOKINGS</span>` : '') +
+    (v.first ? `<span style="display:inline-block;font-size:0.62rem;font-weight:800;padding:1px 7px;border-radius:99px;background:#7c3aed;color:#fff;margin-left:4px;">1ST BOOKING</span>` : '');
+
+  card.innerHTML = `
+    <div style="display:flex;gap:12px;align-items:flex-start;">
+      <label style="display:flex;align-items:center;flex-shrink:0;cursor:pointer;padding-top:2px;">
+        <input type="checkbox" class="vip-done" data-key="${v.key}" ${st.done?'checked':''}
+               style="width:20px;height:20px;cursor:pointer;accent-color:#16a34a;">
+      </label>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-weight:700;font-size:0.95rem;color:${v.blue?'#1e40af':'#1f2937'};">${esc(v.room)}</span>
+          ${badges}
+        </div>
+        <div style="font-size:0.8rem;color:#374151;margin-top:2px;">${esc(v.name)} · <b>${esc(v.total)}</b></div>
+        <div style="font-size:0.76rem;color:#6b7280;margin-top:2px;display:flex;gap:14px;flex-wrap:wrap;">
+          <span>🛬 CI <b>${esc(v.ci)}</b></span>
+          <span>🛫 CO ${esc(v.co)}</span>
+          <span>${v.nts} nights</span>
+          <span>👥 ${esc(v.guests)}</span>
+        </div>
+        <textarea class="vip-notes" data-key="${v.key}" placeholder="Notes — what you inspected / did, owner contact, condition…"
+          style="width:100%;margin-top:8px;border:1px solid #d1d5db;border-radius:8px;padding:7px 10px;font-size:0.82rem;min-height:48px;resize:vertical;outline:none;">${esc(st.notes)}</textarea>
+      </div>
+    </div>`;
+
+  const cb = card.querySelector('.vip-done');
+  const ta = card.querySelector('.vip-notes');
+  cb.addEventListener('change', () => {
+    STATE[v.key] = {done: cb.checked, notes: ta.value};
+    card.style.opacity = cb.checked ? '0.6' : '1';
+    _updateProgress();
+    _save(v.key, cb.checked, ta.value);
+  });
+  ta.addEventListener('input', () => {
+    STATE[v.key] = {done: cb.checked, notes: ta.value};
+    clearTimeout(_timers[v.key]);
+    _timers[v.key] = setTimeout(() => _save(v.key, cb.checked, ta.value), 700);
+  });
+  if (st.done) card.style.opacity = '0.6';
+  return card;
+}
+
+async function init(){
+  try{
+    const r = await fetch('/vip/state');
+    const d = await r.json();
+    STATE = d.state || {};
+  }catch(e){ STATE = {}; }
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  VIP.forEach(v => list.appendChild(buildCard(v)));
+  _updateProgress();
+}
+init();
+</script>
+{% endblock %}

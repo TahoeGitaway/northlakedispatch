@@ -236,6 +236,16 @@ def init_db():
         value        TEXT NOT NULL
     )""")
 
+    # Temporary VIP reservation tracker — checklist + notes per reservation.
+    cur.execute("""CREATE TABLE IF NOT EXISTS vip_tracker (
+        id          SERIAL PRIMARY KEY,
+        item_key    TEXT NOT NULL UNIQUE,
+        done        INTEGER NOT NULL DEFAULT 0,
+        notes       TEXT NOT NULL DEFAULT '',
+        updated_at  TEXT,
+        updated_by  INTEGER REFERENCES users(id)
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")

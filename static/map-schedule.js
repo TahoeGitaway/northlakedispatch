@@ -617,9 +617,9 @@ function renderSchedule() {
     let badge = stop.go_first
       ? `<span class="priority-badge" style="background:#e0e7ff;color:#4338ca;">📌 FIRST</span>` : "";
     if (stop.priority_checkin && stop.priority_late)
-      badge += `<span class="late-badge">PRIORITY LATE</span>`;
+      badge += `<span style="display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:0.72rem;padding:3px 10px;border-radius:6px;letter-spacing:0.03em;box-shadow:0 0 0 2px #fecaca;">⚡ PCI — LATE, PAST NOON</span>`;
     else if (stop.priority_checkin)
-      badge += `<span class="checkin-badge">CHECK-IN</span><span class="priority-badge">by 12PM</span>`;
+      badge += `<span style="display:inline-block;background:#7c3aed;color:#fff;font-weight:800;font-size:0.72rem;padding:3px 10px;border-radius:6px;letter-spacing:0.03em;box-shadow:0 0 0 2px #ddd6fe;">⚡ PCI — ARRIVE BY NOON</span>`;
     else if (stop.arrival && stop.late)
       badge += `<span class="late-badge">LATE</span>`;
     else if (stop.arrival)
