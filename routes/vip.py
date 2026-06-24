@@ -216,13 +216,24 @@ def vip_save():
 def vip_comments():
     conn = get_db()
     cur  = get_cursor(conn)
-    cur.execute("SELECT item_key, author, body, created_at FROM vip_comments ORDER BY created_at ASC")
+    cur.execute("SELECT id, item_key, author, author_id, body, created_at FROM vip_comments ORDER BY created_at ASC")
     rows = cur.fetchall()
+    # Legacy single-field notes (from before threaded comments) — surface them so
+    # nothing that was ever written is lost. (Read-only; no id.)
+    cur.execute("SELECT item_key, notes, updated_at FROM vip_tracker WHERE COALESCE(notes, '') <> ''")
+    legacy = cur.fetchall()
     cur.close(); conn.close()
+
     out = {}
+    for lr in legacy:                       # show earlier notes first
+        out.setdefault(lr["item_key"], []).append({
+            "id": None, "author": "Earlier note", "author_id": None,
+            "body": lr["notes"], "created_at": lr["updated_at"],
+        })
     for r in rows:
         out.setdefault(r["item_key"], []).append({
-            "author": r["author"] or "?", "body": r["body"], "created_at": r["created_at"],
+            "id": r["id"], "author": r["author"] or "?", "author_id": r["author_id"],
+            "body": r["body"], "created_at": r["created_at"],
         })
     return jsonify({"comments": out})
 
@@ -242,9 +253,61 @@ def vip_comment():
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
-        "INSERT INTO vip_comments (item_key, author_id, author, body, created_at) VALUES (%s, %s, %s, %s, %s)",
+        "INSERT INTO vip_comments (item_key, author_id, author, body, created_at) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (key, uid, author, text, now),
     )
+    new_id = cur.fetchone()["id"]
     conn.commit()
     cur.close(); conn.close()
-    return jsonify({"ok": True, "comment": {"author": author, "body": text, "created_at": now}})
+    return jsonify({"ok": True, "comment": {
+        "id": new_id, "author": author, "author_id": uid, "body": text, "created_at": now}})
+
+
+@vip_bp.route("/vip/comment/edit", methods=["POST"])
+@login_required
+def vip_comment_edit():
+    """Edit one of YOUR OWN comments (author-scoped — can't touch others')."""
+    body = request.get_json(silent=True) or {}
+    cid  = body.get("id")
+    text = str(body.get("body") or "").strip()
+    if not cid or not text:
+        return jsonify({"error": "id and body required"}), 400
+    uid = getattr(current_user, "id", None)
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "UPDATE vip_comments SET body = %s WHERE id = %s AND author_id = %s",
+        (text, cid, uid),
+    )
+    changed = cur.rowcount
+    conn.commit()
+    cur.close(); conn.close()
+    if not changed:
+        return jsonify({"error": "Not found, or not your note."}), 403
+    return jsonify({"ok": True, "body": text})
+
+
+@vip_bp.route("/vip/comment/delete", methods=["POST"])
+@login_required
+def vip_comment_delete():
+    """Delete one of YOUR OWN comments (author-scoped)."""
+    body = request.get_json(silent=True) or {}
+    cid  = body.get("id")
+    if not cid:
+        return jsonify({"error": "id required"}), 400
+    uid = getattr(current_user, "id", None)
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "DELETE FROM vip_comments WHERE id = %s AND author_id = %s",
+        (cid, uid),
+    )
+    changed = cur.rowcount
+    conn.commit()
+    cur.close(); conn.close()
+    if not changed:
+        return jsonify({"error": "Not found, or not your note."}), 403
+    return jsonify({"ok": True})

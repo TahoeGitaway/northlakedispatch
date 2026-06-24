@@ -57,8 +57,10 @@ const VIP = [
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+const ME = {{ current_user.id | tojson }};   // current user id — gates edit/delete to your own notes
 let STATE = {};      // item_key -> {done}
-let COMMENTS = {};   // item_key -> [{author, body, created_at}]
+let COMMENTS = {};   // item_key -> [{id, author, author_id, body, created_at}]
+let EDITING = null;  // comment id currently being edited (one at a time)
 
 function _setSaveStatus(t){ document.getElementById('saveStatus').textContent = t; }
 
@@ -78,13 +80,75 @@ function _fmtWhen(iso){
   const d = new Date(s);
   return isNaN(d) ? iso : d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 }
-function _renderComments(box, list){
+function _renderComments(box, key){
   if(!box) return;
-  box.innerHTML = (list && list.length)
-    ? list.map(c => `<div style="font-size:0.78rem;color:#374151;background:#f9fafb;border:1px solid #f1f5f9;border-radius:8px;padding:6px 9px;">`
-        + `<div style="font-size:0.66rem;color:#6b7280;font-weight:700;">${esc(c.author||'?')} <span style="font-weight:400;color:#9ca3af;">· ${esc(_fmtWhen(c.created_at))}</span></div>`
-        + `<div style="white-space:pre-wrap;margin-top:1px;">${esc(c.body)}</div></div>`).join('')
-    : `<div style="font-size:0.72rem;color:#d1d5db;font-style:italic;">No notes yet — add the first.</div>`;
+  const list = COMMENTS[key] || [];
+  if(!list.length){
+    box.innerHTML = `<div style="font-size:0.72rem;color:#d1d5db;font-style:italic;">No notes yet — add the first.</div>`;
+    return;
+  }
+  box.innerHTML = list.map(c => {
+    const head = `<div style="font-size:0.66rem;color:#6b7280;font-weight:700;">${esc(c.author||'?')} <span style="font-weight:400;color:#9ca3af;">· ${esc(_fmtWhen(c.created_at))}</span></div>`;
+    const mine = c.id != null && ME != null && c.author_id === ME;
+    let bodyPart;
+    if(c.id != null && c.id === EDITING){
+      bodyPart =
+        `<textarea class="vip-c-ta" style="width:100%;box-sizing:border-box;margin-top:3px;border:1px solid #c7d2fe;border-radius:6px;padding:5px 7px;font-size:0.76rem;outline:none;">${esc(c.body)}</textarea>`
+        + `<div style="margin-top:4px;display:flex;gap:8px;">`
+        + `<button class="vip-c-save" data-id="${c.id}" style="font-size:0.66rem;font-weight:700;color:#fff;background:#4f46e5;border:none;border-radius:6px;padding:3px 9px;cursor:pointer;">Save</button>`
+        + `<button class="vip-c-cancel" style="font-size:0.66rem;color:#6b7280;background:none;border:none;cursor:pointer;padding:0;">Cancel</button>`
+        + `</div>`;
+    } else {
+      bodyPart = `<div style="white-space:pre-wrap;margin-top:1px;">${esc(c.body)}</div>`
+        + (mine
+            ? `<div style="margin-top:3px;display:flex;gap:12px;">`
+              + `<button class="vip-c-edit" data-id="${c.id}" style="font-size:0.62rem;color:#4f46e5;background:none;border:none;cursor:pointer;padding:0;">Edit</button>`
+              + `<button class="vip-c-del" data-id="${c.id}" style="font-size:0.62rem;color:#b91c1c;background:none;border:none;cursor:pointer;padding:0;">Delete</button>`
+              + `</div>`
+            : '');
+    }
+    return `<div style="font-size:0.78rem;color:#374151;background:#f9fafb;border:1px solid #f1f5f9;border-radius:8px;padding:6px 9px;">${head}${bodyPart}</div>`;
+  }).join('');
+
+  box.querySelectorAll('.vip-c-edit').forEach(b => b.onclick = () => {
+    EDITING = parseInt(b.dataset.id); _renderComments(box, key);
+    const ta = box.querySelector('.vip-c-ta'); if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  });
+  box.querySelectorAll('.vip-c-cancel').forEach(b => b.onclick = () => { EDITING = null; _renderComments(box, key); });
+  box.querySelectorAll('.vip-c-del').forEach(b => b.onclick = () => _deleteComment(key, box, parseInt(b.dataset.id)));
+  box.querySelectorAll('.vip-c-save').forEach(b => b.onclick = () => {
+    const ta = box.querySelector('.vip-c-ta'); _saveEdit(key, box, parseInt(b.dataset.id), ta ? ta.value : '');
+  });
+}
+
+async function _deleteComment(key, box, id){
+  if(!confirm('Delete this note? This cannot be undone.')) return;
+  try{
+    const r = await fetch('/vip/comment/delete', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id})});
+    const d = await r.json();
+    if(d && d.ok){
+      COMMENTS[key] = (COMMENTS[key]||[]).filter(c => c.id !== id);
+      if(EDITING === id) EDITING = null;
+      _renderComments(box, key);
+    } else { alert(d.error || 'Could not delete.'); }
+  }catch(e){ alert('Could not delete — check your connection.'); }
+}
+
+async function _saveEdit(key, box, id, text){
+  text = (text||'').trim();
+  if(!text){ alert('A note can\'t be empty. Use Delete to remove it.'); return; }
+  try{
+    const r = await fetch('/vip/comment/edit', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, body:text})});
+    const d = await r.json();
+    if(d && d.ok){
+      const c = (COMMENTS[key]||[]).find(x => x.id === id);
+      if(c) c.body = text;
+      EDITING = null;
+      _renderComments(box, key);
+    } else { alert(d.error || 'Could not save.'); }
+  }catch(e){ alert('Could not save — check your connection.'); }
 }
 async function _postComment(key, input, box){
   const text = (input.value||'').trim();
@@ -97,7 +161,7 @@ async function _postComment(key, input, box){
     if(d && d.ok){
       COMMENTS[key] = COMMENTS[key] || [];
       COMMENTS[key].push(d.comment);
-      _renderComments(box, COMMENTS[key]);
+      _renderComments(box, key);
       input.value = '';
     }
   }catch(e){}
@@ -164,7 +228,7 @@ function buildCard(v){
   const cBox   = card.querySelector('.vip-comments');
   const cInput = card.querySelector('.vip-comment-input');
   const cPost  = card.querySelector('.vip-comment-post');
-  _renderComments(cBox, COMMENTS[v.key] || []);
+  _renderComments(cBox, v.key);
   const doPost = () => _postComment(v.key, cInput, cBox);
   cPost.addEventListener('click', doPost);
   cInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doPost(); } });
