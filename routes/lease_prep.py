@@ -201,14 +201,12 @@ def _fmt_task(t: dict) -> dict:
 
 @lease_prep_bp.route("/admin/lease-prep")
 @login_required
-@admin_required
 def lease_prep_page():
     return render_template("lease_prep.html")
 
 
 @lease_prep_bp.route("/admin/lease-prep/scan", methods=["POST"])
 @login_required
-@admin_required
 def lease_prep_scan():
     try:
         return _lease_prep_scan_inner()

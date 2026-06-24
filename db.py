@@ -246,6 +246,16 @@ def init_db():
         updated_by  INTEGER REFERENCES users(id)
     )""")
 
+    # Attributed notes/comments on each VIP reservation (who said what).
+    cur.execute("""CREATE TABLE IF NOT EXISTS vip_comments (
+        id          SERIAL PRIMARY KEY,
+        item_key    TEXT NOT NULL,
+        author_id   INTEGER REFERENCES users(id),
+        author      TEXT NOT NULL DEFAULT '',
+        body        TEXT NOT NULL,
+        created_at  TEXT NOT NULL
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")

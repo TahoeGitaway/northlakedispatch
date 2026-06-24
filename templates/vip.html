@@ -57,19 +57,52 @@ const VIP = [
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-let STATE = {};   // item_key -> {done, notes}
-const _timers = {};
+let STATE = {};      // item_key -> {done}
+let COMMENTS = {};   // item_key -> [{author, body, created_at}]
 
 function _setSaveStatus(t){ document.getElementById('saveStatus').textContent = t; }
 
-async function _save(key, done, notes){
+async function _save(key, done){
   _setSaveStatus('Saving…');
   try{
     const r = await fetch('/vip/save', {method:'POST',headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({item_key:key, done, notes})});
+      body: JSON.stringify({item_key:key, done})});
     const d = await r.json();
     _setSaveStatus(d.ok ? '✓ Saved' : 'Save failed');
   }catch(e){ _setSaveStatus('Save failed — check connection'); }
+}
+
+function _fmtWhen(iso){
+  if(!iso) return '';
+  const s = /[zZ]|[+\-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z';   // backend stores UTC
+  const d = new Date(s);
+  return isNaN(d) ? iso : d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+function _renderComments(box, list){
+  if(!box) return;
+  box.innerHTML = (list && list.length)
+    ? list.map(c => `<div style="font-size:0.78rem;color:#374151;background:#f9fafb;border:1px solid #f1f5f9;border-radius:8px;padding:6px 9px;">`
+        + `<div style="font-size:0.66rem;color:#6b7280;font-weight:700;">${esc(c.author||'?')} <span style="font-weight:400;color:#9ca3af;">· ${esc(_fmtWhen(c.created_at))}</span></div>`
+        + `<div style="white-space:pre-wrap;margin-top:1px;">${esc(c.body)}</div></div>`).join('')
+    : `<div style="font-size:0.72rem;color:#d1d5db;font-style:italic;">No notes yet — add the first.</div>`;
+}
+async function _postComment(key, input, box){
+  const text = (input.value||'').trim();
+  if(!text) return;
+  input.disabled = true;
+  try{
+    const r = await fetch('/vip/comment', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item_key:key, body:text})});
+    const d = await r.json();
+    if(d && d.ok){
+      COMMENTS[key] = COMMENTS[key] || [];
+      COMMENTS[key].push(d.comment);
+      _renderComments(box, COMMENTS[key]);
+      input.value = '';
+    }
+  }catch(e){}
+  input.disabled = false;
+  input.focus();
 }
 
 function _updateProgress(){
@@ -78,7 +111,7 @@ function _updateProgress(){
 }
 
 function buildCard(v){
-  const st = STATE[v.key] || {done:false, notes:''};
+  const st = STATE[v.key] || {done:false};
   const card = document.createElement('div');
   const bg = v.blue ? '#eff6ff' : '#fff';
   const bd = v.blue ? '#93c5fd' : '#e5e7eb';
@@ -107,27 +140,34 @@ function buildCard(v){
           <span>👥 ${esc(v.guests)}</span>
         </div>
         <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;">Notes</div>
-        <div style="font-size:0.68rem;color:#9ca3af;margin-bottom:3px;">What you inspected and did, owner contact, condition.</div>
-        <textarea class="vip-notes" data-key="${v.key}" placeholder="Add notes…"
-          style="width:100%;border:1px solid #d1d5db;border-radius:8px;padding:7px 10px;font-size:0.82rem;min-height:48px;resize:vertical;outline:none;">${esc(st.notes)}</textarea>
+        <div style="font-size:0.68rem;color:#9ca3af;margin-bottom:4px;">What you inspected and did, owner contact, condition. Visible to the whole team — each note shows who added it.</div>
+        <div class="vip-comments" style="display:flex;flex-direction:column;gap:5px;"></div>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <input class="vip-comment-input" placeholder="Add a note — saved with your name…"
+            style="flex:1;min-width:0;border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:0.8rem;outline:none;">
+          <button class="vip-comment-post" style="flex-shrink:0;font-size:0.78rem;font-weight:600;color:#fff;background:#4f46e5;border:none;border-radius:8px;padding:6px 12px;cursor:pointer;">Add</button>
+        </div>
         <button class="vip-week-btn" style="margin-top:8px;font-size:0.74rem;font-weight:600;color:#4338ca;background:none;border:none;cursor:pointer;padding:0;">📅 Tasks the week before →</button>
         <div class="vip-week" style="display:none;margin-top:6px;"></div>
       </div>
     </div>`;
 
   const cb = card.querySelector('.vip-done');
-  const ta = card.querySelector('.vip-notes');
   cb.addEventListener('change', () => {
-    STATE[v.key] = {done: cb.checked, notes: ta.value};
+    STATE[v.key] = {done: cb.checked};
     card.style.opacity = cb.checked ? '0.6' : '1';
     _updateProgress();
-    _save(v.key, cb.checked, ta.value);
+    _save(v.key, cb.checked);
   });
-  ta.addEventListener('input', () => {
-    STATE[v.key] = {done: cb.checked, notes: ta.value};
-    clearTimeout(_timers[v.key]);
-    _timers[v.key] = setTimeout(() => _save(v.key, cb.checked, ta.value), 700);
-  });
+
+  // Notes thread — attributed comments
+  const cBox   = card.querySelector('.vip-comments');
+  const cInput = card.querySelector('.vip-comment-input');
+  const cPost  = card.querySelector('.vip-comment-post');
+  _renderComments(cBox, COMMENTS[v.key] || []);
+  const doPost = () => _postComment(v.key, cInput, cBox);
+  cPost.addEventListener('click', doPost);
+  cInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doPost(); } });
   // Week-before tasks — on-demand expand
   const weekBtn = card.querySelector('.vip-week-btn');
   const weekBox = card.querySelector('.vip-week');
@@ -166,39 +206,70 @@ async function _loadWeek(box, v){
     }
     const tasks = d.tasks || [];
     const resvs = d.reservations || [];
-    let html = `<div style="font-size:0.7rem;color:#9ca3af;margin-bottom:4px;">${_fmtDay(d.start)} → ${_fmtDay(d.ci)} · ${esc(d.matched_name||v.room)}</div>`;
+    const TC  = {owner:'#b45309', block:'#b91c1c', lease:'#7c3aed', guest:'#2563eb'};
+    const TBG = {owner:'#fef3c7', block:'#fee2e2', lease:'#ede9fe', guest:'#dbeafe'};
 
-    // Reservations overlapping this window (who's at the house, and type)
-    html += `<div style="font-size:0.72rem;font-weight:700;color:#374151;">Reservations (${resvs.length})</div>`;
-    if (!resvs.length){
-      html += `<div style="font-size:0.74rem;color:#9ca3af;font-style:italic;padding-left:8px;">None overlapping this window.</div>`;
-    } else {
-      const TC = {owner:'#b45309', block:'#b91c1c', lease:'#7c3aed', guest:'#2563eb'};
-      resvs.forEach(rv => {
-        const c = TC[rv.type] || '#6b7280';
-        html += `<div style="font-size:0.74rem;color:#374151;padding:2px 0 2px 8px;border-left:2px solid ${c};margin-left:2px;">`
-          + `<b style="color:${c};">${esc((rv.type||'').toUpperCase())}</b> · ${_fmtDay(rv.checkin)} → ${_fmtDay(rv.checkout)}`
-          + `${rv.guest?(' · '+esc(rv.guest)):''}</div>`;
-      });
+    // Build the day columns from start..ci inclusive.
+    const days = [];
+    let cur = new Date(d.start + 'T00:00:00');
+    const last = new Date(d.ci + 'T00:00:00');
+    while (cur <= last){
+      days.push(cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0'));
+      cur.setDate(cur.getDate()+1);
+    }
+    const tasksByDay = {};
+    tasks.forEach(t => { (tasksByDay[t.date] = tasksByDay[t.date] || []).push(t); });
+    // The reservation covering a day — prefer the one ARRIVING that day.
+    function resForDay(iso){
+      let cover = null;
+      for (const rv of resvs){
+        if (rv.checkin <= iso && iso <= rv.checkout){
+          if (rv.checkin === iso) return rv;
+          cover = cover || rv;
+        }
+      }
+      return cover;
     }
 
-    // Tasks, grouped by day
-    html += `<div style="font-size:0.72rem;font-weight:700;color:#374151;margin-top:8px;">Tasks (${tasks.length})</div>`;
-    if (!tasks.length){
-      html += `<div style="font-size:0.74rem;color:#9ca3af;font-style:italic;padding-left:8px;">No tasks scheduled in the week before.</div>`;
-    } else {
-      const byDay = {};
-      tasks.forEach(t => { (byDay[t.date] = byDay[t.date] || []).push(t); });
-      Object.keys(byDay).sort().forEach(day => {
-        html += `<div style="font-size:0.72rem;font-weight:600;color:#4b5563;margin-top:5px;">${_fmtDay(day)}</div>`;
-        byDay[day].forEach(t => {
-          const who = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'unassigned';
-          html += `<div style="font-size:0.74rem;color:#374151;padding:2px 0 2px 8px;border-left:2px solid #e5e7eb;margin-left:2px;">`
-            + `<b>${esc(t.status)}</b> ${t.time?('· '+esc(_fmtTime(t.time))):''} · ${esc(t.name)}`
-            + `<span style="color:#9ca3af;"> · 👤 ${esc(who)}</span></div>`;
+    let html = `<div style="font-size:0.7rem;color:#9ca3af;margin-bottom:6px;">${_fmtDay(d.start)} → ${_fmtDay(d.ci)} · ${esc(d.matched_name||v.room)}</div>`;
+    html += `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;">`;
+    days.forEach(iso => {
+      const dd = new Date(iso+'T00:00:00');
+      const wd = dd.toLocaleDateString('en-US',{weekday:'short'});
+      const md = dd.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      const isCi = iso === d.ci;
+      const rv = resForDay(iso);
+      const dayTasks = tasksByDay[iso] || [];
+
+      html += `<div style="flex:0 0 146px;border:1px solid ${isCi?'#2563eb':'#e5e7eb'};border-radius:8px;overflow:hidden;background:#fff;${isCi?'box-shadow:0 0 0 2px #bfdbfe;':''}">`;
+      html += `<div style="padding:4px 7px;background:${isCi?'#eff6ff':'#f9fafb'};border-bottom:1px solid #f1f5f9;">`
+        + `<div style="font-size:0.62rem;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">${esc(wd)}${isCi?' · arrival':''}</div>`
+        + `<div style="font-size:0.8rem;font-weight:700;color:#1f2937;">${esc(md)}</div></div>`;
+
+      if (rv){
+        const c = TC[rv.type]||'#6b7280', bgc = TBG[rv.type]||'#f3f4f6';
+        const arr = rv.checkin === iso, dep = rv.checkout === iso;
+        html += `<div title="${esc(rv.guest||'')}" style="font-size:0.6rem;font-weight:800;color:${c};background:${bgc};padding:2px 7px;letter-spacing:0.03em;">`
+          + `${esc((rv.type||'').toUpperCase())}${arr?' ▸in':''}${dep?' ◂out':''}</div>`;
+      } else {
+        html += `<div style="font-size:0.6rem;font-weight:700;color:#9ca3af;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 4px,#f3f4f6 4px,#f3f4f6 8px);padding:2px 7px;">vacant</div>`;
+      }
+
+      html += `<div style="padding:5px 7px;display:flex;flex-direction:column;gap:5px;min-height:24px;">`;
+      if (!dayTasks.length){
+        html += `<div style="font-size:0.64rem;color:#d1d5db;">—</div>`;
+      } else {
+        dayTasks.forEach(t => {
+          const icon = t.status.startsWith('✓')?'✓':(t.status.startsWith('🔄')?'🔄':'⏳');
+          const who = (t.assignees&&t.assignees.length)?t.assignees.join(', '):'unassigned';
+          html += `<div style="font-size:0.64rem;line-height:1.3;color:#374151;border-left:2px solid #e5e7eb;padding-left:5px;">`
+            + `<span title="${esc(t.status)}">${icon}</span>${t.time?(' '+esc(_fmtTime(t.time))):''} <b>${esc(t.name)}</b>`
+            + `<div style="color:#9ca3af;">👤 ${esc(who)}</div></div>`;
         });
-      });
-    }
+      }
+      html += `</div></div>`;
+    });
+    html += `</div>`;
     box.innerHTML = html;
   }catch(e){
     box.innerHTML = `<div style="font-size:0.74rem;color:#b91c1c;">Couldn't load — ${esc(e.message)}</div>`;
@@ -208,10 +279,11 @@ async function _loadWeek(box, v){
 
 async function init(){
   try{
-    const r = await fetch('/vip/state');
-    const d = await r.json();
-    STATE = d.state || {};
-  }catch(e){ STATE = {}; }
+    const [sr, cr] = await Promise.all([fetch('/vip/state'), fetch('/vip/comments')]);
+    const [sd, cd] = await Promise.all([sr.json(), cr.json()]);
+    STATE = sd.state || {};
+    COMMENTS = cd.comments || {};
+  }catch(e){ STATE = {}; COMMENTS = {}; }
   const list = document.getElementById('list');
   list.innerHTML = '';
   VIP.forEach(v => list.appendChild(buildCard(v)));

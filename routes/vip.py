@@ -187,25 +187,64 @@ def vip_state():
 @vip_bp.route("/vip/save", methods=["POST"])
 @login_required
 def vip_save():
+    """Save just the 'inspected' checkbox (notes live in vip_comments now)."""
     body = request.get_json(silent=True) or {}
     key  = (body.get("item_key") or "").strip()
     if not key:
         return jsonify({"error": "item_key required"}), 400
-    done  = 1 if body.get("done") else 0
-    notes = str(body.get("notes") or "")
-    now   = datetime.utcnow().isoformat()
-    uid   = getattr(current_user, "id", None)
+    done = 1 if body.get("done") else 0
+    now  = datetime.utcnow().isoformat()
+    uid  = getattr(current_user, "id", None)
 
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
-        """INSERT INTO vip_tracker (item_key, done, notes, updated_at, updated_by)
-           VALUES (%s, %s, %s, %s, %s)
+        """INSERT INTO vip_tracker (item_key, done, updated_at, updated_by)
+           VALUES (%s, %s, %s, %s)
            ON CONFLICT (item_key) DO UPDATE SET
-               done = EXCLUDED.done, notes = EXCLUDED.notes,
+               done = EXCLUDED.done,
                updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by""",
-        (key, done, notes, now, uid),
+        (key, done, now, uid),
     )
     conn.commit()
     cur.close(); conn.close()
     return jsonify({"ok": True, "updated_at": now})
+
+
+@vip_bp.route("/vip/comments")
+@login_required
+def vip_comments():
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT item_key, author, body, created_at FROM vip_comments ORDER BY created_at ASC")
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    out = {}
+    for r in rows:
+        out.setdefault(r["item_key"], []).append({
+            "author": r["author"] or "?", "body": r["body"], "created_at": r["created_at"],
+        })
+    return jsonify({"comments": out})
+
+
+@vip_bp.route("/vip/comment", methods=["POST"])
+@login_required
+def vip_comment():
+    body = request.get_json(silent=True) or {}
+    key  = (body.get("item_key") or "").strip()
+    text = str(body.get("body") or "").strip()
+    if not key or not text:
+        return jsonify({"error": "item_key and body required"}), 400
+    now    = datetime.utcnow().isoformat()
+    author = (getattr(current_user, "name", None) or getattr(current_user, "email", None) or "Someone")
+    uid    = getattr(current_user, "id", None)
+
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO vip_comments (item_key, author_id, author, body, created_at) VALUES (%s, %s, %s, %s, %s)",
+        (key, uid, author, text, now),
+    )
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"ok": True, "comment": {"author": author, "body": text, "created_at": now}})

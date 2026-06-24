@@ -54,6 +54,11 @@
                       {% if request.endpoint == 'vip.vip_page' %}bg-blue-50 text-blue-700{% else %}text-blue-600 hover:text-blue-800 hover:bg-blue-50{% endif %}">
                 ⭐ VIP
             </a>
+            <a href="{{ url_for('lease_prep.lease_prep_page') }}"
+               class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
+                      {% if request.endpoint == 'lease_prep.lease_prep_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:text-gray-900 hover:bg-gray-50{% endif %}">
+                Lease Prep
+            </a>
 
             {% if current_user.is_admin %}
             <div class="w-px h-5 bg-gray-200 mx-2"></div>
