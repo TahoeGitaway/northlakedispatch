@@ -1186,15 +1186,19 @@ def bw_import():
             if not row:
                 unmatched.append(bw_name)
                 continue
-            tasks_here = bw_name_tasks.get(bw_name, [])
-            # "PCI" in a (Walk Thru) task title → priority check-in, arrive by noon.
-            is_pci = any(_title_has_pci(t.get("task_name", "")) for t in tasks_here)
+            tasks_here  = bw_name_tasks.get(bw_name, [])
+            has_checkin = row["Property Name"] in checkin_db_names
+            # "PCI" in a (Walk Thru) title → priority check-in, arrive by noon — but
+            # ONLY when the arrival is the SAME day this schedule is for (a same-day
+            # check-in exists). A PCI prepping for a next-day arrival is just a task
+            # today: it must not grab priority attention, and isn't an arrival yet.
+            is_pci = has_checkin and any(_title_has_pci(t.get("task_name", "")) for t in tasks_here)
             entry = {
                 "name":             row["Property Name"],
                 "lat":              float(row["Latitude"]),
                 "lng":              float(row["Longitude"]),
                 "tasks":            tasks_here,
-                "arrival":          (row["Property Name"] in checkin_db_names) or is_pci,
+                "arrival":          has_checkin,
                 "priority_checkin": is_pci,
             }
             if tier == "exact" or score >= _MATCH_CONFIDENT:
@@ -1366,12 +1370,16 @@ def route_discrepancies():
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
     # Per-property fetch with retry/backoff (shared helper) so a throttled house
-    # isn't silently dropped — same fix as the import.
+    # isn't silently dropped — same fix as the import. Count genuine failures so the
+    # sidebar can warn instead of quietly showing fewer tasks than really exist.
     all_tasks = []
+    failed_props = 0
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, _ok in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
+        for tasks, ok in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
                                  list(pid_candidates.keys())):
             all_tasks.extend(tasks)
+            if not ok:
+                failed_props += 1
 
     asgn_lower = assignee.lower()
     seen_ids, mine = set(), []
@@ -1421,7 +1429,9 @@ def route_discrepancies():
     for prop_name, tlist in tasks_by_prop.items():
         if prop_name.lower() not in route_set:
             is_arrival = prop_name in arrival_names
-            is_pci     = any(_title_has_pci(_bw_task_title(t)) for t in tlist)
+            # PCI counts as a priority check-in only when its arrival is that same day
+            # (a same-day check-in exists). A PCI for a next-day arrival is just a task.
+            is_pci     = is_arrival and any(_title_has_pci(_bw_task_title(t)) for t in tlist)
             for t in tlist:
                 added.append({"property": prop_name, "task_name": _bw_task_title(t),
                               "task_id": t.get("id"),
@@ -1450,9 +1460,13 @@ def route_discrepancies():
                 moved.append({"property": prop_name, "task_name": _bw_task_title(t),
                               "was": f"{ph % 24:02d}:{pm:02d}", "now": tod})
 
-    # Full current task list for this person that day, grouped by house.
+    # Full current task list for this person that day, grouped by house. `pci` marks a
+    # SAME-DAY priority check-in (PCI title + a same-day arrival) so the route view can
+    # flag it loudly; a PCI prepping for a next-day arrival is left unflagged.
     current_tasks = sorted(
-        ({"property": p, "tasks": [_bw_task_title(t) for t in tlist]}
+        ({"property": p,
+          "tasks": [_bw_task_title(t) for t in tlist],
+          "pci": (p in arrival_names) and any(_title_has_pci(_bw_task_title(t)) for t in tlist)}
          for p, tlist in tasks_by_prop.items()),
         key=lambda x: x["property"].lower(),
     )
@@ -1464,6 +1478,7 @@ def route_discrepancies():
         "moved":   sorted(moved,   key=lambda x: x["property"].lower()),
         "current_tasks": current_tasks,
         "history_available": any(a["history"].get("available") for a in added),
+        "failed_properties": failed_props,
         "summary": {"added": len(added), "removed": len(removed), "moved": len(moved)},
     })
 

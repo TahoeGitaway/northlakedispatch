@@ -285,10 +285,18 @@ function renderScan() {
   // Loud warning if Breezeway couldn't load some properties — those tasks would
   // otherwise be silently missing. Offer a one-click force rescan.
   const wb = document.getElementById('warnBox');
+  const _rescanBtn = (label) => `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">${label}</button>`;
+  const warnings = [];
   if (SCAN.failed_properties) {
-    wb.innerHTML = `⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties couldn't be loaded from Breezeway`
-      + ` (it throttled or errored), so some tasks may be missing. `
-      + `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">Force a fresh rescan</button>.`;
+    warnings.push(`⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties couldn't be loaded from Breezeway`
+      + ` (it throttled or errored), so some tasks may be missing. ` + _rescanBtn('Force a fresh rescan') + `.`);
+  }
+  if (!(SCAN.people || []).length) {
+    // No roster → the person dropdown is empty and nothing can be assigned. Say so.
+    warnings.push(`⚠ No staff roster loaded from Breezeway — you won't be able to assign anyone. ` + _rescanBtn('Retry') + `.`);
+  }
+  if (warnings.length) {
+    wb.innerHTML = warnings.join('<br>');
     wb.classList.remove('hidden');
   } else {
     wb.classList.add('hidden');

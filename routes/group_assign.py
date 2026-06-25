@@ -115,7 +115,7 @@ def _fetch_people(token: str) -> list:
     """Active staff roster: [{id, name}], sorted by name. Cached for 1 hour."""
     if _people_cache["data"] and time.time() - _people_cache["ts"] < 3600:
         return _people_cache["data"]
-    people, page = [], 1
+    people, page, ok = [], 1, False
     while page <= 10:
         try:
             r = requests.get(f"{BW_BASE}/public/inventory/v1/people",
@@ -126,6 +126,7 @@ def _fetch_people(token: str) -> list:
             break
         if not r.ok:
             break
+        ok = True
         items = _results(r.json())
         for p in items:
             if not isinstance(p, dict):
@@ -140,8 +141,11 @@ def _fetch_people(token: str) -> list:
             break
         page += 1
     people.sort(key=lambda x: x["name"].lower())
-    _people_cache["data"] = people
-    _people_cache["ts"]   = time.time()
+    # Only cache a roster we actually loaded — never let a transient failure poison
+    # the cache with an empty list for an hour (which silently blocks all assigning).
+    if ok:
+        _people_cache["data"] = people
+        _people_cache["ts"]   = time.time()
     return people
 
 
@@ -197,6 +201,10 @@ def _scan_inner():
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
     ref_cache  = _get_live_ref_cache()
+    # No property cache → we'd scan zero houses and return "no tasks", which looks
+    # identical to a genuinely empty day. Fail loudly instead so it's never silent.
+    if not prop_cache:
+        return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
     _refresh_group_map(token)
 
     # Candidate ref ids — reference_property_id when present, else the bw id.
@@ -280,7 +288,9 @@ def _scan_inner():
             "date":      t_date,
             "time":      (str(t.get("scheduled_time") or "")[:5]) or None,
             "arrival":   is_arrival,
-            "pci":       _title_has_pci(title),
+            # PCI is a priority check-in only when the arrival is that same day; a PCI
+            # prepping for a next-day arrival is just a task and isn't flagged loudly.
+            "pci":       is_arrival and _title_has_pci(title),
             "assignees":    _assignee_names(t),
             "assignee_ids": [a.get("assignee_id") for a in (t.get("assignments") or [])
                              if a.get("assignee_id") is not None],

@@ -807,13 +807,18 @@ function _titleHasPci(title) {
 // be stale (e.g. a PCI added in Breezeway later, or saved before PCI detection).
 // So whenever we have the route's LIVE Breezeway tasks, re-detect PCI per property
 // and flag those stops as priority — no matter what was saved. This guarantees a
-// PCI is never overlooked on an already-built route.
+// same-day PCI is never overlooked on an already-built route.
 function _flagPciFromTasks(currentTasks) {
   if (!Array.isArray(currentTasks) || !currentTasks.length) return;
   const pciProps = new Set();
   for (const c of currentTasks) {
-    const has = (c.tasks || []).some(t =>
-      _titleHasPci(typeof t === "string" ? t : ((t && (t.task_name || t.title)) || "")));
+    // Trust the backend's `pci` flag — it already requires a SAME-DAY arrival, so a
+    // PCI prepping for a next-day arrival is correctly left unflagged. Fall back to a
+    // title scan only for older payloads that predate the flag.
+    const has = ("pci" in c)
+      ? !!c.pci
+      : (c.tasks || []).some(t =>
+          _titleHasPci(typeof t === "string" ? t : ((t && (t.task_name || t.title)) || "")));
     if (has) pciProps.add((c.property || "").toLowerCase());
   }
   if (!pciProps.size) return;
@@ -927,6 +932,9 @@ function bwSidebarMinimize() {
     if (document.querySelectorAll("#bwTaskTabs button").length > 0) {
       tabs.style.display = "";
     }
+    // A deliberate reopen should reflect the LIVE task list — drop any cached
+    // discrepancy result so both the panel and the auto-loaded task titles refetch.
+    _invalidateRouteChanges();
     // Fill stop list immediately if a route is already loaded
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
     // Load daily routes only when not in BW-task mode (avoid clobbering BW state)
@@ -1030,6 +1038,15 @@ let _routeChangesCache    = { routeId: null, html: null };
 let _routeChangesInflight = { routeId: null, promise: null };
 let _appliedRouteChanges  = new Set();   // route ids whose changes have been applied (hide the Apply button)
 
+// Force the NEXT render to re-pull from Breezeway instead of serving the cached
+// result. Used on Recheck and on every deliberate sidebar reopen; a page reload
+// gets it for free (in-memory cache starts empty). Redraws within an open session
+// still hit the cache, so this stays cheap.
+function _invalidateRouteChanges() {
+  _routeChangesCache    = { routeId: null, html: null };
+  _routeChangesInflight = { routeId: null, promise: null };
+}
+
 // Append the "Changes vs Breezeway" block for the currently-loaded saved route.
 // Cheap to re-run: re-renders from cache on later panel redraws, and shares a
 // single in-flight request per route so redraws don't re-hit the heavy endpoint.
@@ -1047,8 +1064,7 @@ function _appendRouteChanges(content) {
   content.appendChild(box);
   const body = box.querySelector("[data-body]");
   box.querySelector("[data-refresh]").addEventListener("click", () => {
-    _routeChangesCache    = { routeId: null, html: null };
-    _routeChangesInflight = { routeId: null, promise: null };
+    _invalidateRouteChanges();
     _appliedRouteChanges.delete(rid);   // a fresh check brings the Apply button back
     _renderRouteChangesInto(rid, body);
   });
@@ -1066,21 +1082,35 @@ function _renderRouteChangesInto(routeId, body) {
   if (_routeChangesInflight.routeId !== routeId || !_routeChangesInflight.promise) {
     _routeChangesInflight = {
       routeId,
-      promise: fetch(`/api/route-discrepancies?route_id=${routeId}`).then(r => r.json()),
+      // no-store: the GET is otherwise HTTP-cacheable, which made a page reload show
+      // the stale browser-cached result instead of a live re-check.
+      promise: fetch(`/api/route-discrepancies?route_id=${routeId}`, { cache: "no-store" })
+        .then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        }),
     };
   }
   _routeChangesInflight.promise.then(data => {
-    const html = data.error
-      ? `<span class="text-red-500">${data.error}</span>`
-      : _renderChangesHtml(data);
-    body.innerHTML = html;
-    if (!data.error) {
-      _routeChangesCache = { routeId, html, data };
-      _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
-      _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
+    if (data.error) {
+      console.error("[route-changes] route", routeId, "server error:", data.error);
+      body.innerHTML = `<span class="text-red-500">${_escHtml(data.error)} — reopen the sidebar or click ↻ Recheck to retry.</span>`;
+      _invalidateRouteChanges();   // never cache an error — let a reopen/recheck retry
+      return;
     }
+    if (data.failed_properties) {
+      console.warn("[route-changes] route", routeId, "—", data.failed_properties,
+                   "propert(y/ies) failed to load from Breezeway; task list may be incomplete");
+    }
+    const html = _renderChangesHtml(data);
+    body.innerHTML = html;
+    _routeChangesCache = { routeId, html, data };
+    _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
+    _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
   }).catch(e => {
-    body.innerHTML = `<span class="text-red-500">Could not check: ${e.message}</span>`;
+    console.error("[route-changes] route", routeId, "fetch failed:", e);
+    body.innerHTML = `<span class="text-red-500">Could not check Breezeway: ${_escHtml(e.message)} — reopen the sidebar or click ↻ Recheck to retry.</span>`;
+    _invalidateRouteChanges();   // don't cache the failed promise, or every retry reuses it
   });
 }
 
@@ -1118,6 +1148,14 @@ function _renderChangesHtml(d) {
   const moved   = d.moved || [];
   let h = "";
 
+  // Loud, non-silent warning when Breezeway dropped some houses — the comparison
+  // (and the auto-loaded task titles) are then incomplete, so don't trust "no changes".
+  if (d.failed_properties) {
+    h += `<div class="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-snug">`
+       + `⚠ ${d.failed_properties} propert${d.failed_properties === 1 ? "y" : "ies"} couldn't be loaded from Breezeway — some tasks may be missing. Click ↻ Recheck to retry.`
+       + `</div>`;
+  }
+
   // ── What changed since the route was saved ──
   if (!added.length && !removed.length && !moved.length) {
     h += `<div class="text-green-600 mb-1">✓ No changes — the list matches the saved route.</div>`;
@@ -1130,13 +1168,14 @@ function _renderChangesHtml(d) {
     for (const prop of Object.keys(byProp)) {
       // A priority check-in (PCI) = arrive by noon. Mark it loudly: a badge on the
       // house header AND a highlighted, badged line for each PCI task.
-      const propPci = byProp[prop].some(a => a.pci || _titleHasPci(a.task_name));
+      // `a.pci` already requires a same-day arrival; a next-day PCI stays unflagged.
+      const propPci = byProp[prop].some(a => a.pci);
       h += `<div class="mb-1.5 leading-snug">`;
       h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}`
          + (propPci ? ` <span class="inline-block align-middle bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">⚡ PRIORITY CHECK-IN</span>` : "")
          + `</div>`;
       for (const a of byProp[prop]) {
-        const isPci = a.pci || _titleHasPci(a.task_name);
+        const isPci = !!a.pci;
         const who  = a.history && a.history.who  ? _escHtml(a.history.who) : null;
         const when = a.history && a.history.when ? _fmtChangeWhen(a.history.when) : null;
         const note = (who || when)
@@ -1296,6 +1335,8 @@ function _expandSidebarIfMinimized() {
     content.style.display = "";
     chevron.textContent   = "›";
     chevron.title         = "Minimize";
+    // Reopening should re-pull the live discrepancy check, not reuse a stale cache.
+    _invalidateRouteChanges();
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
   }
 }
@@ -1392,7 +1433,7 @@ function _syncSidebarToSchedule() {
       const taskRow = document.createElement("div");
       taskRow.className = "flex items-baseline gap-1 mt-0.5";
       const tname = document.createElement("span");
-      tname.className = _titleHasPci(t.task_name) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
+      tname.className = (s.priority_checkin && _titleHasPci(t.task_name)) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
       tname.textContent = t.task_name;
       taskRow.appendChild(tname);
       if (t.assignees && t.assignees.length) {
@@ -1438,7 +1479,7 @@ function _bwRenderTaskContent(matched) {
       const row   = document.createElement("div");
       row.className = "mb-1";
       const tname = document.createElement("div");
-      tname.className = _titleHasPci(t.task_name) ? "text-xs font-bold text-violet-700" : "text-xs font-medium text-gray-700";
+      tname.className = (p.priority_checkin && _titleHasPci(t.task_name)) ? "text-xs font-bold text-violet-700" : "text-xs font-medium text-gray-700";
       tname.textContent = t.task_name;
       row.appendChild(tname);
       if (t.assignees && t.assignees.length) {
