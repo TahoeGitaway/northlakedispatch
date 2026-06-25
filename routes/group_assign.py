@@ -11,9 +11,10 @@ Confirmed against the Breezeway API docs:
   Groups:  each /property carries a `groups` array of {id, name, parent_group_id}
 
 Endpoints:
-  GET  /admin/group-assign         — page
-  POST /admin/group-assign/scan    — tasks for a date, grouped (JSON)
-  POST /admin/group-assign/assign  — PATCH assignees onto selected tasks (JSON)
+  GET  /admin/group-assign              — page
+  POST /admin/group-assign/scan         — tasks for a date, grouped (JSON)
+  POST /admin/group-assign/assign       — PATCH assignees onto selected tasks (JSON)
+  POST /admin/group-assign/change-date  — PATCH scheduled_date onto selected tasks (JSON)
 """
 
 import time
@@ -399,6 +400,88 @@ def group_assign_apply():
     _scan_cache.clear()   # assignees changed — next scan should be fresh
     return jsonify({
         "results":    results,
+        "ok_count":   sum(1 for x in results if x["ok"]),
+        "fail_count": sum(1 for x in results if not x["ok"]),
+    })
+
+
+@group_assign_bp.route("/admin/group-assign/change-date", methods=["POST"])
+@login_required
+@admin_required
+def group_assign_change_date():
+    """Move selected tasks to a different scheduled DATE in Breezeway.
+
+    IRREVERSIBLE write. Same proven mechanism as the bear-fence mover: PATCH a
+    date-only `scheduled_date` (Breezeway keeps the separate `scheduled_time`), then
+    READ BACK the stored date so the response confirms the actual result, not just
+    the PATCH status. Per-task pass/fail is reported — never a silent partial move."""
+    token = _get_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."})
+
+    payload   = request.get_json(silent=True) or {}
+    task_ids  = payload.get("task_ids") or []
+    new_date  = (payload.get("new_date")  or "").strip()[:10]
+    from_date = (payload.get("from_date") or "").strip()[:10]
+
+    if not task_ids:
+        return jsonify({"error": "No tasks selected."}), 400
+    try:
+        date.fromisoformat(new_date)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Pick a valid target date (YYYY-MM-DD)."}), 400
+    if new_date == from_date:
+        return jsonify({"error": "The target date is the same as the current date — nothing to move."}), 400
+
+    headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
+
+    def _move_one(tid):
+        url  = f"{BW_BASE}/public/inventory/v1/task/{tid}"
+        last = "no attempt"
+        # Retry on throttle / transient server errors so a move never gets silently
+        # dropped because Breezeway was momentarily busy.
+        for attempt in range(3):
+            try:
+                r = requests.patch(url, headers=headers,
+                                   json={"scheduled_date": new_date}, timeout=20)
+                last = f"status={r.status_code}"
+                if r.status_code in (200, 201):
+                    # Confirm by reading the date Breezeway actually stored.
+                    after = None
+                    try:
+                        after = (r.json().get("scheduled_date") or "")[:10]
+                    except Exception:
+                        after = None
+                    if not after:
+                        try:
+                            g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+                            if g.ok:
+                                after = (g.json().get("scheduled_date") or "")[:10]
+                        except Exception:
+                            pass
+                    confirmed = (after == new_date)
+                    return {"task_id": tid, "ok": True, "date_after": after, "confirmed": confirmed,
+                            "detail": last + (" ✓ confirmed" if confirmed
+                                              else f" ⚠ Breezeway returned {after or '?'} (expected {new_date})")}
+                if r.status_code == 429 or r.status_code >= 500:
+                    last += f" {r.text[:120]}"
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                # Non-retryable (e.g. 400/404)
+                return {"task_id": tid, "ok": False, "date_after": None,
+                        "detail": f"{last} {r.text[:160]}"}
+            except Exception as e:
+                last = str(e)
+                time.sleep(0.4 * (attempt + 1))
+        return {"task_id": tid, "ok": False, "date_after": None,
+                "detail": f"failed after retries — {last}"}
+
+    results = list(ThreadPoolExecutor(max_workers=8).map(_move_one, task_ids))
+    _scan_cache.clear()   # dates changed — next scan should be fresh
+    return jsonify({
+        "results":    results,
+        "from_date":  from_date,
+        "new_date":   new_date,
         "ok_count":   sum(1 for x in results if x["ok"]),
         "fail_count": sum(1 for x in results if not x["ok"]),
     })

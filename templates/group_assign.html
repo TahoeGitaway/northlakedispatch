@@ -6,8 +6,9 @@
   <div class="mb-5">
     <h2 class="text-xl font-bold text-gray-800">Assign Tasks by Group</h2>
     <p class="text-xs text-gray-400 mt-0.5">
-      Pick a date, then tick any tasks and assign them to a person. Tasks are
-      bucketed by the property's top-level group. Check-ins are flagged.
+      Pick a date, then tick any tasks and assign them to a person — or move them to a
+      different day. Tasks are bucketed by the property's top-level group. Check-ins are
+      flagged. <span class="text-rose-500">Changing a task's date writes to Breezeway and can't be undone.</span>
     </p>
 
     <div class="flex items-end gap-3 flex-wrap mt-3">
@@ -72,6 +73,16 @@
       Assign selected
     </button>
     <span class="text-[11px] text-amber-600">⚠ Writes to Breezeway · sets the task's assignee to the chosen person</span>
+
+    <span style="width:1px;height:28px;background:#e5e7eb;margin:0 4px;"></span>
+
+    <input type="date" id="moveDate" title="New date to move the ticked tasks to"
+           class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-rose-300 outline-none">
+    <button onclick="changeDateSelected()"
+            class="px-4 py-2 bg-rose-600 text-white text-sm font-semibold rounded-lg hover:bg-rose-700 transition-colors">
+      Change date
+    </button>
+    <span class="text-[11px] text-rose-600">⚠ Permanently reschedules in Breezeway · cannot be undone</span>
   </div>
 </div>
 
@@ -685,6 +696,229 @@ function _renderAssignResults(data, personName) {
 
   box.innerHTML = html;
   box.classList.remove('hidden');
+}
+
+// ── CHANGE DATE (move selected tasks to a different day) ─────────────────────
+// IRREVERSIBLE Breezeway write. Heavily gated: a from→to summary repeated several
+// ways, an acknowledgement checkbox, AND typing the destination date exactly.
+
+function _fmtLongDate(ymd) {
+  if (!ymd) return '(no date)';
+  const d = new Date(ymd + 'T00:00:00');
+  return isNaN(d.getTime()) ? ymd
+    : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+}
+
+// Every task in a scan, flattened (check-ins + all group buckets), keyed lookups.
+function _allScanTasks() {
+  if (!SCAN) return [];
+  const out = [...(SCAN.checkins || [])];
+  (SCAN.groups || []).forEach(g => out.push(...(g.tasks || [])));
+  return out;
+}
+
+function changeDateSelected() {
+  const ids = _selectedIds();
+  if (!ids.length) { alert('Tick at least one task first.'); return; }
+  const toDate = (document.getElementById('moveDate').value || '').slice(0, 10);
+  if (!toDate) { alert('Pick the NEW date to move these tasks to first (the date box next to “Change date”).'); return; }
+
+  // A scan is one date (strict date guard), so that is the FROM date — but confirm
+  // against the selected tasks' own dates so the warning states what's truly there.
+  const byId = {}; _allScanTasks().forEach(t => { byId[t.task_id] = t; });
+  const sel = ids.map(id => byId[id]).filter(Boolean);
+  const fromDates = [...new Set(sel.map(t => (t.date || (SCAN && SCAN.date) || '').slice(0, 10)))];
+  const fromDate  = fromDates.length === 1 ? fromDates[0] : ((SCAN && SCAN.date) || '');
+
+  if (toDate === fromDate) { alert('That is the SAME date these tasks are already on. Pick a different date.'); return; }
+
+  _openDateChangeModal(ids, sel, fromDate, toDate);
+}
+
+function _openDateChangeModal(ids, sel, fromDate, toDate) {
+  const prev = document.getElementById('dateChangeModal'); if (prev) prev.remove();
+
+  const n = ids.length;
+  const fromLong = _fmtLongDate(fromDate), toLong = _fmtLongDate(toDate);
+  const list = sel.map(t => `<div style="font-size:0.72rem;color:#374151;">• <b>${esc(t.property||'?')}</b> — ${esc(t.name||'task')}</div>`).join('')
+    || `<div style="font-size:0.72rem;color:#9ca3af;">(${n} task${n!==1?'s':''} selected)</div>`;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'dateChangeModal';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 50px rgba(0,0,0,0.35);border:2px solid #e11d48;">
+      <div style="background:#e11d48;color:#fff;padding:14px 20px;font-weight:800;font-size:0.98rem;">
+        ⚠ PERMANENT DATE CHANGE — THIS CANNOT BE UNDONE
+      </div>
+      <div style="padding:18px 20px;">
+        <div style="font-size:1.05rem;font-weight:800;color:#9f1239;margin-bottom:4px;text-align:center;">
+          Moving ${n} task${n!==1?'s':''}
+        </div>
+
+        <div style="display:flex;align-items:stretch;gap:10px;margin:14px 0;">
+          <div style="flex:1;text-align:center;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:10px;">
+            <div style="font-size:0.6rem;font-weight:700;color:#b91c1c;letter-spacing:0.06em;">FROM (current)</div>
+            <div style="font-size:0.92rem;font-weight:800;color:#7f1d1d;margin-top:3px;">${esc(fromLong)}</div>
+            <div style="font-size:0.7rem;color:#b91c1c;font-family:monospace;">${esc(fromDate)}</div>
+          </div>
+          <div style="display:flex;align-items:center;font-size:1.4rem;color:#e11d48;font-weight:800;">→</div>
+          <div style="flex:1;text-align:center;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:10px;">
+            <div style="font-size:0.6rem;font-weight:700;color:#047857;letter-spacing:0.06em;">TO (new)</div>
+            <div style="font-size:0.92rem;font-weight:800;color:#065f46;margin-top:3px;">${esc(toLong)}</div>
+            <div style="font-size:0.7rem;color:#047857;font-family:monospace;">${esc(toDate)}</div>
+          </div>
+        </div>
+
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:10px 12px;font-size:0.78rem;color:#9a3412;line-height:1.55;margin-bottom:12px;">
+          You are about to <b>permanently reschedule ${n} task${n!==1?'s':''}</b> in Breezeway —
+          moving ${n!==1?'them':'it'} <b>OFF ${esc(fromLong)}</b> and <b>ONTO ${esc(toLong)}</b>.
+          This writes straight to Breezeway and <b style="color:#b91c1c;">CANNOT be undone</b> from this app.
+          The only way back is to move ${n!==1?'them':'it'} again by hand, from <b>${esc(toLong)}</b> back to <b>${esc(fromLong)}</b>.
+        </div>
+
+        <details style="margin-bottom:12px;">
+          <summary style="font-size:0.74rem;color:#6b7280;cursor:pointer;font-weight:600;">Show the ${n} task${n!==1?'s':''} being moved from ${esc(fromDate)} to ${esc(toDate)}</summary>
+          <div style="margin-top:6px;max-height:160px;overflow:auto;border:1px solid #f3f4f6;border-radius:8px;padding:8px;">${list}</div>
+        </details>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:0.8rem;color:#1f2937;cursor:pointer;margin-bottom:12px;">
+          <input type="checkbox" id="dcAck" style="margin-top:2px;width:16px;height:16px;flex-shrink:0;">
+          <span>I understand this <b>permanently</b> moves ${n} task${n!==1?'s':''} from <b>${esc(fromLong)}</b> to <b>${esc(toLong)}</b>, and <b>cannot be undone</b>.</span>
+        </label>
+
+        <div style="font-size:0.78rem;color:#374151;margin-bottom:5px;">
+          Final check — type the <b>new date</b> exactly as shown to enable the button:
+          <code style="background:#f3f4f6;padding:1px 6px;border-radius:4px;font-weight:700;">${esc(toDate)}</code>
+        </div>
+        <input type="text" id="dcType" placeholder="${esc(toDate)}" autocomplete="off" spellcheck="false"
+               style="width:100%;padding:9px 12px;border:2px solid #fca5a5;border-radius:8px;font-size:0.95rem;font-family:monospace;outline:none;margin-bottom:14px;box-sizing:border-box;">
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button id="dcCancel" style="padding:9px 16px;border:1px solid #d1d5db;background:#fff;border-radius:8px;font-weight:600;font-size:0.85rem;cursor:pointer;color:#374151;">Cancel — keep ${esc(fromDate)}</button>
+          <button id="dcConfirm" disabled
+                  style="padding:9px 16px;border:none;border-radius:8px;font-weight:800;font-size:0.85rem;cursor:not-allowed;background:#fca5a5;color:#fff;">
+            Move ${n} ${esc(fromDate)} → ${esc(toDate)}
+          </button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const ack     = overlay.querySelector('#dcAck');
+  const typed   = overlay.querySelector('#dcType');
+  const confirm = overlay.querySelector('#dcConfirm');
+  const cancel  = overlay.querySelector('#dcCancel');
+
+  const recheck = () => {
+    const ready = ack.checked && typed.value.trim() === toDate;
+    confirm.disabled = !ready;
+    confirm.style.cursor = ready ? 'pointer' : 'not-allowed';
+    confirm.style.background = ready ? '#e11d48' : '#fca5a5';
+  };
+  ack.addEventListener('change', recheck);
+  typed.addEventListener('input', recheck);
+
+  const close = () => overlay.remove();
+  cancel.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  confirm.addEventListener('click', () => {
+    if (confirm.disabled) return;
+    close();
+    _doChangeDate(ids, fromDate, toDate);
+  });
+}
+
+async function _doChangeDate(ids, fromDate, toDate) {
+  const eb  = document.getElementById('errorBox');
+  const box = document.getElementById('assignResult');
+  eb.classList.add('hidden');
+  box.classList.remove('hidden');
+  box.innerHTML = `<div style="color:#6b7280;">Moving ${ids.length} task(s) ${esc(fromDate)} → ${esc(toDate)}…</div>`;
+  try {
+    const resp = await fetch('/admin/group-assign/change-date', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ task_ids: ids, new_date: toDate, from_date: fromDate }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">${esc(data.error)}</div>`;
+      return;
+    }
+    _renderDateChangeResults(data);
+    const ok = data.ok_count || 0, fail = data.fail_count || 0;
+    (data.results || []).forEach(r => { if (r.ok) _markMoved(r.task_id, toDate); else _markDateFailed(r.task_id); });
+    _refreshCount();
+    if (fail) {
+      eb.innerHTML = `<b>⚠ ${fail} date change${fail !== 1 ? 's' : ''} FAILED.</b> `
+        + `${fail === 1 ? 'It is' : 'They are'} highlighted red and still selected — retry, or open “Raw response data” for details.`;
+      eb.classList.remove('hidden');
+    }
+    _toast(`✓ ${ok} task${ok !== 1 ? 's' : ''} moved → ${toDate}` + (fail ? ` · ${fail} FAILED` : ''), fail === 0);
+  } catch (e) {
+    box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">Network error: ${esc(e.message)}</div>`;
+  }
+}
+
+function _renderDateChangeResults(data) {
+  const box = document.getElementById('assignResult');
+  const results = data.results || [];
+  const ok = data.ok_count || 0, fail = data.fail_count || 0;
+  let html = `<div style="font-weight:700;font-size:0.9rem;margin-bottom:8px;color:${fail ? '#b45309' : '#15803d'};">`
+    + `Move ${esc(data.from_date || '')} → ${esc(data.new_date || '')} · ${ok} succeeded${fail ? ` · ${fail} FAILED` : ''}</div>`;
+  html += '<div style="display:flex;flex-direction:column;gap:3px;">';
+  results.forEach(r => {
+    html += `<div style="font-size:0.74rem;color:${r.ok ? '#374151' : '#b91c1c'};">`
+      + `${r.ok ? '✓' : '✗'} task <b>${esc(r.task_id)}</b> — ${esc(r.detail || '')}`
+      + (r.ok && r.date_after ? ` — now dated <b>${esc(r.date_after)}</b>` : '')
+      + `</div>`;
+  });
+  html += '</div>';
+  html += `<details style="margin-top:10px;"><summary style="font-size:0.72rem;color:#6b7280;cursor:pointer;">Raw response data</summary>`
+    + `<pre style="white-space:pre-wrap;font-size:0.68rem;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:4px;">${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+  box.innerHTML = html;
+  box.classList.remove('hidden');
+}
+
+// Moved task is no longer on this scanned date — gray it out, badge the new date.
+function _markMoved(taskId, toDate) {
+  const row = document.querySelector(`.task-row[data-tid="${taskId}"]`);
+  if (!row) return;
+  const cb = row.querySelector('.task-cb');
+  if (cb) { cb.checked = false; cb.disabled = true; }
+  row.style.opacity = '0.45';
+  row.style.background = '';
+  row.style.boxShadow = '';
+  const fb = row.querySelector('.failed-badge'); if (fb) fb.remove();
+  if (!row.querySelector('.moved-badge')) {
+    const b = document.createElement('span');
+    b.className = 'moved-badge';
+    b.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#fce7f3;color:#9d174d;border:1px solid #f9a8d4;';
+    b.textContent = '→ ' + toDate;
+    const badges = row.querySelector('.task-badges');
+    if (badges) badges.appendChild(b);
+  }
+}
+
+// Failed move — red, badged, left SELECTED so a retry hits exactly the stragglers.
+function _markDateFailed(taskId) {
+  const row = document.querySelector(`.task-row[data-tid="${taskId}"]`);
+  if (!row) return;
+  const cb = row.querySelector('.task-cb');
+  if (cb) { cb.checked = true; cb.disabled = false; }
+  row.style.background = '#fef2f2';
+  row.style.boxShadow = 'inset 3px 0 0 #ef4444';
+  let badge = row.querySelector('.failed-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'failed-badge';
+    badge.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;';
+    const badges = row.querySelector('.task-badges');
+    if (badges) badges.appendChild(badge);
+  }
+  badge.textContent = '✗ DATE CHANGE FAILED';
+  const mb = row.querySelector('.moved-badge'); if (mb) mb.remove();
 }
 
 // Default date = today. Scan only on click. Show saved views immediately.
