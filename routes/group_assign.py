@@ -242,16 +242,28 @@ def _scan_inner():
             if not ok:
                 failed_props += 1
 
-    # Guest/owner arrivals that day → BW property ids (for the CHECK-IN badge).
-    # Matched by property_id directly — no local name-matching needed.
+    # Guest/owner/lease arrivals that day → BW property ids (for the CHECK-IN badge),
+    # plus a by-type tally of the arrivals THEMSELVES (every check-in reservation that
+    # day, even at houses with no task in this batch). Matched by property_id directly.
+    # The tally counts arrivals/reservations; arrival_pids counts distinct houses —
+    # they differ, so the summary can show both honestly (blocks/holds excluded).
     arrival_pids = set()
+    arrival_counts = {"guest": 0, "owner": 0, "lease": 0}
+    seen_resv = set()
     try:
         for r in _fetch_breezeway_checkins(date_str):
-            if _classify_reservation(r) == "block":
+            kind = _classify_reservation(r)
+            if kind == "block":
                 continue
+            rid = r.get("id")
+            if rid is not None:
+                if rid in seen_resv:   # de-dupe paginated reservations
+                    continue
+                seen_resv.add(rid)
             apid = r.get("property_id") or r.get("home_id")
             if apid is not None:
                 arrival_pids.add(str(apid))
+            arrival_counts[kind] = arrival_counts.get(kind, 0) + 1
     except Exception:
         pass
 
@@ -320,6 +332,9 @@ def _scan_inner():
         "dept_counts": dept_counts,
         "failed_properties": failed_props,
         "scanned_properties": len(pid_candidates),
+        "arrival_counts":   arrival_counts,                 # {guest, owner, lease} — ALL arrivals that day
+        "arrival_total":    sum(arrival_counts.values()),   # total check-in reservations that day
+        "arriving_houses":  len(arrival_pids),              # distinct houses with an arrival (any type)
     }
     # Cache before returning — so even if the proxy already timed out, the retry
     # gets this result instantly instead of re-running the whole sweep.
