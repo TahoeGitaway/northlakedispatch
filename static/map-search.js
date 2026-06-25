@@ -803,32 +803,39 @@ function _titleHasPci(title) {
   return (" " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ").includes(" pci ");
 }
 
-// A loaded saved route stores priority_checkin from when it was saved — which can
-// be stale (e.g. a PCI added in Breezeway later, or saved before PCI detection).
-// So whenever we have the route's LIVE Breezeway tasks, re-detect PCI per property
-// and flag those stops as priority — no matter what was saved. This guarantees a
-// same-day PCI is never overlooked on an already-built route.
+// A loaded saved route stores priority_checkin from when it was saved — which can be
+// stale BOTH ways: a PCI added in Breezeway later (needs flagging), OR a flag left on
+// a walk-thru whose arrival is actually another day (needs clearing — e.g. a route
+// saved before the same-day rule existed). So whenever we have the route's LIVE
+// Breezeway tasks, the same-day rule is AUTHORITATIVE for every property that has a
+// PCI-titled task: backend `c.pci` true → flag it; false → demote it to a plain stop.
+// Properties with NO PCI task are left untouched, so manual Priority / Check-in
+// toggles on ordinary stops are preserved.
 function _flagPciFromTasks(currentTasks) {
   if (!Array.isArray(currentTasks) || !currentTasks.length) return;
-  const pciProps = new Set();
+  const wantByProp = new Map();   // propLower -> should-be-PCI (boolean)
   for (const c of currentTasks) {
-    // Trust the backend's `pci` flag — it already requires a SAME-DAY arrival, so a
-    // PCI prepping for a next-day arrival is correctly left unflagged. Fall back to a
-    // title scan only for older payloads that predate the flag.
-    const has = ("pci" in c)
-      ? !!c.pci
-      : (c.tasks || []).some(t =>
-          _titleHasPci(typeof t === "string" ? t : ((t && (t.task_name || t.title)) || "")));
-    if (has) pciProps.add((c.property || "").toLowerCase());
+    const hasPciTitle = (c.tasks || []).some(t =>
+      _titleHasPci(typeof t === "string" ? t : ((t && (t.task_name || t.title)) || "")));
+    if (!hasPciTitle) continue;
+    // Trust the backend `pci` flag (already requires a SAME-DAY arrival). Older
+    // payloads without the field fall back to "has PCI title" = treat as same-day.
+    const sameDay = ("pci" in c) ? !!c.pci : true;
+    wantByProp.set((c.property || "").toLowerCase(), sameDay);
   }
-  if (!pciProps.size) return;
+  if (!wantByProp.size) return;
 
   let changed = false;
   const apply = s => {
-    if (s && pciProps.has((s.name || "").toLowerCase()) && !s.priority_checkin) {
-      s.priority_checkin = true;
-      s.arrival = true;
-      changed = true;
+    if (!s) return;
+    const want = wantByProp.get((s.name || "").toLowerCase());
+    if (want === undefined) return;                 // no PCI task here → leave as-is
+    if (want && !s.priority_checkin) {
+      s.priority_checkin = true; s.arrival = true; changed = true;
+    } else if (!want && (s.priority_checkin || s.arrival)) {
+      // Stale same-day PCI flag (pre-fix save, or an arrival that has since moved to
+      // another day) → this walk-thru is for another day, so make it a plain stop.
+      s.priority_checkin = false; s.arrival = false; changed = true;
     }
   };
   (typeof selectedStops !== "undefined" ? selectedStops : []).forEach(apply);
