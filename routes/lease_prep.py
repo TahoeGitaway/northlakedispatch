@@ -231,6 +231,95 @@ def lease_prep_scan_post():
         return jsonify({"error": f"{type(e).__name__}: {e}\n\n{tb}"}), 500
 
 
+@lease_prep_bp.route("/admin/lease-prep/house-week")
+@login_required
+def lease_prep_house_week():
+    """Day-by-day tasks around one lease's anchor date.
+
+    pre  → the 7 days BEFORE arrival, ending on the checkin day.
+    post → the checkout (departure) day and the 7 days AFTER it.
+
+    Mirrors the VIP /vip/house-tasks week view, generalised for either direction.
+    """
+    from routes.briefing import (_ensure_property_cache, _get_live_ref_cache,
+                                  _fetch_bw_endpoint, _classify_reservation)
+    from routes.dispatch import _bw_task_title
+    from routes.vip import _task_status, _assignees, _guest_name
+
+    pid    = (request.args.get("pid") or "").strip()
+    anchor = (request.args.get("anchor") or "").strip()[:10]
+    mode   = (request.args.get("mode") or "pre").strip()
+    if not pid or not anchor:
+        return jsonify({"error": "pid and anchor required"}), 400
+    try:
+        anchor_date = date.fromisoformat(anchor)
+    except ValueError:
+        return jsonify({"error": "bad anchor date"}), 400
+
+    if mode == "post":
+        start, end, anchor_label = anchor_date, anchor_date + timedelta(days=7), "departure"
+    else:
+        start, end, anchor_label = anchor_date - timedelta(days=7), anchor_date, "arrival"
+
+    token = _get_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."}), 503
+    _ensure_property_cache()
+    ref_cache = _get_live_ref_cache()
+    ref_id    = ref_cache.get(pid) or str(pid)
+
+    drange = f"{start.isoformat()},{end.isoformat()}"
+    results, _err, _st = _fetch_bw_endpoint(
+        token, "/public/inventory/v1/task",
+        {"reference_property_id": ref_id, "scheduled_date": drange})
+
+    tasks = []
+    for t in (results or []):
+        td = (t.get("scheduled_date") or "")[:10]
+        if not (start.isoformat() <= td <= end.isoformat()):
+            continue
+        dept = t.get("type_department")
+        if isinstance(dept, dict):
+            dept = dept.get("name") or dept.get("code")
+        tasks.append({
+            "name":      _bw_task_title(t),
+            "date":      td,
+            "time":      (str(t.get("scheduled_time") or "")[:5]) or None,
+            "status":    _task_status(t),
+            "assignees": _assignees(t),
+            "department": dept,
+        })
+    tasks.sort(key=lambda x: (x["date"], x["time"] or "~"))
+
+    # Reservations overlapping the window — who is at the house, and what type.
+    res_results, _re2, _rs2 = _fetch_bw_endpoint(
+        token, "/public/inventory/v1/reservation",
+        {"reference_property_id": ref_id,
+         "checkout_date_ge": start.isoformat(),
+         "checkin_date_le":  end.isoformat()})
+    reservations = []
+    for r in (res_results or []):
+        rpid = str(r.get("property_id") or r.get("home_id") or "")
+        if rpid and rpid != str(pid):
+            continue                                   # endpoint may ignore the property filter
+        cin  = (r.get("checkin_date") or "")[:10]
+        cout = (r.get("checkout_date") or "")[:10]
+        if not cin or not cout or cout < start.isoformat() or cin > end.isoformat():
+            continue
+        reservations.append({
+            "type":     _classify_reservation(r),
+            "checkin":  cin,
+            "checkout": cout,
+            "guest":    _guest_name(r),
+        })
+    reservations.sort(key=lambda x: x["checkin"])
+
+    return jsonify({"matched": True, "matched_name": _get_property_name(pid),
+                    "start": start.isoformat(), "end": end.isoformat(),
+                    "anchor": anchor_date.isoformat(), "anchor_label": anchor_label,
+                    "reservations": reservations, "tasks": tasks})
+
+
 def _lease_prep_scan_inner(mode="pre"):
     token = _get_token()
     if not token:
@@ -336,6 +425,7 @@ def _lease_prep_scan_inner(mode="pre"):
 
             fmt_tasks.sort(key=lambda x: (x["sched_date"] or ""))
             results.append({
+                "pid":         pid,
                 "property":    _get_property_name(pid),
                 "checkin":     checkin,
                 "checkout":    checkout,
