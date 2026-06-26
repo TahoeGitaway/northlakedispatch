@@ -107,7 +107,7 @@ DROPPED_NAMES: dict = {}
 # from the counts. They are NOT modified or removed on Breezeway.
 EXCLUDE_TASK_NAME = "disarm bear fence"
 
-# Candidate field names. The dry-inspect confirms which one Breezeway actually
+# Candidate field names. The dry-inspect confirms which one Breezeway
 # uses; the program logs the detected key so the numbers are interpretable.
 COMPLETION_KEYS = ["finished_at", "completed_at", "date_completed",
                    "completion_date", "finished", "date_finished", "closed_at"]
@@ -470,7 +470,7 @@ def is_bear_fence(task: dict) -> tuple:
 
 
 def task_finished_by_id(task: dict):
-    """The single user who actually COMPLETED the task (Breezeway `finished_by`),
+    """The single user who COMPLETED the task (Breezeway `finished_by`),
     or None if not recorded. This is the attribution basis for the report:
     'tasks completed per person' = who finished it, not who it was assigned to."""
     fb = task.get("finished_by")
@@ -722,9 +722,9 @@ def write_summary(path, counts, id_to_name, start_d, end_d, csv_rows, args, stat
 
     # Counting rules / interpretation
     A("## How to read these numbers")
-    A("- **Counted by who completed it (`finished_by`).** Each finished task is credited to the "
+    A("- **Counted by who finished it (`finished_by`).** Each finished task is credited to the "
       "single person who marked it complete — NOT who it was assigned to. So each task counts "
-      "exactly once, for the person who actually did it.")
+      "exactly once, for the person who finished it.")
     A(f"- **Completion field used:** `{REPORT.completion_key_used}` — the day bucket is the "
       "date portion of that timestamp **as Breezeway returns it**. If Breezeway returns UTC, "
       "a task finished late at night local time may land on the next day. Note this when "

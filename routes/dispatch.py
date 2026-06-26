@@ -664,6 +664,7 @@ def optimize():
                 "lng":              float(s.get("lng")),
                 "arrival":          bool(s.get("arrival", False)),
                 "priority_checkin": bool(s.get("priority_checkin", False)),
+                "go_first":         bool(s.get("go_first", False)),
                 "serviceMinutes":   int(s.get("serviceMinutes", 60)),
             })
         except Exception:
