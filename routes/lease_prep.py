@@ -94,7 +94,11 @@ def _is_lease(r: dict) -> bool:
     return False
 
 
-def _fetch_reservations(token: str, start: date, end: date) -> list:
+def _fetch_reservations(token: str, start: date, end: date,
+                        date_field: str = "checkin") -> list:
+    """Fetch reservations whose checkin (default) or checkout date falls in the span."""
+    ge_key = f"{date_field}_date_ge"
+    le_key = f"{date_field}_date_le"
     all_results = []
     page = 1
     while True:
@@ -102,8 +106,8 @@ def _fetch_reservations(token: str, start: date, end: date) -> list:
             r = requests.get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
-                params={"checkin_date_ge": start.isoformat(),
-                        "checkin_date_le": end.isoformat(),
+                params={ge_key: start.isoformat(),
+                        le_key: end.isoformat(),
                         "limit": 100, "page": page},
                 timeout=20,
             )
@@ -209,14 +213,25 @@ def lease_prep_page():
 @login_required
 def lease_prep_scan():
     try:
-        return _lease_prep_scan_inner()
+        return _lease_prep_scan_inner(mode="pre")
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         return jsonify({"error": f"{type(e).__name__}: {e}\n\n{tb}"}), 500
 
 
-def _lease_prep_scan_inner():
+@lease_prep_bp.route("/admin/lease-prep/scan-post", methods=["POST"])
+@login_required
+def lease_prep_scan_post():
+    try:
+        return _lease_prep_scan_inner(mode="post")
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        return jsonify({"error": f"{type(e).__name__}: {e}\n\n{tb}"}), 500
+
+
+def _lease_prep_scan_inner(mode="pre"):
     token = _get_token()
     if not token:
         return jsonify({"error": "Breezeway not configured."})
@@ -224,8 +239,9 @@ def _lease_prep_scan_inner():
     from routes.briefing import _get_live_ref_cache, _ensure_property_cache
     _ensure_property_cache()
 
-    # Date span to scan for lease ARRIVALS. Defaults to today → +30 days, but the
-    # user can pick a shorter (or different) range. End before start is swapped.
+    # Date span to scan. Pre mode scans lease ARRIVALS (checkin); post mode scans
+    # lease DEPARTURES (checkout). Defaults to today → +30 days, but the user can
+    # pick a shorter (or different) range. End before start is swapped.
     today = date.today()
 
     def _parse_date(val, default):
@@ -240,9 +256,10 @@ def _lease_prep_scan_inner():
     if end < start:
         start, end = end, start
 
-    # Step A: fetch reservations
+    # Step A: fetch reservations — by checkin (pre) or checkout (post) date
+    date_field = "checkout" if mode == "post" else "checkin"
     try:
-        reservations = _fetch_reservations(token, start, end)
+        reservations = _fetch_reservations(token, start, end, date_field=date_field)
     except Exception as e:
         import traceback; return jsonify({"error": f"STEP A (fetch reservations): {e}\n{traceback.format_exc()}"})
 
@@ -258,18 +275,26 @@ def _lease_prep_scan_inner():
 
     ref_cache = _get_live_ref_cache()
 
-    # Step C: fetch tasks per lease
+    # Step C: fetch tasks per lease.
+    #   pre  → the 30 days BEFORE arrival, up to the checkin day.
+    #   post → the checkout (departure) day and the 30 days AFTER it.
     def fetch_lease_tasks(r):
         pid = str(r.get("property_id") or r.get("home_id") or "")
-        checkin_raw = r.get("checkin_date") or ""
-        checkin = str(checkin_raw)[:10]
+        if mode == "post":
+            anchor_raw = r.get("checkout_date") or ""
+        else:
+            anchor_raw = r.get("checkin_date") or ""
+        anchor_str = str(anchor_raw)[:10]
         try:
-            arrival = date.fromisoformat(checkin)
+            anchor = date.fromisoformat(anchor_str)
         except ValueError:
             return r, [], None
-        window_start = arrival - timedelta(days=30)
+        if mode == "post":
+            window_start, window_end = anchor, anchor + timedelta(days=30)
+        else:
+            window_start, window_end = anchor - timedelta(days=30), anchor
         tasks = _fetch_tasks_for_property(
-            token, pid, ref_cache.get(pid, ""), window_start, arrival
+            token, pid, ref_cache.get(pid, ""), window_start, window_end
         )
         has_hot_tub = _property_has_hot_tub(token, pid)
         return r, tasks, has_hot_tub

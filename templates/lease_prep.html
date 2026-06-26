@@ -7,10 +7,24 @@
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Lease Prep</h2>
-        <p class="text-xs text-gray-400 mt-0.5">
+        <p id="subhead" class="text-xs text-gray-400 mt-0.5">
           Lease arrivals in the chosen span — all tasks in the 30 days prior to each arrival.
         </p>
       </div>
+    </div>
+
+    <!-- Tabs: Pre Lease / Post Lease -->
+    <div class="flex gap-1 mt-4 border-b border-gray-200">
+      <button id="tab-pre" type="button" onclick="switchTab('pre')"
+              class="px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors
+                     border-indigo-500 text-indigo-700">
+        Pre Lease
+      </button>
+      <button id="tab-post" type="button" onclick="switchTab('post')"
+              class="px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors
+                     border-transparent text-gray-500 hover:text-gray-700">
+        Post Lease
+      </button>
     </div>
 
     <!-- Date span picker -->
@@ -58,6 +72,28 @@
 </div>
 
 <script>
+// Active tab — 'pre' (arrivals, tasks before checkin) or 'post' (departures, tasks from checkout on).
+let currentMode = 'pre';
+
+const MODE = {
+  pre: {
+    endpoint: '/admin/lease-prep/scan',
+    subhead: 'Lease arrivals in the chosen span — all tasks in the 30 days prior to each arrival.',
+    loading: 'Fetching lease arrivals and prep tasks…',
+    empty: 'No lease arrivals found in the selected span.',
+    emptyRange: (a, b) => `No lease arrivals found between ${a} and ${b}.`,
+    noTasks: 'No tasks found in the 30 days prior to this arrival.',
+  },
+  post: {
+    endpoint: '/admin/lease-prep/scan-post',
+    subhead: 'Lease departures in the chosen span — all tasks from each checkout day and the 30 days after.',
+    loading: 'Fetching lease departures and turnover tasks…',
+    empty: 'No lease departures found in the selected span.',
+    emptyRange: (a, b) => `No lease departures found between ${a} and ${b}.`,
+    noTasks: 'No tasks found from the checkout day onward.',
+  },
+};
+
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -96,22 +132,28 @@ function buildLeaseCard(lease) {
   const card = document.createElement('div');
   card.style.cssText = 'border-radius:12px;border:1px solid #e5e7eb;background:#fff;overflow:hidden;';
 
-  // Header
+  // Header — post mode leads with the departure (checkout); pre mode with the arrival.
   const nights = lease.nights ? `${lease.nights} nights` : '';
   const guest  = lease.guest  ? ` · ${esc(lease.guest)}` : '';
   const hotTub = lease.has_hot_tub === true  ? '<strong style="color:#15803d;">Yes</strong>'
                : lease.has_hot_tub === false ? '<strong style="color:#b91c1c;">No</strong>'
                : '<span style="color:#9ca3af;">unknown</span>';
+  const primaryLine = currentMode === 'post'
+    ? `Departure <strong>${_fmtDate(lease.checkout)}</strong>${nights ? ' · ' + nights : ''}${guest}`
+    : `Arrival <strong>${_fmtDate(lease.checkin)}</strong>${nights ? ' · ' + nights : ''}${guest}`;
+  const secondaryLine = currentMode === 'post'
+    ? `Arrival ${_fmtDate(lease.checkin)}`
+    : `Checkout ${_fmtDate(lease.checkout)}`;
   card.innerHTML = `
     <div style="background:#f8f7ff;padding:14px 18px;border-bottom:1px solid #e5e7eb;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
         <div>
           <div style="font-weight:700;font-size:1rem;color:#1f2937;">${esc(lease.property)}</div>
           <div style="font-size:0.8rem;color:#6b7280;margin-top:3px;">
-            Arrival <strong>${_fmtDate(lease.checkin)}</strong>${nights ? ' · ' + nights : ''}${guest}
+            ${primaryLine}
           </div>
           <div style="font-size:0.75rem;color:#9ca3af;margin-top:1px;">
-            Checkout ${_fmtDate(lease.checkout)}
+            ${secondaryLine}
           </div>
           <div style="font-size:0.78rem;color:#6b7280;margin-top:4px;">
             House has hot tub? ${hotTub}
@@ -131,7 +173,7 @@ function buildLeaseCard(lease) {
   taskWrap.style.cssText = 'padding:4px 0;';
 
   if (!lease.tasks || !lease.tasks.length) {
-    taskWrap.innerHTML = `<div style="padding:14px 18px;font-size:0.8rem;color:#9ca3af;font-style:italic;">No tasks found in the 30 days prior to this arrival.</div>`;
+    taskWrap.innerHTML = `<div style="padding:14px 18px;font-size:0.8rem;color:#9ca3af;font-style:italic;">${MODE[currentMode].noTasks}</div>`;
   } else {
     lease.tasks.forEach(t => {
       const row = document.createElement('div');
@@ -180,6 +222,25 @@ function resetDates() {
   document.getElementById('toDate').value   = _ymd(plus30);
 }
 
+function switchTab(mode) {
+  if (mode === currentMode) return;
+  currentMode = mode;
+
+  const active = 'border-indigo-500 text-indigo-700';
+  const idle   = 'border-transparent text-gray-500 hover:text-gray-700';
+  const pre  = document.getElementById('tab-pre');
+  const post = document.getElementById('tab-post');
+  pre.className  = `px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${mode === 'pre'  ? active : idle}`;
+  post.className = `px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${mode === 'post' ? active : idle}`;
+
+  document.getElementById('subhead').textContent = MODE[mode].subhead;
+
+  // Clear prior results so the two tabs never show stale data from each other.
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('emptyBox').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+}
+
 async function runScan() {
   const from = document.getElementById('fromDate').value;
   const to   = document.getElementById('toDate').value;
@@ -190,13 +251,15 @@ async function runScan() {
     return;
   }
 
+  const cfg = MODE[currentMode];
+  document.querySelector('#loading span').textContent = cfg.loading;
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('emptyBox').classList.add('hidden');
   document.getElementById('errorBox').classList.add('hidden');
   document.getElementById('results').innerHTML = '';
 
   try {
-    const resp = await fetch('/admin/lease-prep/scan', {
+    const resp = await fetch(cfg.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to }),
@@ -226,9 +289,9 @@ async function runScan() {
     const leases = data.leases || [];
     if (!leases.length) {
       const eb = document.getElementById('emptyBox');
-      if (data.range) {
-        eb.textContent = `No lease arrivals found between ${_fmtDateShort(data.range.from)} and ${_fmtDateShort(data.range.to)}.`;
-      }
+      eb.textContent = data.range
+        ? cfg.emptyRange(_fmtDateShort(data.range.from), _fmtDateShort(data.range.to))
+        : cfg.empty;
       eb.classList.remove('hidden');
       return;
     }

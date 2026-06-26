@@ -888,6 +888,12 @@ def main():
     ap.add_argument("--inspect", action="store_true",
                     help="Dry inspect: print one completed task's JSON and detected fields, then exit.")
     ap.add_argument("--days", type=int, default=365, help="Window length in days (default 365).")
+    ap.add_argument("--end", default="",
+                    help="End date YYYY-MM-DD of the window (default: today). Window = [end - days, end]. "
+                         "Use this to run a PRIOR cycle, e.g. last year's same date.")
+    ap.add_argument("--prior", action="store_true",
+                    help="Write to the PRIOR-cycle report files (productivity_past_365_days_prior.*) instead of "
+                         "the current ones, so the page can compare the two cycles. Pair with --end.")
     ap.add_argument("--delay", type=float, default=0.25,
                     help="Polite pause between property calls, seconds (default 0.25).")
     ap.add_argument("--outdir", default=".", help="Directory for the report files (default current dir).")
@@ -895,7 +901,14 @@ def main():
                     help="TESTING ONLY: scan only the first N properties (forces a PARTIAL report).")
     args = ap.parse_args()
 
-    end_d = date.today()
+    if args.end:
+        try:
+            end_d = date.fromisoformat(args.end)
+        except ValueError:
+            print("--end must be a date in YYYY-MM-DD form.", file=sys.stderr)
+            sys.exit(2)
+    else:
+        end_d = date.today()
     start_d = end_d - timedelta(days=args.days)
     finished_param = f"{start_d.isoformat()},{end_d.isoformat()}"
 
@@ -921,9 +934,12 @@ def main():
                                   start_d, end_d, properties, args.delay)
 
     os.makedirs(args.outdir, exist_ok=True)
-    csv_path  = os.path.join(args.outdir, "productivity_past_365_days.csv")
-    sum_path  = os.path.join(args.outdir, "productivity_past_365_days_summary.md")
-    json_path = os.path.join(args.outdir, "productivity_past_365_days.json")
+    # --prior routes to a separate file set so the two cycles don't overwrite each
+    # other; the page reads both and compares them.
+    suffix = "_prior" if args.prior else ""
+    csv_path  = os.path.join(args.outdir, f"productivity_past_365_days{suffix}.csv")
+    sum_path  = os.path.join(args.outdir, f"productivity_past_365_days{suffix}_summary.md")
+    json_path = os.path.join(args.outdir, f"productivity_past_365_days{suffix}.json")
 
     csv_rows = write_csv(csv_path, counts, id_to_name)
     status_word = "COMPLETE" if REPORT.is_complete else "PARTIAL"

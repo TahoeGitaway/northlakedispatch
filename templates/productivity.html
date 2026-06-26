@@ -12,6 +12,7 @@
   </div>
 
   <div id="statusBar" class="mb-4"></div>
+  <div id="compare"></div>
   <div id="content"></div>
 
   <div id="loading" class="flex items-center gap-3 py-12 text-gray-400 justify-center">
@@ -199,7 +200,7 @@ function render(d) {
 
   // ── Download ──
   const dl = d.has_csv
-    ? `<a href="/admin/productivity/download" class="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">⤓ Download per-day CSV</a>`
+    ? `<a href="/admin/productivity/download?which=current" class="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">⤓ Download per-day CSV</a>`
     : "";
 
   el.innerHTML = droppedNote + stats + yearly + monthly + fail +
@@ -209,11 +210,93 @@ function render(d) {
      </div>`;
 }
 
-fetch("/admin/productivity/data")
+// ── Year-over-year comparison (only when a prior cycle has been generated) ──
+function windowLabel(rep) {
+  const w = (rep && rep.window) || {};
+  return `${esc(w.start)} → ${esc(w.end)}`;
+}
+function totalsByName(rep) {
+  const m = {};
+  (rep.people || []).filter(p => !p.excluded).forEach(p => { m[p.name] = p.yearly_total || 0; });
+  return m;
+}
+function renderComparison(cur, pri) {
+  const el = document.getElementById("compare");
+  const curT = totalsByName(cur), priT = totalsByName(pri);
+  const names = [...new Set([...Object.keys(curT), ...Object.keys(priT)])];
+
+  const sumCur = Object.values(curT).reduce((a, b) => a + b, 0);
+  const sumPri = Object.values(priT).reduce((a, b) => a + b, 0);
+  const delta = (now, then) => {
+    const d = now - then;
+    const pct = then ? Math.round((d / then) * 100) : null;
+    const up = d > 0, flat = d === 0;
+    const color = flat ? "#6b7280" : (up ? "#15803d" : "#b91c1c");
+    const arrow = flat ? "→" : (up ? "▲" : "▼");
+    const txt = pct === null ? (flat ? "—" : `${arrow} new`) : `${arrow} ${Math.abs(pct)}%`;
+    return { txt, color, abs: (d >= 0 ? "+" : "") + d };
+  };
+  const overall = delta(sumCur, sumPri);
+
+  el.innerHTML = `
+    <div class="rounded-xl border border-indigo-200 bg-indigo-50/40 px-5 py-4 mb-6">
+      <div class="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+        <h3 class="text-sm font-bold text-indigo-900">Year-over-year — two seasonal cycles</h3>
+        <span class="text-[11px] font-bold" style="color:${overall.color}">
+          Overall ${overall.txt} (${overall.abs} tasks)
+        </span>
+      </div>
+      <div class="text-[11px] text-gray-500 mb-3">
+        This cycle <b>${windowLabel(cur)}</b> vs prior cycle <b>${windowLabel(pri)}</b>.
+        ${cur.status !== "COMPLETE" || pri.status !== "COMPLETE"
+          ? `<span class="text-amber-700 font-semibold">⚠ one or both cycles are PARTIAL — comparison may understate.</span>` : ""}
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm border-collapse">
+          <thead>
+            <tr class="text-left text-gray-500 border-b border-indigo-200">
+              <th class="py-2 pr-3 font-medium">Person</th>
+              <th class="py-2 px-3 font-medium text-right">This cycle</th>
+              <th class="py-2 px-3 font-medium text-right">Prior cycle</th>
+              <th class="py-2 px-3 font-medium text-right">Change</th>
+              <th class="py-2 pl-3 font-medium">vs prior</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${names.map(n => {
+              const c = curT[n] || 0, p = priT[n] || 0;
+              const dd = delta(c, p);
+              return `<tr class="border-b border-indigo-100">
+                <td class="py-2 pr-3 font-semibold text-gray-800">${esc(n)}</td>
+                <td class="py-2 px-3 text-right font-semibold">${c}</td>
+                <td class="py-2 px-3 text-right text-gray-500">${p}</td>
+                <td class="py-2 px-3 text-right font-semibold" style="color:${dd.color}">${dd.abs}</td>
+                <td class="py-2 pl-3 font-bold" style="color:${dd.color}">${dd.txt}</td>
+              </tr>`;
+            }).join("")}
+            <tr class="border-t-2 border-indigo-300">
+              <td class="py-2 pr-3 font-bold text-gray-900">All ${names.length}</td>
+              <td class="py-2 px-3 text-right font-bold">${sumCur}</td>
+              <td class="py-2 px-3 text-right font-bold text-gray-600">${sumPri}</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:${overall.color}">${overall.abs}</td>
+              <td class="py-2 pl-3 font-bold" style="color:${overall.color}">${overall.txt}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="text-[11px] text-gray-400 mt-2">
+        <span style="color:#15803d;font-weight:700;">▲ green</span> = more completed this cycle,
+        <span style="color:#b91c1c;font-weight:700;">▼ red</span> = fewer. Full detail for each cycle below /
+        in its summary file. <a href="/admin/productivity/download?which=prior" class="text-indigo-600 hover:underline">⤓ prior-cycle CSV</a>.
+      </div>
+    </div>`;
+}
+
+fetch("/admin/productivity/data", { cache: "no-store" })
   .then(r => r.text())
   .then(raw => {
-    let d;
-    try { d = JSON.parse(raw); }
+    let payload;
+    try { payload = JSON.parse(raw); }
     catch (_) {
       document.getElementById("loading").style.display = "none";
       document.getElementById("content").innerHTML =
@@ -221,7 +304,10 @@ fetch("/admin/productivity/data")
            The server took too long or returned a non-JSON response. Reload the page to try again.</div>`;
       return;
     }
-    render(d);
+    const cur = payload.current || { exists: false, reason: "No current report yet." };
+    const pri = payload.prior;
+    render(cur);
+    if (cur.exists && pri && pri.exists) renderComparison(cur, pri);
   })
   .catch(e => {
     document.getElementById("loading").style.display = "none";
