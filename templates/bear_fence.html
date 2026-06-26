@@ -168,7 +168,10 @@ async function runScan() {
         </td>
         <td class="px-4 py-3 text-gray-500">${esc(p.task_title)}</td>
         <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.current_date)}</td>
-        <td class="px-4 py-3 text-gray-500" style="font-size:0.8rem;">${esc(p.bear_fence_title)}</td>
+        <td class="px-4 py-3 text-gray-500" style="font-size:0.8rem;">
+          <div>${esc(p.bear_fence_title)}</div>
+          <div class="text-gray-700 font-semibold whitespace-nowrap" style="margin-top:2px;">${_fmtDate(p.bear_fence_date)}</div>
+        </td>
         <td class="px-4 py-3 font-semibold text-indigo-600 whitespace-nowrap">${_fmtDate(p.bear_fence_date)}</td>
       `;
       tbody.appendChild(tr);

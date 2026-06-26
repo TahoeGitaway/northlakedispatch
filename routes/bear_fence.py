@@ -118,6 +118,29 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
     return all_results
 
 
+def _fetch_task_by_id(token: str, task_id) -> dict | None:
+    """Fetch a single task's live record so we can confirm its real scheduled
+    date right before patching. Returns None if it can't be read."""
+    headers = {"Authorization": f"JWT {token}"}
+    for path in (f"/public/inventory/v1/task/{task_id}",
+                 f"/public/inventory/v1/task/{task_id}/"):
+        try:
+            r = requests.get(f"{BW_BASE}{path}", headers=headers, timeout=15)
+            if r.status_code == 200:
+                body = r.json()
+                if isinstance(body, dict):
+                    # Some endpoints wrap the record under "data"/"result".
+                    return body.get("data") or body.get("result") or body
+        except Exception:
+            pass
+    return None
+
+
+def _live_scheduled_date(task: dict) -> str:
+    sched = task.get("scheduled_date") or ""
+    return str(sched)[:10]
+
+
 def _patch_task(token: str, task_id, payload: dict) -> tuple:
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
@@ -273,14 +296,52 @@ def bear_fence_apply():
     items   = request.json.get("items", [])
     results = []
     for item in items:
-        ok, msg = _patch_task(token, item["task_id"], {"scheduled_date": item["bear_fence_date"]})
+        task_id       = item["task_id"]
+        expected_date = str(item.get("current_date") or "")[:10]
+        target_date   = str(item["bear_fence_date"])[:10]
+
+        # Safety check: re-read the task's LIVE scheduled date and confirm it still
+        # matches the date the admin reviewed. If the task moved (or can't be read)
+        # since the scan, skip it rather than risk moving the wrong day — this is
+        # what prevents tasks landing on the wrong date when data went stale.
+        live_task = _fetch_task_by_id(token, task_id)
+        if live_task is None:
+            results.append({
+                "task_id": task_id, "property": item.get("property", ""),
+                "task_title": item.get("task_title", ""), "bear_fence_date": target_date,
+                "success": False,
+                "detail": "⚠ skipped — couldn't re-read the task to verify its current date. Rescan and try again.",
+            })
+            continue
+
+        live_date = _live_scheduled_date(live_task)
+        if expected_date and live_date != expected_date:
+            results.append({
+                "task_id": task_id, "property": item.get("property", ""),
+                "task_title": item.get("task_title", ""), "bear_fence_date": target_date,
+                "success": False,
+                "detail": f"⚠ skipped — task is now on {live_date}, not {expected_date} as shown. "
+                          f"It changed since the scan; rescan to see the real dates.",
+            })
+            continue
+
+        if live_date == target_date:
+            results.append({
+                "task_id": task_id, "property": item.get("property", ""),
+                "task_title": item.get("task_title", ""), "bear_fence_date": target_date,
+                "success": True,
+                "detail": f"already on {target_date} — no change needed",
+            })
+            continue
+
+        ok, msg = _patch_task(token, task_id, {"scheduled_date": target_date})
         results.append({
-            "task_id":         item["task_id"],
+            "task_id":         task_id,
             "property":        item.get("property", ""),
             "task_title":      item.get("task_title", ""),
-            "bear_fence_date": item["bear_fence_date"],
+            "bear_fence_date": target_date,
             "success":         ok,
-            "detail":          msg,
+            "detail":          f"moved {live_date} → {target_date} · {msg}",
         })
 
     return jsonify({"results": results})

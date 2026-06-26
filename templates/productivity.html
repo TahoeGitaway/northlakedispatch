@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Productivity Past 365 Days{% endblock %}
+{% block title %}Productivity{% endblock %}
 {% block content %}
 <div class="max-w-[1800px] mx-auto px-6 py-6">
 
   <div class="mb-4">
-    <h2 class="text-xl font-bold text-gray-800">Productivity Past 365 Days</h2>
+    <h2 id="pageTitle" class="text-xl font-bold text-gray-800">Productivity — Tasks Finished</h2>
     <p class="text-xs text-gray-400 mt-0.5">
-      How many tasks each person <b>finished</b>, per person per day, over the rolling last 365 days —
+      How many tasks each person <b>finished</b>, per person per day, over the period shown below —
       to see whether output trended up or down. Data comes from the read-only Breezeway report program.
     </p>
   </div>
@@ -70,6 +70,7 @@ function buildDates(startISO, endISO) {
   return out;
 }
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function monthHdr(ym) { return MONTHS[parseInt(ym.slice(5, 7)) - 1] + " '" + ym.slice(2, 4); }
 function mergedByDay(name, reps) {
   const out = {};
   reps.forEach(rep => {
@@ -93,7 +94,7 @@ function dailyChartSVG(byDay, dates, gmax, boundaryDate) {
       lastMonth = mo;
       grid += `<line x1="${i}" y1="0" x2="${i}" y2="${H}"/>`;
       const m = parseInt(day.slice(5, 7));
-      marks.push({ pct: (i / n) * 100, label: MONTHS[m - 1] + (m === 1 ? " " + day.slice(0, 4) : "") });
+      marks.push({ pct: (i / n) * 100, label: MONTHS[m - 1] + " '" + day.slice(2, 4) });
     }
   });
   let boundary = "";
@@ -123,7 +124,7 @@ function render(d, priorRep) {
         <div>${esc(d.reason || "")}</div>
         <div class="mt-3 text-amber-900">Generate it by running this read-only program from the project folder:</div>
         <pre class="mt-2 bg-white border border-amber-200 rounded-lg px-3 py-2 text-xs text-gray-700 overflow-auto">python productivity_past_365_days.py</pre>
-        <div class="mt-2 text-xs text-amber-700">It scans every property's completed tasks for the last 365 days (a few minutes),
+        <div class="mt-2 text-xs text-amber-700">It scans every property's finished tasks for the date window (a few minutes),
         then this page shows the tables. Re-run it any time to refresh.</div>
       </div>`;
     return;
@@ -177,6 +178,8 @@ function render(d, priorRep) {
   const chartStart = haveTwo ? ((priorRep.window || {}).start || w.start) : w.start;
   const chartEnd   = w.end;
   const allDates   = buildDates(chartStart, chartEnd);
+  const titleEl = document.getElementById("pageTitle");
+  if (titleEl) titleEl.textContent = `Productivity — ${allDates.length} days (${chartStart} → ${chartEnd})`;
   const merged = {}; let gmax = 1;
   people.forEach(p => {
     const m = mergedByDay(p.name, [priorRep, d]);
@@ -201,41 +204,53 @@ function render(d, priorRep) {
       </div>`).join("")}
   ` : "";
 
-  // ── Per-person yearly totals ──
-  const maxYear = Math.max(1, ...people.map(p => p.yearly_total || 0));
+  // ── Full-window aggregates (BOTH cycles when a prior run exists) ──
+  const spanMonths = [...new Set(allDates.map(dd => dd.slice(0, 7)))].sort();
+  const spanAgg = people.map(p => {
+    const byday = merged[p.name] || {};
+    const byMonth = {}, byMonthActive = {}; let total = 0, active = 0;
+    for (const [dd, c] of Object.entries(byday)) {
+      if (c <= 0) continue;                 // only days actually worked count
+      total += c; active++;
+      const mo = dd.slice(0, 7);
+      byMonth[mo] = (byMonth[mo] || 0) + c;
+      byMonthActive[mo] = (byMonthActive[mo] || 0) + 1;
+    }
+    return { name: p.name, user_id: p.user_id, total, active, byMonth, byMonthActive };
+  });
+  const spanLabel = `${allDates.length} days (${esc(chartStart)} → ${esc(chartEnd)})`;
+
+  // ── Per-person totals over the FULL window (both years) ──
   const yearly = `
-    <h3 class="text-sm font-bold text-gray-700 mb-2">Per-person yearly totals</h3>
+    <h3 class="text-sm font-bold text-gray-700 mb-1">Per-person totals — whole window</h3>
+    <div class="text-[11px] text-gray-400 mb-2">Across the full ${spanLabel} shown above — every year on the chart, not just the latest.</div>
     <div class="overflow-x-auto mb-6">
-      <table class="w-full text-sm border-collapse">
+      <table class="text-sm border-collapse" style="min-width:460px;">
         <thead>
           <tr class="text-left text-gray-500 border-b border-gray-200">
-            <th class="py-2 pr-3 font-medium">Person</th>
-            <th class="py-2 px-3 font-medium text-right">Completed (365d)</th>
-            <th class="py-2 px-3 font-medium text-right">Active days</th>
-            <th class="py-2 pl-3 font-medium">Share</th>
+            <th class="py-2 pr-6 font-medium">Person</th>
+            <th class="py-2 px-4 font-medium text-right">Tasks finished</th>
+            <th class="py-2 px-4 font-medium text-right">Days active</th>
+            <th class="py-2 pl-4 font-medium text-right">Avg / active day</th>
           </tr>
         </thead>
         <tbody>
-          ${people.map(p => `
+          ${spanAgg.map(s => `
             <tr class="border-b border-gray-100">
-              <td class="py-2 pr-3 font-semibold text-gray-800">${esc(p.name)}
-                  <span class="text-gray-300 font-normal text-xs">#${esc(p.user_id)}</span></td>
-              <td class="py-2 px-3 text-right font-semibold">${p.yearly_total}</td>
-              <td class="py-2 px-3 text-right text-gray-500">${p.active_days}</td>
-              <td class="py-2 pl-3">
-                <div style="background:#f1f5f9;border-radius:6px;height:10px;width:160px;max-width:40vw;overflow:hidden;">
-                  <div style="background:#6366f1;height:100%;width:${Math.round((p.yearly_total/maxYear)*100)}%;"></div>
-                </div>
-              </td>
+              <td class="py-2 pr-6 font-semibold text-gray-800">${esc(s.name)}
+                  <span class="text-gray-300 font-normal text-xs">#${esc(s.user_id)}</span></td>
+              <td class="py-2 px-4 text-right font-semibold">${s.total}</td>
+              <td class="py-2 px-4 text-right text-gray-500">${s.active}</td>
+              <td class="py-2 pl-4 text-right text-gray-500">${s.active ? (s.total / s.active).toFixed(1) : "—"}</td>
             </tr>`).join("")}
         </tbody>
       </table>
     </div>`;
 
-  // ── Monthly trend table (heat-shaded + first-vs-last delta) ──
-  let monthly = `<h3 class="text-sm font-bold text-gray-700 mb-2">Monthly totals — trend</h3>`;
-  if (!months.length) {
-    monthly += `<div class="text-sm text-gray-400 italic mb-6">No completed tasks found in the window.</div>`;
+  // ── Monthly trend across the FULL window (heat-shaded + first-vs-last delta) ──
+  let monthly = `<h3 class="text-sm font-bold text-gray-700 mb-2">Monthly totals — trend across ${spanLabel}</h3>`;
+  if (!spanMonths.length) {
+    monthly += `<div class="text-sm text-gray-400 italic mb-6">No finished tasks found in the window.</div>`;
   } else {
     monthly += `
       <div class="overflow-x-auto mb-2">
@@ -243,20 +258,20 @@ function render(d, priorRep) {
           <thead>
             <tr class="text-gray-500">
               <th class="py-1 pr-3 text-left font-medium sticky left-0 bg-white">Person</th>
-              ${months.map(m => `<th class="py-1 px-2 font-medium text-center whitespace-nowrap">${esc(m)}</th>`).join("")}
+              ${spanMonths.map(m => `<th class="py-1 px-2 font-medium text-center whitespace-nowrap">${esc(monthHdr(m))}</th>`).join("")}
               <th class="py-1 pl-3 font-medium text-center">Total</th>
               <th class="py-1 pl-3 font-medium text-center">Trend</th>
             </tr>
           </thead>
           <tbody>
-            ${people.map(p => {
-              const bm = p.by_month || {};
-              const rowMax = Math.max(1, ...months.map(m => bm[m] || 0));
-              const tr = trend(bm, months);
+            ${spanAgg.map(s => {
+              const bm = s.byMonth;
+              const rowMax = Math.max(1, ...spanMonths.map(m => bm[m] || 0));
+              const tr = trend(bm, spanMonths);
               return `<tr class="border-t border-gray-100">
-                <td class="py-1 pr-3 font-semibold text-gray-800 sticky left-0 bg-white whitespace-nowrap">${esc(p.name)}</td>
-                ${months.map(m => `<td class="py-1 px-2 text-center" style="${heat(bm[m]||0, rowMax)}">${bm[m]||0}</td>`).join("")}
-                <td class="py-1 pl-3 text-center font-semibold">${p.yearly_total}</td>
+                <td class="py-1 pr-3 font-semibold text-gray-800 sticky left-0 bg-white whitespace-nowrap">${esc(s.name)}</td>
+                ${spanMonths.map(m => `<td class="py-1 px-2 text-center" style="${heat(bm[m]||0, rowMax)}">${bm[m]||0}</td>`).join("")}
+                <td class="py-1 pl-3 text-center font-semibold">${s.total}</td>
                 <td class="py-1 pl-3 text-center font-bold" style="color:${tr.color}" title="${esc(tr.hint||"")}">${esc(tr.txt)}</td>
               </tr>`;
             }).join("")}
@@ -264,9 +279,50 @@ function render(d, priorRep) {
         </table>
       </div>
       <div class="text-[11px] text-gray-400 mb-6">
-        Each row is heat-shaded by that person's busiest month. <b>Trend</b> compares their first vs last
-        ~3 months (hover for the averages) — <span style="color:#15803d;font-weight:700;">▲ green</span> = more,
+        Spans every month on the chart. Each row is heat-shaded by that person's busiest month.
+        <b>Trend</b> compares their first vs last ~3 months across the whole window —
+        <span style="color:#15803d;font-weight:700;">▲ green</span> = more,
         <span style="color:#b91c1c;font-weight:700;">▼ red</span> = fewer.
+      </div>`;
+  }
+
+  // ── Average tasks per DAY WORKED, by month (zero-task days excluded) ──
+  let perDay = `<h3 class="text-sm font-bold text-gray-700 mb-1">Average tasks per day worked — by month</h3>
+    <div class="text-[11px] text-gray-400 mb-2">
+      Each cell = tasks finished that month ÷ the number of days that person finished at least one task.
+      Days with <b>zero</b> finished tasks are not counted — so this is intensity on the days they actually worked.
+    </div>`;
+  if (!spanMonths.length) {
+    perDay += `<div class="text-sm text-gray-400 italic mb-6">No finished tasks found in the window.</div>`;
+  } else {
+    perDay += `
+      <div class="overflow-x-auto mb-2">
+        <table class="text-xs border-collapse">
+          <thead>
+            <tr class="text-gray-500">
+              <th class="py-1 pr-3 text-left font-medium sticky left-0 bg-white">Person</th>
+              ${spanMonths.map(m => `<th class="py-1 px-2 font-medium text-center whitespace-nowrap">${esc(monthHdr(m))}</th>`).join("")}
+              <th class="py-1 pl-3 font-medium text-center">Overall</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${spanAgg.map(s => {
+              const avgFor = m => (s.byMonthActive[m] ? s.byMonth[m] / s.byMonthActive[m] : null);
+              const rowMax = Math.max(0.1, ...spanMonths.map(m => avgFor(m) || 0));
+              const overall = s.active ? (s.total / s.active) : null;
+              return `<tr class="border-t border-gray-100">
+                <td class="py-1 pr-3 font-semibold text-gray-800 sticky left-0 bg-white whitespace-nowrap">${esc(s.name)}</td>
+                ${spanMonths.map(m => { const a = avgFor(m);
+                  return `<td class="py-1 px-2 text-center" style="${heat(a || 0, rowMax)}">${a === null ? "—" : a.toFixed(1)}</td>`; }).join("")}
+                <td class="py-1 pl-3 text-center font-bold">${overall === null ? "—" : overall.toFixed(1)}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div class="text-[11px] text-gray-400 mb-6">
+        Higher = more finished per working day. A dash (—) means no days worked that month.
+        <b>Overall</b> = tasks finished ÷ total days worked across the whole window.
       </div>`;
   }
 
@@ -285,7 +341,7 @@ function render(d, priorRep) {
     ? `<a href="/admin/productivity/download?which=current" class="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">⤓ Download per-day CSV</a>`
     : "";
 
-  el.innerHTML = droppedNote + stats + daily + yearly + monthly + fail +
+  el.innerHTML = droppedNote + stats + daily + yearly + monthly + perDay + fail +
     `<div class="mt-2">${dl}</div>
      <div class="text-[11px] text-gray-400 mt-3">
        Refresh the data by re-running <code>python productivity_past_365_days.py</code> from the project folder.
@@ -389,7 +445,6 @@ fetch("/admin/productivity/data", { cache: "no-store" })
     const cur = payload.current || { exists: false, reason: "No current report yet." };
     const pri = payload.prior;
     render(cur, pri);
-    if (cur.exists && pri && pri.exists) renderComparison(cur, pri);
   })
   .catch(e => {
     document.getElementById("loading").style.display = "none";
