@@ -96,7 +96,9 @@ CLIENT_SECRET = os.environ.get("BREEZEWAY_CLIENT_SECRET", "")
 # zero Breezeway users on the 2026-06-26 inspect. "Trevor" appeared twice in the
 # original request and was deduped to one; if there are genuinely two Trevors this
 # list is WRONG and the program will halt at name resolution on the ambiguous name.)
-PEOPLE = ["Andy", "Trevor", "Calder", "Jonah", "Irving", "Chris"]
+# Julie joined mid-cycle this year — current-window only; do NOT run --prior for her
+# (she has no prior-year data, so a prior run would just show zeros).
+PEOPLE = ["Andy", "Trevor", "Calder", "Jonah", "Irving", "Chris", "Julie"]
 
 # Names the operator has DELIBERATELY chosen to skip on a run (name → reason). The
 # sanctioned way to exclude a requested person: logged loudly and called out in the
