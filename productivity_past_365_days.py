@@ -137,7 +137,8 @@ class RunReport:
         self.tasks_counted = 0         # distinct tasks that contributed a count
         self.person_increments = 0     # total per-person tallies (CSV cell sum)
         self.excluded_bear_fence = 0   # distinct "Disarm Bear Fence" tasks skipped
-        self.unassigned_skipped = 0    # returned tasks with no in-scope assignee
+        self.completed_by_others = 0   # completed tasks finished by people outside our set
+        self.no_completer = 0          # finished tasks with no `finished_by` recorded
         self.out_of_range_skipped = 0  # finished_at outside the window
         self.no_completion_date = 0    # task with no parseable completion date
         self.completion_key_used: str | None = None
@@ -468,6 +469,19 @@ def is_bear_fence(task: dict) -> tuple:
     return False, None
 
 
+def task_finished_by_id(task: dict):
+    """The single user who actually COMPLETED the task (Breezeway `finished_by`),
+    or None if not recorded. This is the attribution basis for the report:
+    'tasks completed per person' = who finished it, not who it was assigned to."""
+    fb = task.get("finished_by")
+    if isinstance(fb, dict) and fb.get("id") is not None:
+        try:
+            return int(fb["id"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def task_assignee_ids(task: dict) -> list:
     ids = []
     for a in (task.get("assignments") or []):
@@ -573,15 +587,18 @@ def dry_inspect(token, extra, our_ids, finished_param, properties):
 def run_full(token, extra, resolved, finished_param, start_d, end_d, properties, delay):
     our_ids = set(resolved.values())
     id_to_name = {v: k for k, v in resolved.items()}
-    assignee_csv = ",".join(str(i) for i in sorted(our_ids))
 
     counts: dict[int, dict[str, int]] = {uid: defaultdict(int) for uid in our_ids}
     seen_tasks: set = set()
     inspected_once = False
 
     REPORT.properties_total = len(properties)
-    REPORT.info(f"Scanning {len(properties)} properties for completed tasks {finished_param} "
-                f"(assignee_ids={assignee_csv})…")
+    # Attribution is by `finished_by` (who COMPLETED the task), which can differ from
+    # the assignee — so we deliberately do NOT filter the query by assignee_ids.
+    # Instead we pull EVERY completed task per property in the window and keep only
+    # those finished by our people. Heavier, but the accurate "completed by" measure.
+    REPORT.info(f"Scanning {len(properties)} properties for ALL completed tasks {finished_param} "
+                f"(attributing by finished_by to our {len(our_ids)} people)…")
 
     for i, p in enumerate(properties, 1):
         qp, label = property_query_param(p)
@@ -589,7 +606,7 @@ def run_full(token, extra, resolved, finished_param, start_d, end_d, properties,
             REPORT.warn(f"property #{i} has no usable id; skipped: {json.dumps(p)[:160]}")
             continue
 
-        params = {**qp, **extra, "finished_at": finished_param, "assignee_ids": assignee_csv}
+        params = {**qp, **extra, "finished_at": finished_param}
         tasks, err = bw_get_paginated(TASK_URL, params, token, f"tasks {label}")
         if err:
             REPORT.fail(f"property {label}: {err} — its completed tasks are MISSING from the report.")
@@ -612,7 +629,7 @@ def run_full(token, extra, resolved, finished_param, start_d, end_d, properties,
                 ckey0 = detect_completion_key(t)
                 REPORT.completion_key_used = ckey0
                 REPORT.info(f"First completed task seen → completion field = {ckey0!r}, "
-                            f"name fields = {task_name_values(t)}, assignees = {task_assignee_ids(t)}")
+                            f"name fields = {task_name_values(t)}, finished_by = {task_finished_by_id(t)}")
                 if not ckey0:
                     REPORT.fail("No completion-date field on returned tasks; cannot bucket by day. "
                                 "Run --inspect and confirm the field name.")
@@ -623,9 +640,13 @@ def run_full(token, extra, resolved, finished_param, start_d, end_d, properties,
                 REPORT.name_field_for_exclusion[field] += 1
                 continue
 
-            assignees = [a for a in task_assignee_ids(t) if a in our_ids]
-            if not assignees:
-                REPORT.unassigned_skipped += 1
+            completer = task_finished_by_id(t)
+            if completer is None:
+                # Finished task with no recorded completer — surfaced, never guessed.
+                REPORT.no_completer += 1
+                continue
+            if completer not in our_ids:
+                REPORT.completed_by_others += 1   # finished by someone outside our 6
                 continue
 
             ckey = REPORT.completion_key_used or detect_completion_key(t)
@@ -640,9 +661,8 @@ def run_full(token, extra, resolved, finished_param, start_d, end_d, properties,
 
             REPORT.tasks_seen += 1
             REPORT.tasks_counted += 1
-            for uid in assignees:
-                counts[uid][day] += 1
-                REPORT.person_increments += 1
+            counts[completer][day] += 1
+            REPORT.person_increments += 1
 
         if i % 25 == 0:
             REPORT.info(f"  …{i}/{len(properties)} properties scanned "
@@ -702,9 +722,9 @@ def write_summary(path, counts, id_to_name, start_d, end_d, csv_rows, args, stat
 
     # Counting rules / interpretation
     A("## How to read these numbers")
-    A("- **Counted per assignee.** A completed task with N of these people on it adds "
-      "+1 to EACH of them for that day (Breezeway tasks carry an `assignments` list, "
-      "not a single 'completed by'). So per-person tallies can exceed the distinct task count.")
+    A("- **Counted by who completed it (`finished_by`).** Each finished task is credited to the "
+      "single person who marked it complete — NOT who it was assigned to. So each task counts "
+      "exactly once, for the person who actually did it.")
     A(f"- **Completion field used:** `{REPORT.completion_key_used}` — the day bucket is the "
       "date portion of that timestamp **as Breezeway returns it**. If Breezeway returns UTC, "
       "a task finished late at night local time may land on the next day. Note this when "
@@ -766,7 +786,8 @@ def write_summary(path, counts, id_to_name, start_d, end_d, csv_rows, args, stat
 
     # Diagnostics
     A("## Run diagnostics")
-    A(f"- Returned tasks with no in-scope assignee (skipped): {REPORT.unassigned_skipped}")
+    A(f"- Completed tasks finished by people outside this group (not counted): {REPORT.completed_by_others}")
+    A(f"- Finished tasks with no `finished_by` recorded (not counted): {REPORT.no_completer}")
     A(f"- Tasks with finished_at outside the window (skipped): {REPORT.out_of_range_skipped}")
     A(f"- Tasks with no parseable completion date (skipped): {REPORT.no_completion_date}")
     A(f"- CSV rows written: {csv_rows}")
@@ -800,6 +821,53 @@ def write_summary(path, counts, id_to_name, start_d, end_d, csv_rows, args, stat
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def write_json(path, counts, id_to_name, start_d, end_d, args):
+    """Structured payload for the in-app page (templates/productivity.html) — the
+    SAME numbers as the CSV/summary, just machine-readable so the web view can
+    render the tables without re-running the (slow) scan."""
+    months = sorted({day[:7] for byday in counts.values() for day in byday})
+    people = []
+    for name in PEOPLE:
+        if name in REPORT.intentionally_dropped:
+            people.append({"name": name, "excluded": True})
+            continue
+        uid = next((u for u, n in id_to_name.items() if n == name), None)
+        byday = counts.get(uid, {}) if uid is not None else {}
+        bymonth = defaultdict(int)
+        for day, n in byday.items():
+            bymonth[day[:7]] += n
+        people.append({
+            "name": name,
+            "user_id": uid,
+            "excluded": False,
+            "yearly_total": sum(byday.values()),
+            "active_days": sum(1 for v in byday.values() if v),
+            "by_month": dict(bymonth),
+            "by_day": dict(sorted(byday.items())),
+        })
+    payload = {
+        "title": "Productivity Past 365 Days",
+        "status": "PARTIAL" if (not REPORT.is_complete or args.max_properties) else "COMPLETE",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "window": {"start": start_d.isoformat(), "end": end_d.isoformat(),
+                   "days": (end_d - start_d).days},
+        "completion_field": REPORT.completion_key_used,
+        "counting_basis": "by completer (finished_by)",
+        "properties_total": REPORT.properties_total,
+        "properties_scanned": REPORT.properties_scanned,
+        "tasks_counted": REPORT.tasks_counted,
+        "person_increments": REPORT.person_increments,
+        "excluded_bear_fence": REPORT.excluded_bear_fence,
+        "months": months,
+        "people": people,
+        "failures": REPORT.failures,
+        "warnings_count": len(REPORT.warnings),
+        "intentionally_dropped": REPORT.intentionally_dropped,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
 
 
 # ── Halt helper ──────────────────────────────────────────────────────────────
@@ -853,16 +921,18 @@ def main():
                                   start_d, end_d, properties, args.delay)
 
     os.makedirs(args.outdir, exist_ok=True)
-    csv_path = os.path.join(args.outdir, "productivity_past_365_days.csv")
-    sum_path = os.path.join(args.outdir, "productivity_past_365_days_summary.md")
+    csv_path  = os.path.join(args.outdir, "productivity_past_365_days.csv")
+    sum_path  = os.path.join(args.outdir, "productivity_past_365_days_summary.md")
+    json_path = os.path.join(args.outdir, "productivity_past_365_days.json")
 
     csv_rows = write_csv(csv_path, counts, id_to_name)
     status_word = "COMPLETE" if REPORT.is_complete else "PARTIAL"
     if args.max_properties:
         status_word = "PARTIAL"
     write_summary(sum_path, counts, id_to_name, start_d, end_d, csv_rows, args, status_word)
+    write_json(json_path, counts, id_to_name, start_d, end_d, args)
 
-    REPORT.info(f"Wrote {csv_path} ({csv_rows} rows) and {sum_path}")
+    REPORT.info(f"Wrote {csv_path} ({csv_rows} rows), {sum_path}, and {json_path}")
     print("\n" + "=" * 78)
     if REPORT.is_complete and not args.max_properties:
         print(f"COMPLETE — {REPORT.tasks_counted} tasks counted across "
