@@ -43,8 +43,21 @@ function bwSyncTimes() {
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ date, assignee, stops }),
   })
-    .then(r => r.json())
-    .then(data => {
+    .then(r => r.text())
+    .then(raw => {
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (_) {
+        // Non-JSON body (the hosting proxy's plain-text "upstream error") = the sync
+        // ran longer than the gateway waits, so it returned its own error instead of
+        // our JSON. The work most likely still finished in the background.
+        resultDiv.innerHTML =
+          `<div class="text-amber-700 font-semibold">⏳ The sync took longer than the server waits — it most likely still went through.</div>`
+          + `<div class="text-gray-600 text-xs mt-1">This usually means a lot of tasks/stops in one sync, or Breezeway being busy or lagging behind. `
+          + `Click <b>Sync Times to Breezeway</b> again to confirm — it should come back quickly, and re-syncing the same times is harmless.</div>`;
+        return;
+      }
       if (data.error) {
         resultDiv.innerHTML = `<span class="text-red-600">Error: ${data.error}</span>`;
         return;

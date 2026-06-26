@@ -272,7 +272,11 @@ function _watchBwSync() {
     }
     if (/contacting breezeway/i.test(txt) || !txt) return;   // still in progress
     obs.disconnect();
-    if (/^error/i.test(txt) && !/updated/i.test(txt)) {
+    if (/took longer|timed out|upstream error/i.test(txt)) {
+      // Proxy/gateway timeout — not a real failure; the sync likely finished. Amber, not red.
+      const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
+      _showBwSyncBanner("warn", summary);
+    } else if (/^error/i.test(txt) && !/updated/i.test(txt)) {
       _showBwSyncBanner("error", "Breezeway sync failed — " + txt.slice(0, 160));
     } else {
       const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
