@@ -939,9 +939,9 @@ function bwSidebarMinimize() {
     if (document.querySelectorAll("#bwTaskTabs button").length > 0) {
       tabs.style.display = "";
     }
-    // A deliberate reopen should reflect the LIVE task list — drop any cached
-    // discrepancy result so both the panel and the auto-loaded task titles refetch.
-    _invalidateRouteChanges();
+    // A reopen reuses the cached discrepancy result — the check runs once per route
+    // load (and on explicit ↻ Recheck), not on every reopen. Re-running it here was
+    // hammering the heavy all-houses endpoint past the gateway timeout (→ HTTP 503).
     // Fill stop list immediately if a route is already loaded
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
     // Load daily routes only when not in BW-task mode (avoid clobbering BW state)
@@ -1046,9 +1046,9 @@ let _routeChangesInflight = { routeId: null, promise: null };
 let _appliedRouteChanges  = new Set();   // route ids whose changes have been applied (hide the Apply button)
 
 // Force the NEXT render to re-pull from Breezeway instead of serving the cached
-// result. Used on Recheck and on every deliberate sidebar reopen; a page reload
-// gets it for free (in-memory cache starts empty). Redraws within an open session
-// still hit the cache, so this stays cheap.
+// result. Used on explicit ↻ Recheck and to avoid caching an error; a page reload
+// gets a fresh run for free (in-memory cache starts empty). Passive reopens and
+// redraws within a session reuse the cache, so the check runs once per route load.
 function _invalidateRouteChanges() {
   _routeChangesCache    = { routeId: null, html: null };
   _routeChangesInflight = { routeId: null, promise: null };
@@ -1073,12 +1073,12 @@ function _appendRouteChanges(content) {
   box.querySelector("[data-refresh]").addEventListener("click", () => {
     _invalidateRouteChanges();
     _appliedRouteChanges.delete(rid);   // a fresh check brings the Apply button back
-    _renderRouteChangesInto(rid, body);
+    _renderRouteChangesInto(rid, body, true);   // explicit Recheck = bypass the server cache
   });
   _renderRouteChangesInto(rid, body);
 }
 
-function _renderRouteChangesInto(routeId, body) {
+function _renderRouteChangesInto(routeId, body, force) {
   // Re-render from cached DATA (not a frozen html string) so the panel reflects
   // the CURRENT list each time — manual or applied fixes clear resolved changes.
   if (_routeChangesCache.routeId === routeId && _routeChangesCache.data) {
@@ -1090,8 +1090,11 @@ function _renderRouteChangesInto(routeId, body) {
     _routeChangesInflight = {
       routeId,
       // no-store: the GET is otherwise HTTP-cacheable, which made a page reload show
-      // the stale browser-cached result instead of a live re-check.
-      promise: fetch(`/api/route-discrepancies?route_id=${routeId}`, { cache: "no-store" })
+      // the stale browser-cached result instead of a live re-check. force=1 (explicit
+      // Recheck only) tells the server to skip ITS short-lived result cache; passive
+      // reopens omit it so they ride the cache and don't re-run the heavy all-houses
+      // scan (which is what was timing out at the gateway → HTTP 503).
+      promise: fetch(`/api/route-discrepancies?route_id=${routeId}${force ? "&force=1" : ""}`, { cache: "no-store" })
         .then(r => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
@@ -1342,8 +1345,8 @@ function _expandSidebarIfMinimized() {
     content.style.display = "";
     chevron.textContent   = "›";
     chevron.title         = "Minimize";
-    // Reopening should re-pull the live discrepancy check, not reuse a stale cache.
-    _invalidateRouteChanges();
+    // Reopening reuses the cached discrepancy result (runs once per route load + on
+    // ↻ Recheck) — re-pulling here was re-running the heavy scan on every reopen.
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
   }
 }

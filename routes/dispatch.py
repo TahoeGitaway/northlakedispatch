@@ -1021,6 +1021,17 @@ def routes_for_date():
     return jsonify({"routes": [dict(r) for r in rows]})
 
 
+# Per-route discrepancy result cache. The check is an all-properties Breezeway scan
+# that can run past the hosting proxy's timeout (→ HTTP 503 / "upstream error"). The
+# backend keeps working after the gateway gives up, so we store the finished result
+# and a quick retry returns it instantly instead of re-running the heavy scan — same
+# rescue pattern as hot_tub_scan. Keyed by route_id; the explicit Recheck (force=1)
+# bypasses it for a truly live re-check.
+import time as _dt_time
+_route_disc_cache: dict[int, dict] = {}   # route_id -> {"ts": float, "data": dict}
+_ROUTE_DISC_TTL = 120
+
+
 def _robust_property_tasks(token, ref_id, date_str):
     """Fetch ONE property's tasks for a date with retry/backoff, so a momentary
     Breezeway throttle (429 / 5xx) doesn't SILENTLY drop the whole property's
@@ -1326,6 +1337,15 @@ def route_discrepancies():
     except (TypeError, ValueError):
         return jsonify({"error": "route_id required"}), 400
 
+    # Serve a fresh cached result instantly unless the user asked for a live recheck
+    # (force=1). This both absorbs the every-reopen refetches and rescues a request the
+    # gateway already 503'd: the prior call finished server-side and cached the result.
+    force = request.args.get("force") in ("1", "true", "yes")
+    if not force:
+        hit = _route_disc_cache.get(route_id)
+        if hit and _dt_time.time() - hit["ts"] < _ROUTE_DISC_TTL:
+            return jsonify({**hit["data"], "cached": True})
+
     conn = get_db(); cur = get_cursor(conn)
     cur.execute("SELECT id, name, assigned_to, route_date, stops_json "
                 "FROM saved_routes WHERE id = %s", (route_id,))
@@ -1471,7 +1491,7 @@ def route_discrepancies():
         key=lambda x: x["property"].lower(),
     )
 
-    return jsonify({
+    payload = {
         "route_id": route_id, "assignee": assignee, "date": date_str,
         "added":   sorted(added,   key=lambda x: x["property"].lower()),
         "removed": sorted(removed, key=lambda x: x["property"].lower()),
@@ -1480,7 +1500,13 @@ def route_discrepancies():
         "history_available": any(a["history"].get("available") for a in added),
         "failed_properties": failed_props,
         "summary": {"added": len(added), "removed": len(removed), "moved": len(moved)},
-    })
+    }
+    # Cache before returning so the result survives even if the gateway already timed
+    # out THIS request — the next call returns it instantly. Don't cache a run that
+    # lost houses to throttling, or we'd pin an incomplete list for the whole TTL.
+    if not failed_props:
+        _route_disc_cache[route_id] = {"ts": _dt_time.time(), "data": payload}
+    return jsonify(payload)
 
 
 @dispatch_bp.route("/api/bw-task-probe")
