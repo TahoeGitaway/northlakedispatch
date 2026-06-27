@@ -206,6 +206,19 @@ function toggleSchedulePriority(id) {
   renderSchedule();
 }
 
+// Flag/unflag a stop as "go first". Pure ordering — doesn't reorder the list here;
+// it marks the route stale so the front-block is honored on the next re-optimize
+// (optimizeRoute already carries go_first through to the backend).
+function toggleScheduleFirst(id) {
+  [selectedStops, optimizedSchedule].forEach(arr => {
+    const s = arr.find(s => s._id === id);
+    if (s) s.go_first = !s.go_first;
+  });
+  markRouteStale();
+  recalculateTimes();
+  renderSchedule();
+}
+
 function setServiceMinutes(id, val) {
   let found = false;
   [selectedStops, optimizedSchedule].forEach(arr => {
@@ -637,6 +650,11 @@ function renderSchedule() {
                  class="text-xs font-medium text-green-700 hover:text-red-500">✓ Check-in</button>`
       : `<button onclick="toggleScheduleCheckin('${stop._id}')"
                  class="text-xs font-medium text-gray-400 hover:text-green-600">+ Check-in</button>`;
+    const firstBtn = stop.go_first
+      ? `<button onclick="toggleScheduleFirst('${stop._id}')"
+                 class="text-xs font-medium text-indigo-700 hover:text-gray-400">📌 First</button>`
+      : `<button onclick="toggleScheduleFirst('${stop._id}')"
+                 class="text-xs font-medium text-gray-400 hover:text-indigo-600">+ First</button>`;
 
     li.className = "p-2 border rounded bg-white hover:bg-indigo-50 transition-colors";
     li.draggable = true;
@@ -666,6 +684,7 @@ function renderSchedule() {
       <div class="mt-1.5 pt-1.5 border-t border-gray-100 flex items-center gap-4">
         ${priorityBtn}
         ${checkinBtn}
+        ${firstBtn}
       </div>`;
 
     li.addEventListener("mouseenter", () => { const m=markers[stop.name]; if(m){map.panTo(m.getLatLng());m.openPopup();} });

@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Hot Tub Billing{% endblock %}
+{% block content %}
+<div class="max-w-[1800px] mx-auto px-6 py-6">
+
+  <div class="mb-4 flex items-start justify-between gap-4 flex-wrap">
+    <div>
+      <h2 class="text-xl font-bold text-gray-800">Hot Tub Billing</h2>
+      <p class="text-xs text-gray-400 mt-0.5 max-w-3xl">
+        The app counts &amp; classifies every hot-tub <b>service</b> from Breezeway so you can bill
+        owners <b>by hand in Streamline</b>. This is a <b>read-only</b> worksheet — it never writes to
+        Breezeway and never bills. Classification reads the task <b>title/description text</b> (typos
+        tolerated); task tags are shown for context only and never affect billing.
+        <b>Confirm every flagged row before billing.</b>
+      </p>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      <select id="monthSel" class="text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white"></select>
+      <a id="csvLink" href="#" class="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1.5 rounded-md hover:bg-gray-100">Download CSV</a>
+    </div>
+  </div>
+
+  <!-- Rules reference (the locked billing rules) -->
+  <details class="mb-5 border border-gray-200 rounded-lg bg-white" open>
+    <summary class="cursor-pointer px-4 py-2.5 text-sm font-semibold text-gray-700 select-none">
+      Billing rules (reference)
+    </summary>
+    <div class="px-4 pb-4 overflow-x-auto">
+      <table class="text-xs w-full border-collapse">
+        <tbody class="align-top">
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600 w-44">Regular — $50</td><td class="py-1.5 text-gray-700">arrival / biweekly / weekly / monthly hot tub service</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Dump &amp; Scrub — $155</td><td class="py-1.5 text-gray-700">dump &amp; scrub / d&amp;s / d/s</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">WWM / Bacterial — $250</td><td class="py-1.5 text-gray-700">wwm / white water mold / bacterial</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Partial</td><td class="py-1.5 text-gray-700">billed as Regular $50, but flagged for review</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Floors</td><td class="py-1.5 text-gray-700">“Hot Tub - TG Service” ≥2/mo · “Weekly Service” ≥4/mo · “Monthly Service” ≥1/mo (bill the floor even if fewer happened)</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — tenant</td><td class="py-1.5 text-gray-700">lease / prepaid / post-lease D&amp;S — <i>but</i> a <b>lease&nbsp;arrival</b> service IS owner-billable</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — no charge</td><td class="py-1.5 text-gray-700">“*no charge”, “do not bill”, “do not service”</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — not a service</td><td class="py-1.5 text-gray-700">leaks, repairs, covers, lifts, filters, locks, inspections, walk-thrus, daily/lease issues, etc.</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Completed</td><td class="py-1.5 text-gray-700">status is approved / finished / closed</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Dates</td><td class="py-1.5 text-gray-700">both scheduled &amp; completed shown; a service on the 30th showing on the 1st is flagged (boundary)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  <!-- Build progress — so you can track this feature across deploys -->
+  <details class="mb-5 border border-indigo-200 rounded-lg bg-indigo-50/40">
+    <summary class="cursor-pointer px-4 py-2.5 text-sm font-semibold text-indigo-800 select-none">
+      🚧 Build progress (work in progress)
+    </summary>
+    <div class="px-4 pb-4 text-xs text-gray-700 space-y-1.5">
+      <p class="text-gray-500">A read-only counting tool — you still bill by hand in Streamline. Nothing here writes to Breezeway.</p>
+      <div><span class="text-emerald-700 font-semibold">✅ Done —</span> sampled 2,300+ real tasks to learn the wording; locked the price model &amp; floors; built the read-only monthly engine; this page with the rules table, month picker, per-property worksheet (both dates, boundary flags), and CSV download.</div>
+      <div><span class="text-amber-700 font-semibold">🔎 Now needs you —</span> open a month you've already billed by hand and check the numbers against it. Confirm flagged &amp; “REVIEW” rows. Tell me anything mis-classified so I can tune the rules.</div>
+      <div><span class="text-gray-500 font-semibold">⏭ Next —</span> tune the classifier from your feedback (e.g. standalone “WWM Treatment” titles); add per-row approve/reject that sticks; one-click “regenerate this month”; lease-arrival vs lease handling review.</div>
+    </div>
+  </details>
+
+  <div id="statusBar" class="mb-4"></div>
+  <div id="content"></div>
+  <div id="loading" class="flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin"></div>
+    <span>Loading worksheet…</span>
+  </div>
+</div>
+
+<script>
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const money = n => "$" + Number(n || 0).toLocaleString();
+
+const dispBadge = d => ({
+  billable: '<span class="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 text-[10px] font-semibold">BILL</span>',
+  review:   '<span class="text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-[10px] font-semibold">REVIEW</span>',
+  excluded: '<span class="text-gray-400 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5 text-[10px] font-semibold">SKIP</span>',
+}[d] || d);
+
+async function loadMonths() {
+  const r = await fetch("/admin/hot-tub-billing/months");
+  const { months } = await r.json();
+  const sel = document.getElementById("monthSel");
+  sel.innerHTML = months.length
+    ? months.map(m => `<option value="${m}">${m}</option>`).join("")
+    : `<option value="">— none generated —</option>`;
+  return months;
+}
+
+async function load(month) {
+  document.getElementById("loading").style.display = "flex";
+  document.getElementById("content").innerHTML = "";
+  const url = "/admin/hot-tub-billing/data" + (month ? `?month=${month}` : "");
+  const r = await fetch(url);
+  const d = await r.json();
+  document.getElementById("loading").style.display = "none";
+  render(d);
+}
+
+function render(d) {
+  const sb = document.getElementById("statusBar");
+  const cn = document.getElementById("content");
+  if (!d.exists) {
+    sb.innerHTML = `<div class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-4 py-3">
+      ${esc(d.reason || "No worksheet available.")}</div>`;
+    return;
+  }
+  document.getElementById("csvLink").href = "/admin/hot-tub-billing/download?month=" + encodeURIComponent(d.month);
+
+  const partial = d.status !== "COMPLETE";
+  const types = Object.entries(d.type_totals || {}).map(([k,v]) => `${k}×${v}`).join(" · ") || "none";
+  sb.innerHTML = `
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm ${partial ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'} border rounded-md px-4 py-3">
+      <span class="font-bold ${partial ? 'text-amber-800' : 'text-emerald-800'}">
+        ${partial ? '⚠️ PARTIAL — ' + (d.failures||[]).length + ' failure(s)' : '✅ ' + esc(d.month)}</span>
+      <span class="text-gray-700"><b>${money(d.money_total)}</b> estimated owner total</span>
+      <span class="text-gray-500">${esc(types)}</span>
+      <span class="text-gray-500">${d.properties_scanned}/${d.properties_tagged} properties · ${d.candidate_tasks} tasks examined</span>
+      <span class="text-gray-400 text-xs">generated ${esc((d.generated_at||"").slice(0,16))}</span>
+    </div>`;
+
+  const props = (d.props || []).filter(p => p.rows && p.rows.length);
+  cn.innerHTML = props.map(p => {
+    const floorNote = p.floor_topup
+      ? `<span class="text-amber-700 text-xs ml-2">⬆ floor ${p.floor}: only ${p.visits_billable} performed, +${p.floor_topup}×$50 minimum (${money(p.floor_amount)})</span>`
+      : (p.floor ? `<span class="text-gray-400 text-xs ml-2">floor ${p.floor}/mo</span>` : "");
+    const flagNote = p.flagged ? `<span class="text-amber-600 text-xs ml-2">⚑ ${p.flagged} flagged</span>` : "";
+    const revNote = p.needs_review ? `<span class="text-amber-600 text-xs ml-2">🔎 ${p.needs_review} to review</span>` : "";
+    const rows = p.rows.map(r => {
+      const price = (r.disposition === "billable" && r.completed) ? money(r.price) : "";
+      const flags = (r.flags || []).join("; ");
+      const notDone = !r.completed ? ` <span class="text-rose-500 text-[10px]">(not done)</span>` : "";
+      return `<tr class="border-t border-gray-100 ${r.disposition==='excluded'?'opacity-50':''}">
+        <td class="py-1 pr-3 whitespace-nowrap text-gray-500">${esc(r.scheduled_date||"—")}</td>
+        <td class="py-1 pr-3 whitespace-nowrap text-gray-500">${esc(r.completed_date||"—")}${notDone}</td>
+        <td class="py-1 pr-3">${dispBadge(r.disposition)}</td>
+        <td class="py-1 pr-3 whitespace-nowrap font-medium text-gray-700">${esc(r.service_type)}</td>
+        <td class="py-1 pr-3 text-right font-semibold text-gray-800">${price}</td>
+        <td class="py-1 pr-3 text-gray-700">${esc(r.title)}</td>
+        <td class="py-1 text-amber-700">${esc(flags)}</td>
+      </tr>`;
+    }).join("");
+    return `<div class="mb-4 border border-gray-200 rounded-lg bg-white">
+      <div class="px-4 py-2.5 flex items-baseline justify-between border-b border-gray-100">
+        <h3 class="font-semibold text-gray-800">${esc(p.property)}
+          ${floorNote}${flagNote}${revNote}</h3>
+        <div class="text-lg font-bold text-gray-900">${money(p.total)}
+          <span class="text-xs font-normal text-gray-400">(${p.visits_billable} billable)</span></div>
+      </div>
+      <div class="px-4 py-2 overflow-x-auto">
+        <table class="text-xs w-full border-collapse">
+          <thead><tr class="text-gray-400 text-left">
+            <th class="font-medium pb-1 pr-3">sched</th><th class="font-medium pb-1 pr-3">done</th>
+            <th class="font-medium pb-1 pr-3"></th><th class="font-medium pb-1 pr-3">type</th>
+            <th class="font-medium pb-1 pr-3 text-right">$</th><th class="font-medium pb-1 pr-3">title</th>
+            <th class="font-medium pb-1">flags / notes</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join("") || `<div class="text-sm text-gray-400 py-8 text-center">No hot-tub services found this month.</div>`;
+}
+
+(async () => {
+  const months = await loadMonths();
+  const sel = document.getElementById("monthSel");
+  sel.addEventListener("change", () => load(sel.value));
+  load(months[0] || "");
+})();
+</script>
+{% endblock %}

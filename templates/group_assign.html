@@ -242,11 +242,16 @@ function buildGroup(group, isCheckin) {
 
   keys.forEach(key => {
     const isUn = key === 'Unassigned';
+    // For the arrival (check-in) section, also show how many distinct houses
+    // this specialist visits across their tasks — task count alone hides routing.
+    const propCount = new Set(byUser[key].map(t => t.property)).size;
+    const propBit = isCheckin
+      ? ` · ${propCount} house${propCount !== 1 ? 's' : ''}` : '';
     const sub  = document.createElement('div');
     sub.style.cssText = 'background:#fafafa;padding:6px 16px;border-top:1px solid #eef0f2;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;justify-content:space-between;gap:10px;';
     sub.innerHTML = `
       <span style="font-size:0.74rem;font-weight:700;color:${isUn ? '#b45309' : '#4b5563'};">👤 ${esc(key)}
-        <span style="font-weight:500;color:#9ca3af;">· ${byUser[key].length}</span></span>
+        <span style="font-weight:500;color:#9ca3af;">· ${byUser[key].length} task${byUser[key].length !== 1 ? 's' : ''}${propBit}</span></span>
       <label style="font-size:0.7rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:4px;">
         <input type="checkbox" class="subgroup-cb"> Select all</label>`;
     wrap.appendChild(sub);
@@ -373,11 +378,14 @@ function renderScan() {
     hd.textContent = `🔑 Check-ins (${checkins.length})`;
     results.appendChild(hd);
 
+    // Lay the check-in buckets into the same two dispatch-zone columns
+    // (89 | 267) as the non-arrival "All tasks by zone" section below.
     const byZone = {};
     checkins.forEach(t => { const z = t.group || 'Ungrouped'; (byZone[z] = byZone[z] || []).push(t); });
-    Object.keys(byZone)
+    const checkinGroups = Object.keys(byZone)
       .sort((a, b) => ((a === 'Ungrouped') - (b === 'Ungrouped')) || a.localeCompare(b))
-      .forEach(z => results.appendChild(buildGroup({ group: z, tasks: byZone[z] }, true)));
+      .map(z => ({ group: z, tasks: byZone[z] }));
+    renderZoneColumns(results, checkinGroups, true);
   }
 
   // All task buckets, laid into two dispatch-zone columns (89 | 267).
