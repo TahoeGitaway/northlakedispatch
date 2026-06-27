@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}Serviced While Occupied — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-6">
+
+  <!-- Header -->
+  <div class="mb-4">
+    <h2 class="text-xl font-bold text-gray-800">Serviced While Occupied</h2>
+    <p class="text-xs text-gray-400 mt-0.5">
+      For the selected day, lists tasks scheduled where a guest or tenant is in the house.
+    </p>
+  </div>
+
+  <!-- Date + scan -->
+  <div class="flex items-center gap-3 mb-4 flex-wrap">
+    <label class="text-gray-500 font-medium text-sm">Day</label>
+    <input type="date" id="theDate"
+           class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-300">
+    <button onclick="load()"
+            class="px-4 py-1.5 bg-rose-500 text-white text-sm font-semibold rounded-lg hover:bg-rose-600 transition-colors">
+      Check
+    </button>
+    <span id="subtitle" class="text-xs text-gray-400"></span>
+  </div>
+
+  <p class="text-xs text-gray-400 mb-5">
+    "In the house" = a guest/tenant staying that night (not their arrival or checkout day). Owners &amp; blocks are ignored.
+    Routine in-stay work (hot tub, mid-stay clean, trash, inspection…) is split into a separate, collapsed list.
+  </p>
+
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-rose-300 border-t-rose-500 rounded-full animate-spin"></div>
+    <span>Checking Breezeway…</span>
+  </div>
+
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm"
+       style="background:#fef2f2; border:1px solid #fecaca;"></div>
+
+  <div id="results" class="hidden space-y-6"></div>
+
+</div>
+
+<script>
+function _isoDate(d) { return d.toISOString().slice(0, 10); }
+
+function _fmtDate(ds) {
+  if (!ds) return "—";
+  return new Date(ds + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function _section(label, color) {
+  const d = document.createElement("div");
+  d.style.cssText = `font-size:0.7rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.06em; color:${color}; margin-bottom:8px;`;
+  d.textContent = label;
+  return d;
+}
+
+function _card(bg, border, html) {
+  const li = document.createElement("div");
+  li.style.cssText = `border-radius:10px; padding:13px 16px; border:1px solid ${border}; background:${bg}; margin-bottom:8px;`;
+  li.innerHTML = html;
+  return li;
+}
+
+const _STATUS = {
+  complete:    { label: "✓ Complete",    color: "#059669" },
+  in_progress: { label: "🔄 In progress", color: "#2563eb" },
+  pending:     { label: "⏳ Scheduled",   color: "#6b7280" },
+};
+
+function overlapCard(o, bg, border, accent) {
+  const st  = _STATUS[o.status] || _STATUS.pending;
+  const asg = (o.assignees && o.assignees.length) ? o.assignees.join(", ") : "unassigned";
+  const who = o.guest ? `<strong>${o.guest}</strong>` : (o.kind === "lease" ? "Tenant" : "Guest");
+  const kind = o.kind === "lease" ? "tenant" : "guest";
+  const reason = o.expected_reason
+    ? `<span style="font-size:0.68rem;color:#9ca3af;"> · normal in-stay work (“${o.expected_reason}”)</span>` : "";
+  return _card(bg, border, `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+      <div style="min-width:0;">
+        <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${o.property}</div>
+        <div style="font-size:0.8rem;color:${accent};font-weight:500;margin-top:2px;">${o.task}${reason}</div>
+        <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">
+          ${who} in house · ${kind} stay ${_fmtDate(o.checkin)} → ${_fmtDate(o.checkout)}
+        </div>
+        <div style="font-size:0.7rem;color:#9ca3af;margin-top:3px;">Assigned: ${asg}</div>
+      </div>
+      <div style="flex-shrink:0;font-size:0.7rem;font-weight:600;color:${st.color};white-space:nowrap;">${st.label}</div>
+    </div>
+  `);
+}
+
+function buildSection(title, color, items, cardFn, collapsed) {
+  if (!items.length) return null;
+  const wrap = document.createElement("div");
+  const hdr  = _section(`${title} (${items.length})`, color);
+  if (collapsed) {
+    hdr.style.cursor = "pointer";
+    hdr.style.userSelect = "none";
+    const caret = document.createElement("span");
+    caret.textContent = "  ▸";
+    hdr.appendChild(caret);
+    const body = document.createElement("div");
+    body.style.display = "none";
+    items.forEach(o => body.appendChild(cardFn(o)));
+    hdr.addEventListener("click", () => {
+      const open = body.style.display === "none";
+      body.style.display = open ? "" : "none";
+      caret.textContent = open ? "  ▾" : "  ▸";
+    });
+    wrap.appendChild(hdr); wrap.appendChild(body);
+    return wrap;
+  }
+  wrap.appendChild(hdr);
+  items.forEach(o => wrap.appendChild(cardFn(o)));
+  return wrap;
+}
+
+async function load() {
+  document.getElementById("loading").classList.remove("hidden");
+  document.getElementById("errorBox").classList.add("hidden");
+  document.getElementById("results").classList.add("hidden");
+  document.getElementById("subtitle").textContent = "";
+
+  try {
+    const dv = document.getElementById("theDate").value;
+    const params = new URLSearchParams();
+    if (dv) params.set("date", dv);
+
+    const res     = await fetch(`/briefing/occupancy-check?${params.toString()}`);
+    const rawBody = await res.text();
+    document.getElementById("loading").classList.add("hidden");
+
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch (_) {
+      const eb = document.getElementById("errorBox");
+      eb.innerHTML =
+        `<div style="font-weight:700;margin-bottom:3px;">This isn't broken — the check just took longer than the server waits.</div>`
+        + `<div>It most likely finished in the background — <b>click “Check” again</b> and it should load faster.</div>`;
+      eb.classList.remove("hidden");
+      return;
+    }
+
+    if (data.error) {
+      document.getElementById("errorBox").textContent = data.error;
+      document.getElementById("errorBox").classList.remove("hidden");
+      return;
+    }
+
+    const unexpected = data.unexpected || [];
+    const expected   = data.expected   || [];
+    const total      = unexpected.length + expected.length;
+
+    let sub = `${_fmtDate(data.date)} · ${data.occupied_properties || 0} occupied propert${(data.occupied_properties === 1) ? "y" : "ies"} · ${total} task${total === 1 ? "" : "s"} during a stay`;
+    if (data.failed_properties) {
+      sub += ` · ⚠ ${data.failed_properties} couldn’t load (retry)`;
+    }
+    document.getElementById("subtitle").textContent = sub;
+
+    const resultsEl = document.getElementById("results");
+    resultsEl.innerHTML = "";
+
+    if (!total) {
+      resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
+        No tasks scheduled while someone is in the house this day. 🎉</div>`;
+    } else {
+      const s1 = buildSection("🔴 Unexpected — task during a stay", "#ef4444", unexpected,
+        o => overlapCard(o, "#fef2f2", "#fecaca", "#b91c1c"));
+      const s2 = buildSection("⚪ Expected in-stay work", "#6b7280", expected,
+        o => overlapCard(o, "#f9fafb", "#e5e7eb", "#4b5563"), true);
+      if (s1) resultsEl.appendChild(s1);
+      if (!unexpected.length) {
+        const note = document.createElement("div");
+        note.className = "text-center text-emerald-600 text-sm py-6 italic";
+        note.textContent = "No unexpected overlaps — only routine in-stay work below.";
+        resultsEl.appendChild(note);
+      }
+      if (s2) resultsEl.appendChild(s2);
+    }
+    resultsEl.classList.remove("hidden");
+  } catch (e) {
+    document.getElementById("loading").classList.add("hidden");
+    document.getElementById("errorBox").textContent = "Could not load: " + e.message;
+    document.getElementById("errorBox").classList.remove("hidden");
+  }
+}
+
+// Default to today and check immediately.
+(function init() {
+  document.getElementById("theDate").value = _isoDate(new Date());
+  load();
+})();
+</script>
+{% endblock %}

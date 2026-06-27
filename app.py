@@ -64,6 +64,7 @@ from routes.pri_rename         import pri_rename_bp
 from routes.vip                import vip_bp   # TEMPORARY VIP arrivals tracker
 from routes.productivity       import productivity_bp
 from routes.hot_tub_billing     import hot_tub_billing_bp
+from routes.occupancy_check      import occupancy_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
@@ -87,6 +88,7 @@ app.register_blueprint(pri_rename_bp)
 app.register_blueprint(vip_bp)
 app.register_blueprint(productivity_bp)
 app.register_blueprint(hot_tub_billing_bp)
+app.register_blueprint(occupancy_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():
