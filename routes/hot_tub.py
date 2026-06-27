@@ -1,10 +1,16 @@
 """
 routes/hot_tub.py — Hot Tub service overdue scanner.
 
-Only applies to properties tagged "Hot Tub - TG Service" in Breezeway.
+Applies to properties tagged "Hot Tub - TG Service" in Breezeway, OR
+properties with a current 30+ night guest lease that also carry a plain
+"Hot Tub" tag.
 Looks back 45 days for tasks whose title contains "hot tub" AND
 ("arrival" OR "biweekly"). Alerts on any property where the last
 service was more than 14 days ago (or never found in the window).
+
+Also flags "too close" services: any two hot tub services on the same
+property scheduled within 6 days of each other (likely an accidental
+double-booking), looking 45 days back and 45 days forward.
 
 Endpoints:
   GET  /admin/hot-tub        — page
@@ -37,6 +43,26 @@ HOT_TUB_PATTERN = re.compile(
     re.IGNORECASE,
 )
 HOT_TUB_TAG_NAME = "hot tub - tg service"
+# A house also qualifies for the scan if it has a current 30+ night guest lease
+# AND carries this plain "Hot Tub" tag (matched exactly, NOT as a substring —
+# otherwise "Hot Tub - TG Service" would also satisfy it).
+HOT_TUB_PLAIN_TAG_NAME = "hot tub"
+
+# Two services scheduled this many days apart (or fewer) are flagged as a
+# possible accidental double-booking. Normal cadence is biweekly (~14 days).
+TOO_CLOSE_DAYS = 6
+
+# A pair is only flagged if at least one side is a biweekly or lease service —
+# those run on a fixed cadence and should never land this close to another
+# service. (Arrival / D&S services can legitimately cluster around a stay.)
+BIWEEKLY_OR_LEASE_PATTERN = re.compile(
+    r"\b(biweekly|bi[\s\-]?weekly|lease)\b",
+    re.IGNORECASE,
+)
+
+# The double-booking check only inspects services within this many days on
+# either side of today (a 2-week window centred on the scan date).
+TOO_CLOSE_WINDOW_DAYS = 7
 
 
 def _get_token():
@@ -100,6 +126,45 @@ def _fetch_property_tags(token: str, pid: str) -> list:
     return []
 
 
+def _fetch_current_lease_pids(token: str, today: date) -> set:
+    """Property IDs with a guest lease (30+ nights) active today.
+
+    A reservation is "current" if checkin <= today <= checkout. Lease vs
+    owner/block classification reuses lease_prep._is_lease so the rules stay
+    in one place.
+    """
+    from routes.lease_prep import _is_lease
+    pids: set[str] = set()
+    page = 1
+    while True:
+        try:
+            r = requests.get(
+                f"{BW_BASE}/public/inventory/v1/reservation",
+                headers={"Authorization": f"JWT {token}"},
+                params={"checkin_date_le": today.isoformat(),
+                        "checkout_date_ge": today.isoformat(),
+                        "limit": 100, "page": page},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                break
+            body    = r.json()
+            results = body.get("results", body.get("data", body if isinstance(body, list) else []))
+            if not results:
+                break
+            for res in results:
+                if _is_lease(res):
+                    pid = str(res.get("property_id") or res.get("home_id") or "")
+                    if pid:
+                        pids.add(pid)
+            if len(results) < 100:
+                break
+            page += 1
+        except Exception:
+            break
+    return pids
+
+
 def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
     date_range = f"{start.isoformat()},{end.isoformat()}"
     id_pairs = []
@@ -154,32 +219,49 @@ def hot_tub_scan():
     if tag_id is None:
         return jsonify({"error": "Could not find 'Hot Tub - TG Service' tag in Breezeway. Check the tag name matches exactly."}), 500
 
-    # Step 2: find all properties with that tag (concurrent)
-    def has_hot_tub_tag(pid):
-        tags = _fetch_property_tags(token, pid)
-        for t in tags:
-            tid = t.get("id") or t.get("tag_id")
-            if tid == tag_id:
-                return True
-            name = (t.get("name") or t.get("label") or "").lower().strip()
-            if name == HOT_TUB_TAG_NAME:
-                return True
-        return False
+    today = date.today()
+
+    # Step 2: classify each property's tags in one sweep — does it carry the
+    # "Hot Tub - TG Service" tag, and/or a plain "Hot Tub" tag?
+    def classify_tags(pid):
+        has_tg = has_plain = False
+        for t in _fetch_property_tags(token, pid):
+            if isinstance(t, dict):
+                tid  = t.get("id") or t.get("tag_id")
+                name = (t.get("name") or t.get("label") or "").lower().strip()
+            else:
+                tid, name = None, str(t).lower().strip()
+            if tid == tag_id or name == HOT_TUB_TAG_NAME:
+                has_tg = True
+            if name == HOT_TUB_PLAIN_TAG_NAME:
+                has_plain = True
+        return has_tg, has_plain
 
     all_pids = list(prop_cache.keys())
-    tagged_pids = []
+    tg_pids: set[str]         = set()
+    plain_hot_tub_pids: set[str] = set()
     with ThreadPoolExecutor(max_workers=16) as ex:
-        futures = {ex.submit(has_hot_tub_tag, pid): pid for pid in all_pids}
+        futures = {ex.submit(classify_tags, pid): pid for pid in all_pids}
         for future in as_completed(futures):
-            if future.result():
-                tagged_pids.append(futures[future])
+            pid = futures[future]
+            has_tg, has_plain = future.result()
+            if has_tg:
+                tg_pids.add(pid)
+            if has_plain:
+                plain_hot_tub_pids.add(pid)
+
+    # A house qualifies via EITHER the TG Service tag, OR a current 30+ night
+    # guest lease combined with a plain "Hot Tub" tag.
+    lease_pids        = _fetch_current_lease_pids(token, today)
+    lease_qualified   = lease_pids & plain_hot_tub_pids
+    tagged_pids       = sorted(tg_pids | lease_qualified)
 
     if not tagged_pids:
         return jsonify({"results": [], "tag_id": tag_id,
-                        "warning": "No properties found with 'Hot Tub - TG Service' tag."})
+                        "warning": "No properties found with 'Hot Tub - TG Service' "
+                                   "tag, nor a current lease + 'Hot Tub' tag."})
 
     # Step 3: fetch tasks — 45 days back AND 45 days forward to find last + next service
-    today    = date.today()
     lookback = today - timedelta(days=45)
     lookahead = today + timedelta(days=45)
 
@@ -201,7 +283,8 @@ def hot_tub_scan():
         return ""
 
     # Step 4: find last service (past) and next upcoming service (future) per property
-    results = []
+    results   = []
+    too_close = []   # possible accidental double-bookings (services <= 6 days apart)
     for pid in tagged_pids:
         prop_name = _get_property_name(pid)
         tasks     = tasks_by_pid.get(pid, [])
@@ -242,19 +325,41 @@ def hot_tub_scan():
             last_task_title = None
             days_since      = None
 
-        if future_services:
-            future_services.sort(key=lambda x: x["date"])
-            nxt = future_services[0]
-            next_task = {
-                "title":    nxt["title"],
-                "date":     nxt["date"].isoformat(),
-                "time":     nxt["time"],
-                "assignee": nxt["assignee"],
-            }
-        else:
-            next_task = None
+        # Too-close check: within a 2-week window centred on today, flag any two
+        # consecutive services <= TOO_CLOSE_DAYS apart where at least one is a
+        # biweekly or lease service (a likely accidental double-booking). Sort by
+        # date+time so consecutive pairs are truly adjacent.
+        tc_start = today - timedelta(days=TOO_CLOSE_WINDOW_DAYS)
+        tc_end   = today + timedelta(days=TOO_CLOSE_WINDOW_DAYS)
+        window_services = sorted(
+            (s for s in (past_services + future_services) if tc_start <= s["date"] <= tc_end),
+            key=lambda x: (x["date"], x["time"] or ""),
+        )
+        for prev_svc, next_svc in zip(window_services, window_services[1:]):
+            gap = (next_svc["date"] - prev_svc["date"]).days
+            if gap > TOO_CLOSE_DAYS:
+                continue
+            if not (BIWEEKLY_OR_LEASE_PATTERN.search(prev_svc["title"])
+                    or BIWEEKLY_OR_LEASE_PATTERN.search(next_svc["title"])):
+                continue
+            too_close.append({
+                "property": prop_name,
+                "gap_days": gap,
+                "first": {
+                    "title":    prev_svc["title"],
+                    "date":     prev_svc["date"].isoformat(),
+                    "time":     prev_svc["time"],
+                    "assignee": prev_svc["assignee"],
+                },
+                "second": {
+                    "title":    next_svc["title"],
+                    "date":     next_svc["date"].isoformat(),
+                    "time":     next_svc["time"],
+                    "assignee": next_svc["assignee"],
+                },
+            })
 
-        overdue = days_since is None or days_since > 21
+        overdue = days_since is None or days_since > 18
 
         results.append({
             "property":        prop_name,
@@ -262,12 +367,13 @@ def hot_tub_scan():
             "last_date":       last_date.isoformat() if last_date else None,
             "days_since":      days_since,
             "overdue":         overdue,
-            "next_task":       next_task,
         })
 
     # Sort: overdue first, then by days_since descending
     results.sort(key=lambda x: (not x["overdue"], -(x["days_since"] or 9999)))
-    payload = {"results": results}
+    # Tightest gaps first, then by the earlier service date.
+    too_close.sort(key=lambda x: (x["gap_days"], x["first"]["date"]))
+    payload = {"results": results, "too_close": too_close}
     _scan_cache["data"] = payload          # cache before returning (survives proxy timeout)
     _scan_cache["ts"]   = _time.time()
     return jsonify(payload)

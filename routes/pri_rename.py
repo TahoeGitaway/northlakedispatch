@@ -231,6 +231,7 @@ def pri_rename_scan():
 
         proposals.append({
             "task_id":        task_id,
+            "pid":            pid,
             "property":       _get_property_name(pid),
             "current_title":  title,
             "task_date":      sched[:10],

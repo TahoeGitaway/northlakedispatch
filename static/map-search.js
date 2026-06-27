@@ -826,13 +826,23 @@ function _flagPciFromTasks(currentTasks) {
   if (!wantByProp.size) return;
 
   let changed = false;
+  const allPci   = new Map();   // nameLower -> display name, for EVERY PCI stop on the route
+  const promoted = new Set();   // nameLower of stops that just BECAME a PCI since save
   const apply = s => {
     if (!s) return;
-    const want = wantByProp.get((s.name || "").toLowerCase());
+    const key  = (s.name || "").toLowerCase();
+    const want = wantByProp.get(key);
     if (want === undefined) return;                 // no PCI task here → leave as-is
-    if (want && !s.priority_checkin) {
-      s.priority_checkin = true; s.arrival = true; changed = true;
-    } else if (!want && (s.priority_checkin || s.arrival)) {
+    if (want) {
+      // This stop is (or has just become) an arrive-by-noon priority check-in. Track
+      // every one on the route — an existing PCI is just as easy to overlook among a
+      // long list as a brand-new one — and flag the ones that flipped since the save.
+      if (!s.priority_checkin) {
+        promoted.add(key);
+        s.priority_checkin = true; s.arrival = true; changed = true;
+      }
+      allPci.set(key, s.name || "(unnamed stop)");
+    } else if (s.priority_checkin || s.arrival) {
       // Stale same-day PCI flag (pre-fix save, or an arrival that has since moved to
       // another day) → this walk-thru is for another day, so make it a plain stop.
       s.priority_checkin = false; s.arrival = false; changed = true;
@@ -840,15 +850,80 @@ function _flagPciFromTasks(currentTasks) {
   };
   (typeof selectedStops !== "undefined" ? selectedStops : []).forEach(apply);
   (typeof optimizedSchedule !== "undefined" ? optimizedSchedule : []).forEach(apply);
-  if (!changed) return;
 
-  if (typeof isOptimized !== "undefined" && isOptimized) {
-    if (typeof recalculateTimes === "function") recalculateTimes();
-    if (typeof renderSchedule === "function") renderSchedule();
-    if (typeof redrawRouteOnMap === "function") redrawRouteOnMap();
-  } else if (typeof renderStops === "function") {
-    renderStops();
+  // Repaint only when a flag actually moved, but ALERT whenever the route carries any
+  // PCI — so existing priority check-ins are surfaced on reopen, not just new ones.
+  if (changed) {
+    if (typeof isOptimized !== "undefined" && isOptimized) {
+      if (typeof recalculateTimes === "function") recalculateTimes();
+      if (typeof renderSchedule === "function") renderSchedule();
+      if (typeof redrawRouteOnMap === "function") redrawRouteOnMap();
+    } else if (typeof renderStops === "function") {
+      renderStops();
+    }
   }
+
+  if (allPci.size) {
+    _alertPciStops([...allPci.entries()].map(([key, name]) => ({ name, isNew: promoted.has(key) })));
+  }
+}
+
+// Hard-to-miss alert listing every PRIORITY CHECK-IN (arrive-by-noon) on a reopened
+// saved route. Stops that flipped to PCI since the save (Breezeway added "PCI" to the
+// title overnight) are tagged NEW; the rest are existing PCIs that are still easy to
+// lose in a long list. Stops are repainted purple too, but a passive color change is
+// easy to scan past — this blocks with a dismiss so they can't be missed. Re-entrant
+// safe: a second detection merges into the open alert rather than stacking modals.
+function _alertPciStops(stops) {
+  if (!stops || !stops.length) return;
+  let overlay = document.getElementById("pciAlert");
+  let known = [];
+  if (overlay) known = JSON.parse(overlay.dataset.stops || "[]");
+  // Merge by name; a NEW flag from any detection wins (a flip is the louder fact).
+  const byName = new Map();
+  for (const s of [...known, ...stops]) {
+    const prev = byName.get(s.name);
+    byName.set(s.name, { name: s.name, isNew: !!(s.isNew || (prev && prev.isNew)) });
+  }
+  const merged = [...byName.values()].sort((a, b) => (b.isNew - a.isNew));   // NEW first
+
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "pciAlert";
+    overlay.style.cssText = [
+      "position:fixed","inset:0","background:rgba(17,24,39,0.55)",
+      "z-index:10000","display:flex","align-items:center","justify-content:center","padding:20px"
+    ].join(";");
+    document.body.appendChild(overlay);
+  }
+  overlay.dataset.stops = JSON.stringify(merged);
+
+  const rows = merged.map(s => {
+    const newTag = s.isNew
+      ? ` <span style="background:#dc2626;color:#fff;font-size:10px;font-weight:800;padding:1px 6px;border-radius:4px;vertical-align:middle;">NEW</span>`
+      : "";
+    return `<div style="font-weight:700;color:#5b21b6;background:#f5f3ff;border-left:4px solid #7c3aed;border-radius:0 6px 6px 0;padding:6px 10px;margin-top:6px;">⚡ ${_escHtml(s.name)}${newTag}</div>`;
+  }).join("");
+  const newCount = merged.filter(s => s.isNew).length;
+  const plural = merged.length > 1;
+
+  overlay.innerHTML =
+    `<div role="alertdialog" aria-modal="true" style="background:#fff;max-width:440px;width:100%;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,0.35);overflow:hidden;">
+       <div style="background:#7c3aed;color:#fff;font-weight:800;font-size:15px;letter-spacing:0.02em;padding:14px 18px;">
+         ⚡ ${merged.length} PRIORITY CHECK-IN${plural ? "S" : ""} ON THIS ROUTE
+       </div>
+       <div style="padding:16px 18px;color:#374151;font-size:13px;line-height:1.5;">
+         <div>${plural ? "These stops are" : "This stop is"} <b>arrive-by-noon</b> and show purple on the route — turning <b style="color:#dc2626;">red</b> if scheduled past noon.${newCount ? ` <b>${newCount}</b> tagged <b style="color:#dc2626;">NEW</b> had "PCI" added to the Walk-Thru title since this route was saved.` : ""}</div>
+         ${rows}
+       </div>
+       <div style="padding:0 18px 16px;text-align:right;">
+         <button id="pciAlertOk" style="background:#7c3aed;color:#fff;font-weight:700;font-size:13px;border:none;border-radius:8px;padding:9px 22px;cursor:pointer;">Got it</button>
+       </div>
+     </div>`;
+
+  const close = () => overlay.remove();
+  overlay.querySelector("#pciAlertOk").addEventListener("click", close);
+  overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
 }
 
 // Low-confidence name matches — let the user keep or reject each before it
