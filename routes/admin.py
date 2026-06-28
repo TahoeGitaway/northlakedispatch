@@ -987,6 +987,58 @@ def pri_dismissals_clear():
     return jsonify({"ok": True})
 
 
+# ── PRI Check page snooze (temporary, 1 week — separate from the banner ✕) ──
+
+_PRI_SNOOZE_DAYS = 7
+
+@admin_bp.route("/admin/pri-snoozes", methods=["GET"])
+@login_required
+def pri_snoozes_get():
+    """Return keys snoozed and not yet expired; opportunistically purge expired rows."""
+    now = datetime.utcnow().isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("DELETE FROM pri_snoozes WHERE snoozed_until <= %s", (now,))
+    conn.commit()
+    cur.execute("SELECT item_key FROM pri_snoozes")
+    keys = [r["item_key"] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify({"keys": keys})
+
+
+@admin_bp.route("/admin/pri-snooze", methods=["POST"])
+@login_required
+def pri_snooze_add():
+    key = (request.get_json(force=True) or {}).get("key", "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    until = (datetime.utcnow() + timedelta(days=_PRI_SNOOZE_DAYS)).isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO pri_snoozes (item_key, snoozed_until, snoozed_by) "
+        "VALUES (%s, %s, %s) ON CONFLICT (item_key) DO UPDATE SET "
+        "snoozed_until = EXCLUDED.snoozed_until, snoozed_by = EXCLUDED.snoozed_by",
+        (key, until, current_user.id),
+    )
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
+@admin_bp.route("/admin/pri-snoozes/clear", methods=["POST"])
+@login_required
+def pri_snoozes_clear():
+    # type: "owner_next" clears only ::on keys; "vacancy" clears non-::on; omit to clear all
+    kind = (request.get_json(force=True) or {}).get("type", "all")
+    conn = get_db(); cur = get_cursor(conn)
+    if kind == "owner_next":
+        cur.execute("DELETE FROM pri_snoozes WHERE item_key LIKE %s", ("%::on",))
+    elif kind == "vacancy":
+        cur.execute("DELETE FROM pri_snoozes WHERE item_key NOT LIKE %s", ("%::on",))
+    else:
+        cur.execute("DELETE FROM pri_snoozes")
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
 # ── PRI alert manual refresh ─────────────────────────────────────
 
 @admin_bp.route("/admin/pri-alert-refresh", methods=["POST"])

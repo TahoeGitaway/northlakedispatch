@@ -320,15 +320,28 @@ def refresh_pri_banner_alerts(alert_days=3):
 @pri_bp.route("/api/pri-alerts")
 @login_required
 def api_pri_alerts():
+    now_iso = datetime.utcnow().isoformat()
     conn = get_db()
     cur  = get_cursor(conn)
+    # Exclude anything snoozed for today (✕) — snoozed_until is the snoozer's
+    # local midnight, so the alert returns on its own the next day.
     cur.execute(
         "SELECT item_key, property_name, checkout_date, next_checkin, alert_type "
-        "FROM pri_banner_alerts WHERE dismissed_at IS NULL "
-        "ORDER BY checkout_date ASC"
+        "FROM pri_banner_alerts "
+        "WHERE dismissed_at IS NULL "
+        "  AND (snoozed_until IS NULL OR snoozed_until <= %s) "
+        "ORDER BY checkout_date ASC",
+        (now_iso,),
     )
     rows = [dict(r) for r in cur.fetchall()]
+    # Once a PRI is marked Done on the PRI Check page (pri_dismissals), it must
+    # never nag again in the red banner — the dismissal keys are identical in
+    # both systems (Property::checkout_date[::on]), so we simply exclude them.
+    cur.execute("SELECT item_key FROM pri_dismissals")
+    dismissed_keys = {r["item_key"] for r in cur.fetchall()}
     cur.close(); conn.rollback(); conn.close()
+
+    rows = [d for d in rows if d.get("item_key") not in dismissed_keys]
 
     # Defensive display filter (independent of when the alert table was last
     # recomputed): an "Owner Next" alert is only shown if the OWNER/BLOCK ARRIVAL
@@ -347,6 +360,31 @@ def api_pri_alerts():
                 continue
         alerts.append(d)
     return jsonify({"alerts": alerts})
+
+
+@pri_bp.route("/api/pri-alert/snooze", methods=["POST"])
+@login_required
+def api_pri_alert_snooze():
+    """Banner ✕ — hide this alert until the snoozer's local midnight (sent as a
+    UTC ISO timestamp). NOT a permanent dismissal; the alert returns next day on
+    its own. Shared across users, consistent with how the banner itself is shared."""
+    body  = request.get_json(force=True) or {}
+    key   = (body.get("key") or "").strip()
+    until = (body.get("snooze_until") or "").strip()
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    if not until:
+        # Client didn't compute a local midnight — fall back to ~18h so it still
+        # clears by the next morning rather than nagging again immediately.
+        until = (datetime.utcnow() + timedelta(hours=18)).isoformat()
+    conn = get_db()
+    cur  = get_cursor(conn)
+    cur.execute(
+        "UPDATE pri_banner_alerts SET snoozed_until=%s WHERE item_key=%s",
+        (until, key),
+    )
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
 
 
 @pri_bp.route("/api/pri-alert/dismiss", methods=["POST"])

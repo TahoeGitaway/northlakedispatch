@@ -73,7 +73,10 @@
   @media (min-width: 1024px) {
     .routes-3col {
       display: grid;
-      grid-template-columns: 1fr 2fr 1fr;
+      /* minmax(0,…) so a column never grows past its fraction because of
+         wide/unbreakable content — keeps the center calendar dominant and
+         lets the arrivals list ellipsize instead of stealing space. */
+      grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr) minmax(0, 1fr);
       gap: 1.5rem;
       align-items: start;
     }
@@ -192,7 +195,7 @@
               </div>
             </div>
             <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div style="display:grid; grid-template-columns:1fr 1fr; border-bottom:0;">
+              <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); border-bottom:0;">
                 <!-- Arrivals -->
                 <div class="px-4 py-4" style="border-right:1px solid #f3f4f6;">
                   <div class="summary-type-label text-emerald-600 mb-3">Arrivals</div>

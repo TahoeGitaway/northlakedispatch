@@ -203,6 +203,16 @@ def init_db():
         dismissed_at  TEXT NOT NULL
     )""")
 
+    # Temporary "snooze" for the PRI Check page only (separate from the red
+    # banner ✕). Hides a flagged PRI until snoozed_until, then it returns so
+    # ops can re-check after a reservation has had time to change.
+    cur.execute("""CREATE TABLE IF NOT EXISTS pri_snoozes (
+        id            SERIAL PRIMARY KEY,
+        item_key      TEXT NOT NULL UNIQUE,
+        snoozed_until TEXT NOT NULL,
+        snoozed_by    INTEGER REFERENCES users(id)
+    )""")
+
     cur.execute("""CREATE TABLE IF NOT EXISTS pri_banner_alerts (
         id            SERIAL PRIMARY KEY,
         item_key      TEXT NOT NULL UNIQUE,
@@ -214,6 +224,10 @@ def init_db():
         dismissed_at  TEXT,
         dismissed_by  INTEGER REFERENCES users(id)
     )""")
+    # Same-day "snooze" for the red banner ✕: hides the alert until this UTC
+    # timestamp (the snoozer's local midnight). Distinct from dismissed_at, which
+    # is the permanent "✓ Done" action from the PRI Check page.
+    cur.execute("ALTER TABLE pri_banner_alerts ADD COLUMN IF NOT EXISTS snoozed_until TEXT")
 
     cur.execute("""CREATE TABLE IF NOT EXISTS asana_notifications (
         id           SERIAL PRIMARY KEY,

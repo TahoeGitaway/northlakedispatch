@@ -297,10 +297,13 @@ async function _loadLeaseWeek(box, lease, mode){
         html += `<div style="font-size:0.64rem;color:#d1d5db;">—</div>`;
       } else {
         dayTasks.forEach(t => {
-          const icon = t.status.startsWith('✓')?'✓':(t.status.startsWith('🔄')?'🔄':'⏳');
+          const _done = t.status.startsWith('✓'), _prog = t.status.startsWith('🔄');
+          const icon = _done?'✓':(_prog?'🔄':'⏳');
+          const slbl = _done?'Done':(_prog?'In progress':'Pending');
+          const scol = _done?'#16a34a':(_prog?'#2563eb':'#9ca3af');
           const who = (t.assignees&&t.assignees.length)?t.assignees.join(', '):'unassigned';
           html += `<div style="font-size:0.64rem;line-height:1.3;color:#374151;border-left:2px solid #e5e7eb;padding-left:5px;">`
-            + `<span title="${esc(t.status)}">${icon}</span>${t.time?(' '+esc(_fmtTime(t.time))):''} <b>${esc(t.name)}</b>`
+            + `<span title="${esc(t.status)}" style="font-weight:700;color:${scol};">${icon} ${slbl}</span>${t.time?(' · '+esc(_fmtTime(t.time))):''} <b>${esc(t.name)}</b>`
             + `<div style="color:#9ca3af;">👤 ${esc(who)}</div></div>`;
         });
       }

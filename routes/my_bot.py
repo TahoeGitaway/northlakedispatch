@@ -7,6 +7,7 @@ Handles all My Bot routes and Asana integration independently of the Ops Bot
 
 import json
 import os
+import re
 from datetime import datetime
 
 import requests
@@ -17,6 +18,10 @@ from db import get_db, get_cursor
 from routes.auth import admin_required
 
 my_bot_bp = Blueprint("my_bot", __name__)
+
+# The account owner. Comments she left herself must NEVER be surfaced as
+# notifications — she only ever wants to hear about OTHER people's comments.
+_MY_NAME = "Madeline Gall"
 
 
 def _my_bot_required(f):
@@ -120,6 +125,111 @@ def _get_asana_workspace():
     return gid
 
 
+# ── Pre/Post lease-task stamping helpers ──────────────────────────
+# Madeline's Asana children are named e.g. "Operations- Pre Arrival Lease
+# Activities" (an arrival) or "Post Lease Carpet Clean" (a departure) and sit
+# under a parent task named for the house. She restamps each title to
+#   "<M/D> <Arrival|Dept> - <House> - <original task name>"
+# and resets the task's due date to that same date. Pre → arrival (parent's
+# start date); Post → departure (parent's due date).
+
+_PRE_RE   = re.compile(r"\bpre\b",  re.IGNORECASE)
+_POST_RE  = re.compile(r"\bpost\b", re.IGNORECASE)
+_MD_RE    = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
+# Leading "Operations- " / "Operations -" / "Operations:" boilerplate she
+# doesn't want in the restamped title.
+_OPS_RE   = re.compile(r"^\s*operations\s*[-–:]\s*", re.IGNORECASE)
+# A title we already stamped, so re-runs don't nest the prefix:
+#   "6/28 Dept - Solstice Ridge - Post Lease Activities"
+_STAMP_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}\s+(?:Arrival|Dept)\s+-\s+.+?\s+-\s+",
+                       re.IGNORECASE)
+
+
+def _detect_lease_kind(name):
+    """Return 'pre', 'post', or None from a task name (word-boundary match).
+    Ambiguous names containing both words are returned as None so the caller
+    skips them rather than guessing."""
+    has_pre  = bool(_PRE_RE.search(name or ""))
+    has_post = bool(_POST_RE.search(name or ""))
+    if has_pre and not has_post:
+        return "pre"
+    if has_post and not has_pre:
+        return "post"
+    return None
+
+
+def _iso_to_md(iso):
+    """'2026-06-28' → '6/28' (no leading zeros). None on bad input."""
+    try:
+        _y, m, d = iso.split("-")
+        return f"{int(m)}/{int(d)}"
+    except Exception:
+        return None
+
+
+def _strip_stamp(name):
+    """Drop a leading '<M/D> <Arrival|Dept> - <house> - ' prefix if present so
+    re-stamping a task doesn't nest the prefix."""
+    return _STAMP_RE.sub("", name or "").strip()
+
+
+def _dates_from_text(text, today_iso):
+    """Pull M/D or M/D/YY dates out of free text → list of ISO date strings.
+    Two-digit years are 2000-based; a bare M/D infers its year from today and
+    rolls to next year when the date is well in the past (year-boundary)."""
+    try:
+        ty, tm, td = (int(x) for x in (today_iso or "").split("-"))
+    except Exception:
+        ty = tm = td = None
+    out = []
+    for mo, da, yr in _MD_RE.findall(text or ""):
+        mo, da = int(mo), int(da)
+        if yr:
+            y = int(yr) + (2000 if int(yr) < 100 else 0)
+        elif ty is not None:
+            y = ty
+            if (mo, da) < (tm, td) and (tm - mo) > 6:
+                y += 1
+        else:
+            continue
+        out.append(f"{y:04d}-{mo:02d}-{da:02d}")
+    return out
+
+
+def _fetch_my_tasks_raw(filter_val="incomplete", project_filter=None):
+    """Fetch the current user's Asana tasks as raw dicts (name, gid, dates and
+    parent name/dates). Returns (tasks, error)."""
+    ws = _get_asana_workspace()
+    if not ws:
+        return None, "Could not retrieve Asana workspace."
+    utl_data, err = _asana_request("GET", "/users/me/user_task_list", {"workspace": ws})
+    if err or not utl_data:
+        return None, f"Could not get user task list: {err or 'no data'}"
+    utl_gid = utl_data.get("gid") if isinstance(utl_data, dict) else None
+    if not utl_gid:
+        return None, "Could not find user task list GID."
+    params = {
+        "opt_fields": "name,gid,due_on,start_on,completed,notes,projects.name,"
+                      "parent.name,parent.gid,parent.due_on,parent.start_on",
+        "limit": 100,
+    }
+    if filter_val == "incomplete":
+        params["completed_since"] = "now"
+    tasks, err = _asana_fetch_all(f"/user_task_lists/{utl_gid}/tasks", params)
+    if err:
+        return None, f"Error fetching tasks: {err}"
+    tasks = tasks or []
+    if filter_val == "complete":
+        tasks = [t for t in tasks if t.get("completed")]
+    elif filter_val == "incomplete":
+        tasks = [t for t in tasks if not t.get("completed")]
+    if project_filter:
+        pf = project_filter.lower()
+        tasks = [t for t in tasks if any(
+            pf in (p.get("name") or "").lower() for p in (t.get("projects") or []))]
+    return tasks, None
+
+
 # ── Asana notification polling ────────────────────────────────────
 
 def poll_asana_notifications():
@@ -180,6 +290,8 @@ def poll_asana_notifications():
             created_at   = story.get("created_at", "")
             commenter    = (story.get("created_by") or {}).get("name", "Someone")
             comment_text = story.get("text", "")
+            if commenter == _MY_NAME:
+                continue   # never notify her about her own comments
             if last_checked and created_at and created_at <= last_checked:
                 continue
             item_key = f"{tgid}::{sgid}"
@@ -216,7 +328,9 @@ def api_asana_notifications():
     cur.execute(
         "SELECT item_key, task_gid, task_name, commenter, comment_text, asana_created_at "
         "FROM asana_notifications WHERE dismissed_at IS NULL AND replied_at IS NULL "
-        "ORDER BY asana_created_at DESC"
+        "AND commenter <> %s "
+        "ORDER BY asana_created_at DESC",
+        (_MY_NAME,),
     )
     notes = [dict(r) for r in cur.fetchall()]
     cur.close(); conn.rollback(); conn.close()
@@ -472,6 +586,35 @@ def my_bot_chat():
                 "required": ["start_date", "end_date", "property_names"],
             },
         },
+        {
+            "name": "stamp_house_and_date",
+            "description": (
+                "THE one-shot tool for restamping the user's Asana lease tasks. "
+                "Rewrites each title to '<M/D> <Arrival|Dept> - <House> - <original task name>' "
+                "AND sets the task's due date to that arrival/departure date. "
+                "Pre tasks (e.g. 'Pre Arrival Lease Activities') use the parent house's ARRIVAL "
+                "date and are labelled 'Arrival'; Post tasks (e.g. 'Post Lease Activities') use the "
+                "DEPARTURE date and are labelled 'Dept'. The tool fetches the tasks and reads the "
+                "house name + dates from the parent task itself, then renames everything in "
+                "parallel — DO NOT call get_my_asana_tasks first and DO NOT type the new titles "
+                "yourself. ALWAYS call with apply=false first to preview, show the user the exact "
+                "proposed changes, get a clear yes, then call again with apply=true. "
+                "Optionally pass property_name to limit it to one house."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "property_name": {
+                        "type": "string",
+                        "description": "Optional: only stamp tasks for this house (matches the parent/house name).",
+                    },
+                    "apply": {
+                        "type": "boolean",
+                        "description": "false (default) = preview only, no changes written. true = actually rename and re-date.",
+                    },
+                },
+            },
+        },
     ]
 
     def _exec_get_notifications(property_name=None, include_dismissed=False):
@@ -509,6 +652,7 @@ def my_bot_chat():
                     "ORDER BY asana_created_at DESC LIMIT 50"
                 )
         rows = cur.fetchall(); cur.close(); conn.rollback(); conn.close()
+        rows = [r for r in rows if (r.get("commenter") or "") != _MY_NAME]
         if not rows:
             label = f" about '{property_name}'" if pf else ""
             return f"No {'unread ' if not include_dismissed else ''}notifications{label}."
@@ -529,41 +673,9 @@ def my_bot_chat():
         return "\n".join(lines)
 
     def _exec_get_tasks(filter_val="incomplete", project_filter=None):
-        ws = _get_asana_workspace()
-        if not ws:
-            return "Could not retrieve Asana workspace."
-
-        utl_data, err = _asana_request("GET", "/users/me/user_task_list", {"workspace": ws})
-        if err or not utl_data:
-            return f"Could not get user task list: {err or 'no data'}"
-        utl_gid = utl_data.get("gid") if isinstance(utl_data, dict) else None
-        if not utl_gid:
-            return "Could not find user task list GID."
-
-        params = {
-            "opt_fields": "name,gid,due_on,start_on,completed,notes,projects.name,parent.name,parent.gid,parent.due_on,parent.start_on",
-            "limit":      100,
-        }
-        if filter_val == "incomplete":
-            params["completed_since"] = "now"
-
-        tasks, err = _asana_fetch_all(f"/user_task_lists/{utl_gid}/tasks", params)
+        tasks, err = _fetch_my_tasks_raw(filter_val, project_filter)
         if err:
-            return f"Error fetching tasks: {err}"
-        if tasks is None:
-            tasks = []
-
-        if filter_val == "complete":
-            tasks = [t for t in tasks if t.get("completed")]
-        elif filter_val == "incomplete":
-            tasks = [t for t in tasks if not t.get("completed")]
-
-        if project_filter:
-            pf = project_filter.lower()
-            tasks = [t for t in tasks if any(
-                pf in (p.get("name") or "").lower()
-                for p in (t.get("projects") or [])
-            )]
+            return err
 
         tasks.sort(key=lambda t: (t.get("due_on") or "9999-99-99"))
 
@@ -579,17 +691,127 @@ def my_bot_chat():
             status   = "✓ done" if t.get("completed") else "open"
             due      = t.get("due_on") or "no due date"
             line = f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}'
+            pgid     = parent.get("gid", "")
             if pname:
                 lease_dates = ""
                 if pstart and pdue:
                     lease_dates = f" [{pstart} → {pdue}]"
                 elif pdue:
                     lease_dates = f" [ends {pdue}]"
-                line += f' | property: {pname}{lease_dates}'
+                house_gid = f" (house task GID {pgid})" if pgid else ""
+                line += f' | property: {pname}{lease_dates}{house_gid}'
             lines.append(line)
             if t.get("notes"):
                 lines.append(f'  Notes: {t["notes"]}')
         return "\n".join(lines)
+
+    def _exec_stamp(property_name=None, apply=False, today_iso=None):
+        """Restamp lease tasks: rename to '<M/D> <Arrival|Dept> - <House> -
+        <original>' and reset the due date. apply=False previews only."""
+        tasks, err = _fetch_my_tasks_raw("incomplete", None)
+        if err:
+            return f"Could not fetch tasks: {err}"
+        if not tasks:
+            return "No incomplete tasks assigned to you."
+
+        pf      = (property_name or "").strip().lower()
+        plan    = []   # (task, new_name, new_due_iso, old_due)
+        skipped = []
+        for t in tasks:
+            name   = t.get("name", "") or ""
+            parent = t.get("parent") or {}
+            house  = (parent.get("name") or "").strip()
+            if pf and pf not in house.lower() and pf not in name.lower():
+                continue
+            kind = _detect_lease_kind(name)
+            if not kind:
+                skipped.append((name, "no clear Pre/Post in the name"))
+                continue
+            if not house:
+                skipped.append((name, "no parent (house) task"))
+                continue
+            # Date source: prefer the parent's Asana date field, fall back to a
+            # date written into the parent's name.
+            iso = (parent.get("start_on") if kind == "pre" else parent.get("due_on")) or None
+            if not iso:
+                found = _dates_from_text(parent.get("name", ""), today_iso)
+                if found:
+                    iso = found[0] if kind == "pre" else found[-1]
+            if not iso:
+                which = "arrival" if kind == "pre" else "departure"
+                skipped.append((name, f"no {which} date on parent '{house}'"))
+                continue
+            md = _iso_to_md(iso)
+            if not md:
+                skipped.append((name, f"unreadable date '{iso}'"))
+                continue
+            label    = "Arrival" if kind == "pre" else "Dept"
+            core     = _OPS_RE.sub("", _strip_stamp(name)).strip()
+            new_name = f"{md} {label} - {house} - {core}"
+            if new_name == name and (t.get("due_on") or None) == iso:
+                skipped.append((name, "already stamped"))
+                continue
+            plan.append((t, new_name, iso, t.get("due_on")))
+
+        scope = f" for '{property_name}'" if pf else ""
+        if not plan:
+            out = [f"Nothing to stamp{scope}."]
+            if skipped:
+                out.append(f"\n{len(skipped)} task(s) skipped:")
+                for nm, why in skipped:
+                    out.append(f"  - {nm}: {why}")
+            return "\n".join(out)
+
+        if not apply:
+            out = [
+                f"PREVIEW{scope} — {len(plan)} task(s) will be RENAMED and have their "
+                f"due date RESET. Nothing has changed yet.",
+                "Show the user this exact list, then ask them to confirm before applying.",
+            ]
+            for (t, nn, iso, old_due) in plan:
+                out.append(f"\n• {t.get('name')}")
+                out.append(f"    → {nn}")
+                due_note = f"{old_due} → {iso}" if old_due and old_due != iso else iso
+                out.append(f"    due date: {due_note}")
+            if skipped:
+                out.append(f"\nSkipped {len(skipped)} (won't be touched):")
+                for nm, why in skipped:
+                    out.append(f"  - {nm}: {why}")
+            return "\n".join(out)
+
+        # apply=True → write renames + due dates in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+
+        def _do_one(item):
+            t, nn, iso, _old = item
+            _, e = _asana_request("PUT", f"/tasks/{t['gid']}",
+                                  {"data": {"name": nn, "due_on": iso}})
+            return nn, (f"FAILED: {e}" if e else "✓")
+
+        rows = []
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = {ex.submit(_do_one, it): it for it in plan}
+            for fut in as_completed(futures, timeout=120):
+                try:
+                    label, status = fut.result(timeout=15)
+                except FutureTimeout:
+                    label, status = futures[fut][1], "TIMED OUT — Asana didn't respond"
+                except Exception as exc:
+                    label, status = futures[fut][1], f"ERROR: {exc}"
+                rows.append((label, status))
+
+        ok  = sum(1 for _, s in rows if s == "✓")
+        bad = [(l, s) for l, s in rows if s != "✓"]
+        out = [f"Stamped {ok}/{len(plan)} task(s){scope}."]
+        if bad:
+            out.append(f"⚠️ {len(bad)} issue(s):")
+            for l, s in bad:
+                out.append(f"  • {l}: {s}")
+        if skipped:
+            out.append(f"\nSkipped {len(skipped)} (not changed):")
+            for nm, why in skipped:
+                out.append(f"  - {nm}: {why}")
+        return "\n".join(out)
 
     def _exec_batch_update(updates):
         from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
@@ -885,6 +1107,18 @@ def my_bot_chat():
             "    • ✓ Complete — [Month Day, Year]: [Task Name]\n"
             "    • ⏳ Pending — [Month Day, Year]: [Task Name]\n"
             "    • 🔄 In Progress — [Month Day, Year]: [Task Name]\n\n"
+            "STAMPING LEASE TASKS — stamp_house_and_date is the dedicated tool for this. "
+            "When the user asks to 'add the house and date to my tasks', 'rename my pre/post tasks', "
+            "'stamp my tasks', 'fix my task titles', or anything of that shape, call THIS tool — "
+            "never fetch the tasks and rename them one-by-one yourself, and never type the new "
+            "titles into a batch_update call. It rewrites each title to "
+            "'<M/D> <Arrival|Dept> - <House> - <original task>' and resets the due date to the "
+            "arrival (Pre) or departure (Post) date, all server-side. "
+            "WORKFLOW (follow exactly): (1) call stamp_house_and_date with apply=false; "
+            "(2) show the user the preview verbatim and print "
+            "'CONFIRM_ACTION: rename and re-date these N tasks'; (3) wait for an explicit yes; "
+            "(4) call stamp_house_and_date again with apply=true and the SAME property_name. "
+            "Never pass apply=true without an explicit confirmation in the immediately prior message.\n\n"
             "PROPERTY CONTEXT — when the user asks 'what do we know about [house]' or asks for a summary of a house:\n"
             "Run ALL of these in parallel (call them in one turn):\n"
             "  a) get_my_notifications(property_name='[house]') — unread comments on tasks for that house\n"
@@ -905,7 +1139,14 @@ def my_bot_chat():
             "with ALL relevant tasks in a single call — never loop get_task_comments one task at a time "
             "and never ask 'want me to continue with the next batch?' Just do all of them. "
             "If there are more than 20 tasks, split into two get_comments_batch calls back-to-back without asking. "
-            "The tool skips tasks with no outside comments automatically, so results are concise.\n\n"
+            "The tool skips tasks with no outside comments automatically, so results are concise.\n"
+            "- PARENT / HOUSE COMMENTS: get_my_asana_tasks lists each task's parent house task GID "
+            "as '(house task GID <id>)'. You CAN read the comment thread on the parent house task "
+            "by passing that GID to get_task_comments / get_comments_batch — but ONLY do so when the "
+            "user explicitly asks for the parent, house, or property-level thread (e.g. 'check the "
+            "comments on the house task too' or 'read the parent thread'). By default, comment "
+            "requests refer to the user's OWN assigned task only — never pull the parent thread "
+            "automatically.\n\n"
             "RULES — follow these exactly:\n"
             "- NEVER modify, paraphrase, abbreviate, or invent task names or property names. "
             "Always copy them character-for-character exactly as they appear in Asana data. "
@@ -925,8 +1166,16 @@ def my_bot_chat():
             "- For 2 or more task updates: ALWAYS use batch_update_asana_tasks, never loop update_asana_task.\n"
             "- After any tool call, report the results honestly: how many succeeded, "
             "which ones timed out or failed, and the exact error message for failures.\n"
-            "- Before any write (update, batch, comment): show CONFIRM_ACTION: <what you will do> "
-            "and wait for the user to confirm. After confirmation, call the tool immediately.\n"
+            "- CONFIRM EVERY WRITE WITH AN EXPLICIT BEFORE→AFTER. Before ANY write "
+            "(update_asana_task, batch_update_asana_tasks, stamp_house_and_date with apply=true, "
+            "delete_asana_task, batch_delete_asana_tasks, or posting a comment) you MUST print a "
+            "CONFIRM_ACTION block that spells out, for EACH affected task, the exact change as "
+            "'current → new'. For a rename show 'old title → new title'. For a due-date change show "
+            "'old date → new date' (write dates M/D). If you do not already know the current title "
+            "or due date, call get_my_asana_tasks FIRST so you can show it — NEVER propose a change "
+            "without displaying its current value alongside the new one. Then wait for an explicit "
+            "'yes'. NEVER write on the same turn you propose the change, and never treat a vague or "
+            "unrelated reply as confirmation. After a clear yes, call the tool immediately.\n"
             "- Never guess task GIDs — always call get_my_asana_tasks first.\n"
             "- If get_comments_batch returns 404 errors on multiple tasks, the GIDs are stale — "
             "call get_my_asana_tasks again to get fresh GIDs, then retry. Do not tell the user "
@@ -950,7 +1199,7 @@ def my_bot_chat():
                 asst_content = []
                 _fit_context(trimmed)   # never let the prompt exceed the context limit
                 with ai_client.messages.stream(
-                    model="claude-haiku-4-5-20251001", max_tokens=4096,
+                    model="claude-sonnet-4-6", max_tokens=8192,
                     system=system_prompt, messages=trimmed, tools=tools,
                 ) as stream:
                     for chunk in stream.text_stream:
@@ -1041,6 +1290,14 @@ def my_bot_chat():
                                 names,
                                 block.input.get("status"),
                             )
+                        elif block.name == "stamp_house_and_date":
+                            apply_now = bool(block.input.get("apply", False))
+                            prop = block.input.get("property_name") or ""
+                            label = f" for '{prop}'" if prop else ""
+                            yield sse({"type": "status", "text":
+                                ("Renaming & re-dating tasks" if apply_now
+                                 else "Building rename preview") + label + "…"})
+                            result = _exec_stamp(prop, apply_now, today_str)
                         else:
                             result = f"Unknown tool: {block.name}"
                         tool_results.append({

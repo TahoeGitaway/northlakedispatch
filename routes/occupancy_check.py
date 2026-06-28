@@ -22,7 +22,7 @@ Endpoints:
 """
 
 import time as _time
-from datetime import date as date_cls, timedelta
+from datetime import date as date_cls
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request, render_template
@@ -67,7 +67,12 @@ def _task_title(t: dict) -> str:
 
 
 def _task_status(t: dict) -> str:
-    raw = (t.get("type_task_status") or t.get("status") or t.get("state") or "").lower().strip()
+    # Breezeway sends type_task_status as a coded dict ({"code": ..., "name": ...}),
+    # not a plain string — pull a string out of whatever shape arrives.
+    val = t.get("type_task_status") or t.get("status") or t.get("state") or ""
+    if isinstance(val, dict):
+        val = val.get("code") or val.get("name") or val.get("value") or ""
+    raw = str(val).lower().strip()
     if raw in ("complete", "completed", "done", "finished"):
         return "complete"
     if raw in ("in_progress", "in progress", "started"):
@@ -129,13 +134,15 @@ def occupancy_check():
         return jsonify({"error": "Breezeway not configured."}), 500
     _ensure_property_cache()
 
-    # Reservations that could cover this day. The API filters on check-in date,
-    # so look back far enough that a long lease (30+ nights) still in progress
-    # isn't missed, and forward to the day itself.
-    lookback = day - timedelta(days=370)
+    # Reservations spanning the selected day: checked in on/before it AND
+    # checking out on/after it. Filtering BOTH ends server-side keeps this to a
+    # few hundred records. The old 370-day look-back (checkin only) pulled ~7700
+    # reservations / 78 API pages — ~5 min per call, which blew the request
+    # timeout and returned a 500 every time. This span query is ~50x faster and
+    # returns the identical occupied set.
     raw = _fetch_bw_reservations(token, {
-        "checkin_date_ge": lookback.isoformat(),
         "checkin_date_le": day_str,
+        "checkout_date_ge": day_str,
     })
 
     # property_id -> the guest/lease stay occupying it that day

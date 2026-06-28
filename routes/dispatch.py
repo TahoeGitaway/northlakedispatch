@@ -98,8 +98,10 @@ def _haversine_matrix(locations):
             dlat, dlng = lat2 - lat1, lng2 - lng1
             a    = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlng/2)**2
             dist = 6_371_000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-            # Tahoe mountain roads: 1.8× winding-road factor, avg 25 mph (11.2 m/s)
-            mat[i][j] = dist * 1.8 / 11.2
+            # Tahoe roads: 1.3× winding-road factor, avg 40 mph (17.88 m/s).
+            # Calibrated against real Google drive times (the old 1.8×/25 mph
+            # overestimated by ~2.2×, e.g. 101 min for a 45-min leg).
+            mat[i][j] = dist * 1.3 / 17.88
     return mat
 
 

@@ -23,7 +23,7 @@ def _hav_seconds(a, b):
     dlat, dlng = lat2 - lat1, lng2 - lng1
     h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
     dist = 6_371_000 * 2 * math.atan2(math.sqrt(h), math.sqrt(1 - h))
-    return dist * 1.4 / 15.6   # 1.4× road factor, 35 mph
+    return dist * 1.3 / 17.88   # 1.3× road factor, 40 mph (matches dispatch.py)
 
 
 def _haversine_matrix(locations):

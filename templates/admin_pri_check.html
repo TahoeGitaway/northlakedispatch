@@ -131,6 +131,43 @@ async function clearAllOwnerNextDismissed() {
   load();
 }
 
+// ── Snooze (temporary, 1 week — page-only, separate from the red banner ✕) ──
+let _snoozedKeys = new Set();  // loaded from server on each page load
+
+async function _snoozeCard(key, cardEl, badgeId) {
+  _snoozedKeys.add(key);
+  cardEl.style.transition = "opacity 0.25s";
+  cardEl.style.opacity    = "0";
+  setTimeout(() => cardEl.remove(), 260);
+  const badge = document.getElementById(badgeId);
+  if (badge) {
+    const count = [..._snoozedKeys].filter(k => badgeId.includes("ownerNext") ? k.endsWith("::on") : !k.endsWith("::on")).length;
+    badge.textContent = count + " snoozed";
+  }
+  await fetch("/admin/pri-snooze", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ key }),
+  });
+}
+
+function snoozeVacancy(key, cardEl)   { _snoozeCard(key, cardEl, "vacancySnoozedBadge"); }
+function snoozeOwnerNext(key, cardEl) { _snoozeCard(key, cardEl, "ownerNextSnoozedBadge"); }
+
+async function clearAllSnoozed() {
+  await fetch("/admin/pri-snoozes/clear", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ type: "vacancy" }),
+  });
+  load();
+}
+async function clearAllOwnerNextSnoozed() {
+  await fetch("/admin/pri-snoozes/clear", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ type: "owner_next" }),
+  });
+  load();
+}
+
 
 function runScan() { load(); }
 function reload()  { load(); }
@@ -201,15 +238,25 @@ function redCard(p) {
         ${vacLine}
         <div style="font-size:0.75rem;font-weight:500;color:#ef4444;margin-top:4px;">Add "owner next" tag in Breezeway on the incoming reservation</div>
       </div>
-      <button class="dismiss-btn" data-key="${key}"
-              style="flex-shrink:0;font-size:0.7rem;font-weight:600;color:#991b1b;
-                     background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;
-                     padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
-        ✓ Done
-      </button>
+      <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
+        <button class="dismiss-btn" data-key="${key}"
+                style="font-size:0.7rem;font-weight:600;color:#991b1b;
+                       background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;
+                       padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
+          ✓ Done
+        </button>
+        <button class="snooze-btn" data-key="${key}"
+                title="Hide for 1 week, then re-check — in case the reservation changes"
+                style="font-size:0.7rem;font-weight:600;color:#3730a3;
+                       background:#e0e7ff;border:1px solid #a5b4fc;border-radius:6px;
+                       padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
+          💤 1 wk
+        </button>
+      </div>
     </div>
   `);
   card.querySelector(".dismiss-btn").addEventListener("click", () => dismissOwnerNext(key, card));
+  card.querySelector(".snooze-btn").addEventListener("click", () => snoozeOwnerNext(key, card));
   return card;
 }
 
@@ -225,15 +272,25 @@ function orangeCard(p) {
         <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">Guest out <strong>${co}</strong> · no upcoming booking found</div>
         ${vacLine}
       </div>
-      <button class="dismiss-btn" data-key="${key}"
-              style="flex-shrink:0;font-size:0.7rem;font-weight:600;color:#92400e;
-                     background:#fde68a;border:1px solid #f59e0b;border-radius:6px;
-                     padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
-        ✓ Done
-      </button>
+      <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
+        <button class="dismiss-btn" data-key="${key}"
+                style="font-size:0.7rem;font-weight:600;color:#92400e;
+                       background:#fde68a;border:1px solid #f59e0b;border-radius:6px;
+                       padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
+          ✓ Done
+        </button>
+        <button class="snooze-btn" data-key="${key}"
+                title="Hide for 1 week, then re-check — in case the reservation changes"
+                style="font-size:0.7rem;font-weight:600;color:#3730a3;
+                       background:#e0e7ff;border:1px solid #a5b4fc;border-radius:6px;
+                       padding:3px 10px;cursor:pointer;white-space:nowrap;line-height:1.6;">
+          💤 1 wk
+        </button>
+      </div>
     </div>
   `);
   card.querySelector(".dismiss-btn").addEventListener("click", () => dismissVacancy(key, card));
+  card.querySelector(".snooze-btn").addEventListener("click", () => snoozeVacancy(key, card));
   return card;
 }
 
@@ -264,11 +321,12 @@ async function load() {
     if (startV) params.set("start_date", startV);
     if (endV)   params.set("end_date", endV);
 
-    const [res, dismissRes] = await Promise.all([
+    const [res, dismissRes, snoozeRes] = await Promise.all([
       fetch(`/briefing/pri-check?${params.toString()}`),
       fetch("/admin/pri-dismissals"),
+      fetch("/admin/pri-snoozes"),
     ]);
-    const [rawBody, dismissRaw] = await Promise.all([res.text(), dismissRes.text()]);
+    const [rawBody, dismissRaw, snoozeRaw] = await Promise.all([res.text(), dismissRes.text(), snoozeRes.text()]);
     document.getElementById("loading").classList.add("hidden");
 
     let data;
@@ -291,6 +349,10 @@ async function load() {
     try { dismissData = JSON.parse(dismissRaw); } catch (_) { dismissData = {}; }
     _dismissedKeys = new Set(dismissData.keys || []);
 
+    let snoozeData = {};
+    try { snoozeData = JSON.parse(snoozeRaw); } catch (_) { snoozeData = {}; }
+    _snoozedKeys = new Set(snoozeData.keys || []);
+
     if (data.error) {
       document.getElementById("errorBox").textContent = data.error;
       document.getElementById("errorBox").classList.remove("hidden");
@@ -301,11 +363,16 @@ async function load() {
     const done      = data.already_tagged || [];
     const allVacant = data.no_booking     || [];
 
-    // Filter dismissed items (keys stored in DB, shared across all users)
-    const needs  = allNeeds.filter(p => !_dismissedKeys.has(_ownerNextKey(p)));
-    const vacant = allVacant.filter(p => !_dismissedKeys.has(_vacancyKey(p)));
-    const hiddenCt     = allVacant.length - vacant.length;
-    const hiddenOnCt   = allNeeds.length  - needs.length;
+    // Hide permanently-dismissed first (✓ Done), then 1-week snoozes (💤) —
+    // counted separately so the "dismissed" / "snoozed" notes stay accurate.
+    const needsND  = allNeeds.filter(p => !_dismissedKeys.has(_ownerNextKey(p)));
+    const needs    = needsND.filter(p => !_snoozedKeys.has(_ownerNextKey(p)));
+    const vacantND = allVacant.filter(p => !_dismissedKeys.has(_vacancyKey(p)));
+    const vacant   = vacantND.filter(p => !_snoozedKeys.has(_vacancyKey(p)));
+    const hiddenOnCt   = allNeeds.length  - needsND.length;   // dismissed owner-next
+    const hiddenCt     = allVacant.length - vacantND.length;  // dismissed vacancy
+    const snoozedOnCt  = needsND.length   - needs.length;     // snoozed owner-next
+    const snoozedVacCt = vacantND.length  - vacant.length;    // snoozed vacancy
 
     const total = allNeeds.length + done.length + allVacant.length;
 
@@ -333,6 +400,16 @@ async function load() {
           </button>`;
         resultsEl.appendChild(note);
       }
+      if (snoozedOnCt > 0) {
+        const note = document.createElement("div");
+        note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-top:-2px;margin-bottom:14px;";
+        note.innerHTML = `💤 <span id="ownerNextSnoozedBadge">${snoozedOnCt} snoozed</span> (1 wk) ·
+          <button onclick="clearAllOwnerNextSnoozed()"
+                  style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
+            Show all
+          </button>`;
+        resultsEl.appendChild(note);
+      }
       if (s2) {
         resultsEl.appendChild(s2);
         if (hiddenCt > 0) {
@@ -351,6 +428,16 @@ async function load() {
         note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-bottom:14px;";
         note.innerHTML = `${hiddenCt} no-booking flag${hiddenCt === 1 ? "" : "s"} dismissed ·
           <button onclick="clearAllDismissed()"
+                  style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
+            Show all
+          </button>`;
+        resultsEl.appendChild(note);
+      }
+      if (snoozedVacCt > 0) {
+        const note = document.createElement("div");
+        note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-top:-2px;margin-bottom:14px;";
+        note.innerHTML = `💤 <span id="vacancySnoozedBadge">${snoozedVacCt} snoozed</span> (1 wk) ·
+          <button onclick="clearAllSnoozed()"
                   style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
             Show all
           </button>`;
