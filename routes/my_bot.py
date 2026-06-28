@@ -130,15 +130,69 @@ def _get_asana_workspace():
 # Activities" (an arrival) or "Post Lease Carpet Clean" (a departure) and sit
 # under a parent task named for the house. She restamps each title to
 #   "<M/D> <Arrival|Dept> - <House> - <original task name>"
-# and resets the task's due date to that same date. Pre → arrival (parent's
-# start date); Post → departure (parent's due date).
+# and resets the task's due date to that same date. Pre → arrival, Post →
+# departure, where both dates are parsed from the parent task's NAME (its Asana
+# date fields are unreliable — see _lease_dates_from_parent_name).
 
 _PRE_RE   = re.compile(r"\bpre\b",  re.IGNORECASE)
 _POST_RE  = re.compile(r"\bpost\b", re.IGNORECASE)
-_MD_RE    = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
 # Leading "Operations- " / "Operations -" / "Operations:" boilerplate she
 # doesn't want in the restamped title.
 _OPS_RE   = re.compile(r"^\s*operations\s*[-–:]\s*", re.IGNORECASE)
+# A segment that is only digits / slashes / dots / dashes — i.e. a date or
+# date-range like "11-25-4/25/27" that leads some parent task names.
+_DATEISH_RE = re.compile(r"^[\d/.\-]+$")
+
+
+# Lease date range that LEADS a parent task name, e.g. "11/25-4/25/27 - ...".
+# The arrival (first) date carries no year; the departure (second) date does.
+# NOTE: the parent's Asana due_on field is the security-DEPOSIT return date, not
+# the move-out — so the real lease dates can ONLY be read from the name here.
+_LEASE_RANGE_RE = re.compile(
+    r"(\d{1,2})/(\d{1,2})\s*-\s*(\d{1,2})/(\d{1,2})/(\d{2,4})")
+
+
+def _lease_dates_from_parent_name(pname):
+    """Extract (arrival_iso, departure_iso) from a parent lease name.
+
+    The departure date supplies the year; the arrival year is inferred from it,
+    rolling back one year when the arrival month/day falls after the departure's
+    (the lease spanned a New Year). Returns (None, None) if no range is found.
+    """
+    m = _LEASE_RANGE_RE.search(pname or "")
+    if not m:
+        return None, None
+    arr_m, arr_d, dep_m, dep_d, dep_y = (int(x) for x in m.groups())
+    if dep_y < 100:
+        dep_y += 2000
+    arr_y = dep_y if (arr_m, arr_d) <= (dep_m, dep_d) else dep_y - 1
+    try:
+        arr = f"{arr_y:04d}-{arr_m:02d}-{arr_d:02d}"
+        dep = f"{dep_y:04d}-{dep_m:02d}-{dep_d:02d}"
+    except Exception:
+        return None, None
+    return arr, dep
+
+
+def _clean_house_name(raw):
+    """Pull the short house name out of a long parent task name.
+
+    Parent names carry a lot of junk, e.g.
+        "11-25-4/25/27 - Renegade TD -(Jivapongse) - 11059 Zermatt Dr. - (Mitch)"
+    but the house is just "Renegade TD". Drop any leading date/date-range
+    segment, take the first real segment, and cut off the owner/manager/address
+    tail that begins at a parenthesis.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    parts = [p.strip() for p in raw.split(" - ") if p.strip()]
+    while parts and _DATEISH_RE.match(parts[0].replace(" ", "")):
+        parts.pop(0)
+    house = parts[0] if parts else raw
+    house = re.split(r"\s*[-–]?\s*\(", house, maxsplit=1)[0]  # cut at "(" / " -("
+    house = house.strip(" -–\t")
+    return house or raw
 # A title we already stamped, so re-runs don't nest the prefix:
 #   "6/28 Dept - Solstice Ridge - Post Lease Activities"
 _STAMP_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}\s+(?:Arrival|Dept)\s+-\s+.+?\s+-\s+",
@@ -172,28 +226,6 @@ def _strip_stamp(name):
     re-stamping a task doesn't nest the prefix."""
     return _STAMP_RE.sub("", name or "").strip()
 
-
-def _dates_from_text(text, today_iso):
-    """Pull M/D or M/D/YY dates out of free text → list of ISO date strings.
-    Two-digit years are 2000-based; a bare M/D infers its year from today and
-    rolls to next year when the date is well in the past (year-boundary)."""
-    try:
-        ty, tm, td = (int(x) for x in (today_iso or "").split("-"))
-    except Exception:
-        ty = tm = td = None
-    out = []
-    for mo, da, yr in _MD_RE.findall(text or ""):
-        mo, da = int(mo), int(da)
-        if yr:
-            y = int(yr) + (2000 if int(yr) < 100 else 0)
-        elif ty is not None:
-            y = ty
-            if (mo, da) < (tm, td) and (tm - mo) > 6:
-                y += 1
-        else:
-            continue
-        out.append(f"{y:04d}-{mo:02d}-{da:02d}")
-    return out
 
 
 def _fetch_my_tasks_raw(filter_val="incomplete", project_filter=None):
@@ -720,7 +752,7 @@ def my_bot_chat():
         for t in tasks:
             name   = t.get("name", "") or ""
             parent = t.get("parent") or {}
-            house  = (parent.get("name") or "").strip()
+            house  = _clean_house_name(parent.get("name"))
             if pf and pf not in house.lower() and pf not in name.lower():
                 continue
             kind = _detect_lease_kind(name)
@@ -730,16 +762,13 @@ def my_bot_chat():
             if not house:
                 skipped.append((name, "no parent (house) task"))
                 continue
-            # Date source: prefer the parent's Asana date field, fall back to a
-            # date written into the parent's name.
-            iso = (parent.get("start_on") if kind == "pre" else parent.get("due_on")) or None
-            if not iso:
-                found = _dates_from_text(parent.get("name", ""), today_iso)
-                if found:
-                    iso = found[0] if kind == "pre" else found[-1]
+            # Date source: the REAL lease dates live in the parent's NAME, not its
+            # date fields (start_on is empty; due_on is the deposit-return date).
+            arr_iso, dep_iso = _lease_dates_from_parent_name(parent.get("name", ""))
+            iso = arr_iso if kind == "pre" else dep_iso
             if not iso:
                 which = "arrival" if kind == "pre" else "departure"
-                skipped.append((name, f"no {which} date on parent '{house}'"))
+                skipped.append((name, f"no {which} date found in parent name '{house}'"))
                 continue
             md = _iso_to_md(iso)
             if not md:

@@ -31,12 +31,19 @@ def _match_local_property_scored(bw_name: str, db_props: dict):
     db_props: {lower_name: row_dict}.
 
     Returns (row_or_None, score, tier) where tier is one of
-    exact / substring / keyword / fuzzy / none, and score is a 0..1
+    exact / substring / keyword / none, and score is a 0..1
     character-level similarity used to flag low-confidence matches so the
     user can confirm or reject them (a Breezeway home not yet in the system
     otherwise silently matches the closest wrong house).
+
+    There is deliberately NO character-similarity ("fuzzy") tier. It matched
+    on shared text rather than the house name — e.g. "Front and Center at
+    Olympic Valley" scored >0.72 against "Crown Peak at Olympic Valley" purely
+    on the shared " at Olympic Valley" suffix and was applied as the wrong
+    house. Per the strict-matching rule we prefer "not found" (add the home to
+    the DB) over any silent wrong guess.
     """
-    from difflib import SequenceMatcher, get_close_matches
+    from difflib import SequenceMatcher
     if not bw_name:
         return None, 0.0, "none"
     key = bw_name.lower().strip()
@@ -52,11 +59,8 @@ def _match_local_property_scored(bw_name: str, db_props: dict):
     for dk, row in db_props.items():
         if kwords and kwords.issubset(set(dk.split())):
             return row, SequenceMatcher(None, key, dk).ratio(), "keyword"
-    # Fuzzy — cutoff raised so near-misses like "Venture In" vs "Adventure Lodge"
-    # (~0.64) no longer register as a match at all.
-    hits = get_close_matches(key, list(db_props.keys()), n=1, cutoff=0.72)
-    if hits:
-        return db_props[hits[0]], SequenceMatcher(None, key, hits[0]).ratio(), "fuzzy"
+    # No fuzzy fallback — see the docstring. An unrecognized name is "not found",
+    # never the closest-looking wrong house.
     return None, 0.0, "none"
 
 
@@ -1129,8 +1133,10 @@ def bw_import():
     cur.close(); conn.close()
     db_props = {r["Property Name"].lower().strip(): dict(r) for r in rows}
 
-    # Fetch same-day check-ins; match to local DB property names via fuzzy matching
-    # (ID-based matching is unreliable across Breezeway API endpoints)
+    # Fetch same-day check-ins; match to local DB property names by name
+    # (ID-based matching is unreliable across Breezeway API endpoints).
+    # Name matching is strict (exact/word-substring/keyword only) — an
+    # unrecognized home is left unmatched rather than guessed.
     from routes.briefing import (
         _fetch_breezeway_checkins, _classify_reservation, _get_property_name
     )
