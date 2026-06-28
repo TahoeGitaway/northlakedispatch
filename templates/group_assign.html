@@ -58,7 +58,135 @@
 
   <!-- Results -->
   <div id="results" class="space-y-5"></div>
+
+  <!-- ── Assignment candidates (allow-list) ───────────────────────── -->
+  <div class="mt-10 border-t border-gray-200 pt-5">
+    <button type="button" onclick="toggleCandidates()"
+            class="flex items-center gap-2 text-sm font-semibold text-gray-600 hover:text-gray-900">
+      <span id="candCaret">▸</span> Assignment candidates
+      <span id="candCount" class="text-xs font-normal text-gray-400"></span>
+    </button>
+    <div id="candPanel" class="hidden mt-3 max-w-2xl">
+      <p class="text-xs text-gray-400 mb-3">
+        The only people the batcher will assign tasks to. Remove someone when they leave; add them when hired.
+        Full names (with last name) come from the Breezeway roster automatically; a duplicate first name is
+        flagged ⚠ so you can pick the right person.
+        <span class="text-rose-500">Derek and Christy are permanently blocked and can't be added.</span>
+      </p>
+      <div id="candList" class="flex flex-wrap gap-2 mb-3"></div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <input id="candInput" list="candAddable" placeholder="Add full name…"
+               class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 outline-none"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();addCandidate();}">
+        <datalist id="candAddable"></datalist>
+        <button onclick="addCandidate()"
+                class="px-3 py-1.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+          Add
+        </button>
+        <span id="candMsg" class="text-xs"></span>
+      </div>
+    </div>
+  </div>
 </div>
+
+<script>
+// ── Assignment-candidate allow-list management ───────────────────
+function toggleCandidates() {
+  const p = document.getElementById('candPanel');
+  const open = p.classList.contains('hidden');
+  p.classList.toggle('hidden');
+  document.getElementById('candCaret').textContent = open ? '▾' : '▸';
+  if (open) loadCandidates();
+}
+
+async function loadCandidates() {
+  try {
+    const r = await fetch('/admin/group-assign/candidates');
+    const d = await r.json();
+    renderCandidates(d.candidates || [], d.addable || []);
+  } catch (e) {
+    document.getElementById('candList').innerHTML =
+      `<span class="text-xs text-red-600">Couldn't load candidates: ${e.message}</span>`;
+  }
+}
+
+function renderCandidates(candidates, addable) {
+  document.getElementById('candCount').textContent = `(${candidates.length})`;
+  const list = document.getElementById('candList');
+  list.innerHTML = '';
+  if (!candidates.length) {
+    list.innerHTML = `<span class="text-xs text-gray-400 italic">No candidates — nobody can be assigned.</span>`;
+  }
+  candidates.forEach(c => {
+    // c: {name, display, ambiguous, options?}
+    const name    = c.name;
+    const display = c.display || c.name;
+    const amb     = c.ambiguous;
+    const chip = document.createElement('span');
+    chip.className = amb
+      ? 'inline-flex items-center gap-1.5 pl-3 pr-1.5 py-1 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-sm'
+      : 'inline-flex items-center gap-1.5 pl-3 pr-1.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm';
+    chip.innerHTML = amb
+      ? `<span>⚠ ${display}</span>`
+      : `<span>${display}</span>`;
+    if (amb && c.options) {
+      chip.title = `Multiple people named "${display}": ${c.options.join(', ')}. `
+                 + `Add the right full name above, then remove this one.`;
+    }
+    const x = document.createElement('button');
+    x.textContent = '×';
+    x.title = `Remove ${display}`;
+    x.className = (amb ? 'text-amber-600 hover:bg-amber-200' : 'text-indigo-500 hover:bg-indigo-200')
+                + ' w-4 h-4 flex items-center justify-center rounded-full hover:text-gray-900 leading-none';
+    x.onclick = () => removeCandidate(name);
+    chip.appendChild(x);
+    list.appendChild(chip);
+  });
+  const dl = document.getElementById('candAddable');
+  dl.innerHTML = '';
+  (addable || []).forEach(n => {
+    const o = document.createElement('option'); o.value = n; dl.appendChild(o);
+  });
+}
+
+function _candMsg(text, ok) {
+  const m = document.getElementById('candMsg');
+  m.textContent = text;
+  m.className = 'text-xs ' + (ok ? 'text-emerald-600' : 'text-red-600');
+  if (text) setTimeout(() => { if (m.textContent === text) m.textContent = ''; }, 4000);
+}
+
+async function addCandidate() {
+  const inp = document.getElementById('candInput');
+  const name = (inp.value || '').trim();
+  if (!name) return;
+  try {
+    const r = await fetch('/admin/group-assign/candidates/add', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name }),
+    });
+    const d = await r.json();
+    if (!r.ok) { _candMsg(d.error || 'Could not add.', false); return; }
+    inp.value = '';
+    _candMsg(`Added ${name}. Rescan to refresh the dropdown.`, true);
+    loadCandidates();
+  } catch (e) { _candMsg(e.message, false); }
+}
+
+async function removeCandidate(name) {
+  if (!confirm(`Remove ${name} from assignment candidates? They can no longer be assigned tasks here.`)) return;
+  try {
+    const r = await fetch('/admin/group-assign/candidates/remove', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name }),
+    });
+    const d = await r.json();
+    if (!r.ok) { _candMsg(d.error || 'Could not remove.', false); return; }
+    _candMsg(`Removed ${name}. Rescan to refresh the dropdown.`, true);
+    loadCandidates();
+  } catch (e) { _candMsg(e.message, false); }
+}
+</script>
 
 <!-- Sticky action bar -->
 <div id="actionBar" class="hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40">

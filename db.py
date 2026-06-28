@@ -256,6 +256,32 @@ def init_db():
         created_at  TEXT NOT NULL
     )""")
 
+    # Group-batcher assignment allow-list: the ONLY people the batcher may assign
+    # tasks to. Editable from the group-assign page (people leave / get hired).
+    cur.execute("""CREATE TABLE IF NOT EXISTS assignment_candidates (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT NOT NULL,
+        name_key    TEXT NOT NULL UNIQUE,
+        created_at  TEXT NOT NULL,
+        created_by  INTEGER REFERENCES users(id)
+    )""")
+    # Seed the initial roster ONCE (only when the table is completely empty, so
+    # later removals aren't undone on every restart).
+    cur.execute("SELECT COUNT(*) AS n FROM assignment_candidates")
+    if (cur.fetchone() or {}).get("n", 0) == 0:
+        # First names auto-upgrade to the full Breezeway name on first load of the
+        # candidates panel (unique first name → its full name; duplicates get
+        # flagged to pick). Jeremy is set explicitly since there may be more than one.
+        _seed = ["Jeremy Neifert", "Sean", "Andy", "Chris", "Calder", "Jonah",
+                 "Irving", "Julie", "Trevor", "Drew", "Alec", "Steve"]
+        _now = datetime.utcnow().isoformat()
+        for _nm in _seed:
+            cur.execute(
+                "INSERT INTO assignment_candidates (name, name_key, created_at) "
+                "VALUES (%s, %s, %s) ON CONFLICT (name_key) DO NOTHING",
+                (_nm, _nm.lower().strip(), _now),
+            )
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")

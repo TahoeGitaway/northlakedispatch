@@ -47,6 +47,47 @@ _SCAN_TTL            = 60
 # Staff roster cache (fetched on every scan otherwise).
 _people_cache: dict  = {"ts": 0.0, "data": []}
 
+# People who must NEVER be assignable from the batcher. The Task API was seen
+# auto-assigning a task to Derek — which can never validly happen — so these
+# names are filtered out of the roster the assign / saved-view dropdowns are
+# built from. Matched case-insensitively against any token of the person's name.
+_BLOCKED_ASSIGNEE_NAMES = {"derek", "christy"}
+
+
+def _is_blocked_assignee(name: str) -> bool:
+    toks = (name or "").lower().replace(",", " ").split()
+    return any(t in _BLOCKED_ASSIGNEE_NAMES for t in toks)
+
+
+def _candidate_names() -> list:
+    """The editable assignment allow-list (display names), alphabetical."""
+    from db import get_db, get_cursor
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("SELECT name FROM assignment_candidates ORDER BY LOWER(name)")
+        return [r["name"] for r in cur.fetchall()]
+    finally:
+        cur.close(); conn.rollback(); conn.close()
+
+
+def _candidate_keys() -> set:
+    """Lowercased name tokens the batcher is allowed to assign to."""
+    return {n.lower().strip() for n in _candidate_names()}
+
+
+def _is_candidate(name: str, keys: set = None) -> bool:
+    """A Breezeway person is an allowed target if ANY token of their name (or
+    their full name) is on the allow-list — the grid uses first names, so
+    'Jeremy Garcia' matches the candidate 'Jeremy'. Blocked names never pass."""
+    if _is_blocked_assignee(name):
+        return False
+    if keys is None:
+        keys = _candidate_keys()
+    nl = (name or "").lower().strip()
+    if nl in keys:
+        return True
+    return any(t in keys for t in nl.replace(",", " ").split())
+
 
 def _get_token():
     from routes.briefing import _get_breezeway_token
@@ -136,7 +177,7 @@ def _fetch_people(token: str) -> list:
             name = (p.get("name") or
                     f"{p.get('first_name','').strip()} {p.get('last_name','').strip()}".strip() or
                     p.get("email") or str(pid))
-            if pid is not None:
+            if pid is not None and not _is_blocked_assignee(name):
                 people.append({"id": pid, "name": name})
         if len(items) < 200:
             break
@@ -322,10 +363,16 @@ def _scan_inner():
                                                   (x["name"] or "").lower()))
         groups_out.append({"group": g, "tasks": tasks})
 
+    # Dropdown shows ONLY allow-listed candidates (people leave / get hired —
+    # managed from the panel at the bottom of the page). This is the guard that
+    # keeps tasks from being assigned to anyone off the approved roster.
+    cand_keys = _candidate_keys()
+    people = [p for p in _fetch_people(token) if _is_candidate(p["name"], cand_keys)]
+
     checkins.sort(key=lambda x: ((x["property"] or "").lower(), (x["name"] or "").lower()))
     result = {
         "date":        date_str,
-        "people":      _fetch_people(token),
+        "people":      people,
         "checkins":    checkins,
         "groups":      groups_out,
         "total_tasks": len(checkins) + sum(len(b["tasks"]) for b in groups_out),
@@ -359,6 +406,18 @@ def group_assign_apply():
         return jsonify({"error": "Pick a person to assign to."}), 400
     if not task_ids:
         return jsonify({"error": "No tasks selected."}), 400
+
+    # SAFETY CHECK — never assign to anyone off the approved allow-list, even if a
+    # stale/tampered dropdown sends an id that isn't a candidate. Resolve the id to
+    # a name against the live roster and confirm it's allowed before writing.
+    roster = _fetch_people(token)  # already excludes hard-blocked names
+    target = next((p for p in roster if p["id"] == assignee_id), None)
+    if target is None:
+        return jsonify({"error": "Could not verify that person against the Breezeway roster — "
+                                 "refusing to assign. Rescan and try again."}), 400
+    if not _is_candidate(target["name"]):
+        return jsonify({"error": f"“{target['name']}” is not an approved assignment candidate — "
+                                 "blocked. Add them in the candidates panel first if this is intended."}), 403
 
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
 
@@ -403,6 +462,120 @@ def group_assign_apply():
         "ok_count":   sum(1 for x in results if x["ok"]),
         "fail_count": sum(1 for x in results if not x["ok"]),
     })
+
+
+# ── Assignment candidates (allow-list) management ─────────────────
+
+def _resolve_and_persist_candidates(roster: list) -> list:
+    """Upgrade bare first-name candidates to the FULL Breezeway name when exactly
+    one active person has that first name (so the allow-list carries last names and
+    can tell two people apart). Returns [{name, display, ambiguous, options?}].
+    Duplicates are left as-is and flagged so she can pick the right full name."""
+    from db import get_db, get_cursor
+    by_first = {}
+    for p in roster:
+        toks = (p.get("name") or "").split()
+        if toks:
+            by_first.setdefault(toks[0].lower(), []).append(p["name"])
+
+    out, upgrades = [], []
+    for nm in _candidate_names():
+        s = nm.strip()
+        if " " in s:                              # already a full name
+            out.append({"name": nm, "display": nm, "ambiguous": False})
+            continue
+        matches = by_first.get(s.lower(), [])
+        if len(matches) == 1:                     # unique first name → upgrade
+            full = matches[0]
+            out.append({"name": full, "display": full, "ambiguous": False})
+            upgrades.append((s.lower(), full))
+        elif len(matches) > 1:                    # duplicate first name → make her pick
+            out.append({"name": nm, "display": nm, "ambiguous": True, "options": matches})
+        else:                                     # not currently in the roster
+            out.append({"name": nm, "display": nm, "ambiguous": False})
+
+    if upgrades:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            for oldkey, full in upgrades:
+                cur.execute("SELECT 1 FROM assignment_candidates WHERE name_key=%s",
+                            (full.lower().strip(),))
+                if cur.fetchone():                # full name already present → drop the bare dup
+                    cur.execute("DELETE FROM assignment_candidates WHERE name_key=%s", (oldkey,))
+                else:
+                    cur.execute("UPDATE assignment_candidates SET name=%s, name_key=%s WHERE name_key=%s",
+                                (full, full.lower().strip(), oldkey))
+            conn.commit()
+        finally:
+            cur.close(); conn.close()
+    return out
+
+
+@group_assign_bp.route("/admin/group-assign/candidates", methods=["GET"])
+@login_required
+@admin_required
+def group_assign_candidates():
+    """Allow-list (resolved to full names) + roster full names not yet on it."""
+    token  = _get_token()
+    roster = _fetch_people(token) if token else []   # already excludes hard-blocked names
+    resolved = _resolve_and_persist_candidates(roster)
+
+    # Hide a roster person from "add" only on an EXACT full-name match, so a bare
+    # ambiguous candidate (e.g. "Chris") doesn't block adding the specific person.
+    full_keys = {(c["name"] or "").lower().strip() for c in resolved}
+    addable, seen = [], set()
+    for p in roster:
+        nl = (p["name"] or "").lower().strip()
+        if not nl or nl in full_keys or nl in seen:
+            continue
+        seen.add(nl)
+        addable.append(p["name"])
+    addable.sort(key=str.lower)
+    return jsonify({"candidates": resolved, "addable": addable})
+
+
+@group_assign_bp.route("/admin/group-assign/candidates/add", methods=["POST"])
+@login_required
+@admin_required
+def group_assign_candidates_add():
+    from db import get_db, get_cursor
+    from datetime import datetime
+    from flask_login import current_user
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Enter a name."}), 400
+    if _is_blocked_assignee(name):
+        return jsonify({"error": f"“{name}” is hard-blocked and can't be a candidate."}), 400
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute(
+            "INSERT INTO assignment_candidates (name, name_key, created_at, created_by) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT (name_key) DO NOTHING",
+            (name, name.lower().strip(), datetime.utcnow().isoformat(), current_user.id),
+        )
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    _scan_cache.clear()   # dropdown is rebuilt from candidates on next scan
+    return jsonify({"ok": True, "candidates": _candidate_names()})
+
+
+@group_assign_bp.route("/admin/group-assign/candidates/remove", methods=["POST"])
+@login_required
+@admin_required
+def group_assign_candidates_remove():
+    from db import get_db, get_cursor
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name required."}), 400
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("DELETE FROM assignment_candidates WHERE name_key = %s", (name.lower().strip(),))
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    _scan_cache.clear()
+    return jsonify({"ok": True, "candidates": _candidate_names()})
 
 
 @group_assign_bp.route("/admin/group-assign/change-date", methods=["POST"])
