@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}Off-List Assignee Monitor — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-6">
+
+  <div class="mb-4">
+    <h2 class="text-xl font-bold text-gray-800">Off-List Assignee Monitor</h2>
+    <p class="text-xs text-gray-400 mt-0.5">
+      Scans the selected day's Breezeway tasks and flags any assigned to someone <strong>not on the assignment allow-list</strong> — no matter who or what assigned them.
+    </p>
+  </div>
+
+  <div class="rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 mb-5 text-xs text-rose-900 space-y-1.5 leading-relaxed">
+    <div class="font-semibold text-rose-800 flex items-center gap-2"><span>🛡️</span> What this catches</div>
+    <ul class="space-y-1.5 text-rose-800 list-none pl-1">
+      <li class="flex gap-2"><span class="shrink-0">•</span><span>A task assigned to anyone not on the allow-list (managed on the Assign-by-Group page) — including the Task API assigning someone like Derek directly in Breezeway.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Cleaning, housekeeping &amp; vendor departments are excluded</strong> (they use other rosters). Tune that list below using the department breakdown.</span></li>
+    </ul>
+  </div>
+
+  <div class="flex items-center gap-3 mb-5 flex-wrap">
+    <label class="text-gray-500 font-medium text-sm">Day</label>
+    <input type="date" id="theDate"
+           class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-rose-300 outline-none">
+    <button onclick="runScan()"
+            class="px-4 py-1.5 bg-rose-600 text-white text-sm font-semibold rounded-lg hover:bg-rose-700 transition-colors">
+      Scan
+    </button>
+    <span id="subtitle" class="text-xs text-gray-400"></span>
+  </div>
+
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-rose-300 border-t-rose-500 rounded-full animate-spin"></div>
+    <span>Sweeping Breezeway tasks…</span>
+  </div>
+
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
+       style="background:#fef2f2;border:1px solid #fecaca;"></div>
+
+  <div id="results" class="hidden space-y-3 mb-6"></div>
+
+  <!-- Department breakdown + ignore-list -->
+  <div id="deptArea" class="hidden mt-8 border-t border-gray-200 pt-5">
+    <button type="button" onclick="toggleDepts()"
+            class="flex items-center gap-2 text-sm font-semibold text-gray-600 hover:text-gray-900">
+      <span id="deptCaret">▸</span> Departments &amp; what's excluded
+    </button>
+    <div id="deptPanel" class="hidden mt-3">
+      <p class="text-xs text-gray-400 mb-3">
+        Tasks in a department whose name contains an ignored keyword are skipped. Add your vendor
+        departments (carpets, hot tub, etc.) here so they don't show as violations.
+      </p>
+      <div class="flex items-center gap-2 flex-wrap mb-4">
+        <input id="kwInput" placeholder="Ignore keyword (e.g. carpet)…"
+               class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-rose-300 outline-none"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();addKeyword();}">
+        <button onclick="addKeyword()"
+                class="px-3 py-1.5 bg-gray-700 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 transition-colors">Add</button>
+        <span id="kwMsg" class="text-xs"></span>
+      </div>
+      <div id="ignoredList" class="flex flex-wrap gap-2 mb-4"></div>
+      <div id="deptBreakdown" class="text-xs"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let LAST = null;
+
+function _isoDate(d){ return d.toISOString().slice(0,10); }
+function _fmtDate(ds){ if(!ds) return '—'; return new Date(ds+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function esc(s){ const d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
+
+function runScan(){ load(); }
+
+async function load(){
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('results').classList.add('hidden');
+  document.getElementById('deptArea').classList.add('hidden');
+  document.getElementById('subtitle').textContent = '';
+
+  try {
+    const dv = document.getElementById('theDate').value;
+    const r = await fetch('/admin/assignee-monitor/scan', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ date: dv }),
+    });
+    const raw = await r.text();
+    document.getElementById('loading').classList.add('hidden');
+
+    let data;
+    try { data = JSON.parse(raw); }
+    catch(_) {
+      const eb = document.getElementById('errorBox');
+      eb.innerHTML = `<div style="font-weight:700;margin-bottom:3px;">This isn't broken — the scan took longer than the server waits.</div>`
+        + `<div>It most likely finished in the background — <b>click Scan again</b> and it should load instantly.</div>`;
+      eb.classList.remove('hidden');
+      return;
+    }
+    if (data.error) {
+      document.getElementById('errorBox').textContent = data.error;
+      document.getElementById('errorBox').classList.remove('hidden');
+      return;
+    }
+
+    LAST = data;
+    renderResults(data);
+    renderDeptArea(data);
+  } catch(e){
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('errorBox').textContent = 'Could not scan: ' + e.message;
+    document.getElementById('errorBox').classList.remove('hidden');
+  }
+}
+
+function renderResults(data){
+  const v = data.violations || [];
+  let sub = `${_fmtDate(data.date)} · ${data.checked_tasks} task${data.checked_tasks===1?'':'s'} checked`;
+  if (data.failed_properties) sub += ` · ⚠ ${data.failed_properties} propert${data.failed_properties===1?'y':'ies'} couldn't load (rescan)`;
+  document.getElementById('subtitle').textContent = sub;
+
+  const el = document.getElementById('results');
+  el.innerHTML = '';
+  if (!v.length){
+    el.innerHTML = `<div class="text-center text-emerald-600 text-sm py-10 italic">
+      ✓ No off-list assignees found this day. Everyone assigned is on the allow-list.</div>`;
+  } else {
+    const hd = document.createElement('div');
+    hd.style.cssText = 'font-size:0.8rem;font-weight:800;color:#b91c1c;';
+    hd.textContent = `🚨 ${v.length} task${v.length===1?'':'s'} assigned to someone OFF the allow-list`;
+    el.appendChild(hd);
+    v.forEach(it => {
+      const card = document.createElement('div');
+      card.style.cssText = 'border-radius:10px;padding:13px 16px;border:1px solid #fecaca;background:#fef2f2;';
+      const tm = it.time ? ` · ${esc(it.time)}` : '';
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <div style="min-width:0;">
+            <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${esc(it.property)}</div>
+            <div style="font-size:0.8rem;color:#374151;margin-top:2px;">${esc(it.task)}</div>
+            <div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">dept: ${esc(it.department)}${tm}</div>
+          </div>
+          <div style="flex-shrink:0;text-align:right;font-size:0.75rem;">
+            <div style="font-weight:700;color:#b91c1c;">⚠ ${it.offlist.map(esc).join(', ')}</div>
+            <div style="color:#9ca3af;margin-top:2px;">assigned: ${(it.assignees||[]).map(esc).join(', ') || '—'}</div>
+          </div>
+        </div>`;
+      el.appendChild(card);
+    });
+  }
+  el.classList.remove('hidden');
+}
+
+function renderDeptArea(data){
+  document.getElementById('deptArea').classList.remove('hidden');
+  renderIgnored(data.ignored || []);
+  // department breakdown table
+  const dc = data.dept_counts || {};
+  const rows = Object.keys(dc).sort((a,b)=>(dc[b].checked+dc[b].excluded)-(dc[a].checked+dc[a].excluded));
+  const bd = document.getElementById('deptBreakdown');
+  if (!rows.length){ bd.innerHTML=''; return; }
+  bd.innerHTML = `<div style="font-weight:700;color:#6b7280;margin-bottom:6px;">Departments seen on ${esc(data.date)}</div>`
+    + rows.map(name => {
+        const r = dc[name];
+        const excluded = r.excluded > 0 && r.checked === 0;
+        const tag = excluded ? `<span style="color:#9ca3af;"> (excluded)</span>`
+                  : (r.excluded>0 ? `<span style="color:#9ca3af;"> (${r.excluded} excluded)</span>` : '');
+        return `<div style="display:flex;justify-content:space-between;padding:2px 0;color:${excluded?'#9ca3af':'#374151'};">
+                  <span>${esc(name)}${tag}</span><span>${r.checked + r.excluded}</span>
+                </div>`;
+      }).join('');
+}
+
+function renderIgnored(list){
+  const el = document.getElementById('ignoredList');
+  el.innerHTML = '';
+  if (!list.length){ el.innerHTML = `<span class="text-xs text-gray-400 italic">Nothing excluded — every department is checked.</span>`; }
+  list.forEach(kw => {
+    const chip = document.createElement('span');
+    chip.className = 'inline-flex items-center gap-1.5 pl-3 pr-1.5 py-1 rounded-full bg-gray-100 border border-gray-300 text-gray-700 text-sm';
+    chip.innerHTML = `<span>${esc(kw)}</span>`;
+    const x = document.createElement('button');
+    x.textContent = '×'; x.title = `Stop ignoring "${kw}"`;
+    x.className = 'w-4 h-4 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-300 hover:text-gray-900 leading-none';
+    x.onclick = () => removeKeyword(kw);
+    chip.appendChild(x);
+    el.appendChild(chip);
+  });
+}
+
+function _kwMsg(t, ok){
+  const m = document.getElementById('kwMsg');
+  m.textContent = t; m.className = 'text-xs ' + (ok?'text-emerald-600':'text-red-600');
+  if (t) setTimeout(()=>{ if(m.textContent===t) m.textContent=''; }, 4000);
+}
+
+async function addKeyword(){
+  const inp = document.getElementById('kwInput');
+  const kw = (inp.value||'').trim();
+  if (!kw) return;
+  try {
+    const r = await fetch('/admin/assignee-monitor/ignored-depts/add', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({keyword: kw}),
+    });
+    const d = await r.json();
+    if (!r.ok){ _kwMsg(d.error||'Could not add.', false); return; }
+    inp.value=''; renderIgnored(d.ignored||[]);
+    _kwMsg('Added. Rescan to apply.', true);
+  } catch(e){ _kwMsg(e.message, false); }
+}
+
+async function removeKeyword(kw){
+  try {
+    const r = await fetch('/admin/assignee-monitor/ignored-depts/remove', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({keyword: kw}),
+    });
+    const d = await r.json();
+    if (!r.ok){ _kwMsg(d.error||'Could not remove.', false); return; }
+    renderIgnored(d.ignored||[]);
+    _kwMsg('Removed. Rescan to apply.', true);
+  } catch(e){ _kwMsg(e.message, false); }
+}
+
+function toggleDepts(){
+  const p = document.getElementById('deptPanel');
+  const open = p.classList.contains('hidden');
+  p.classList.toggle('hidden');
+  document.getElementById('deptCaret').textContent = open ? '▾' : '▸';
+}
+
+(function init(){
+  document.getElementById('theDate').value = _isoDate(new Date());
+  load();
+})();
+</script>
+{% endblock %}

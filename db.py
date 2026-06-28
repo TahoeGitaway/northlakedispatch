@@ -282,6 +282,26 @@ def init_db():
                 (_nm, _nm.lower().strip(), _now),
             )
 
+    # Off-list-assignee monitor: department-name keywords to EXCLUDE from the scan
+    # (cleaning + vendor work uses rosters other than the maintenance allow-list, so
+    # those tasks must not flag). Editable from the monitor page. Substring match,
+    # case-insensitive (e.g. "clean" matches "Cleaning", "housekeep" → "Housekeeping").
+    cur.execute("""CREATE TABLE IF NOT EXISTS assignee_monitor_ignored_depts (
+        id          SERIAL PRIMARY KEY,
+        keyword     TEXT NOT NULL UNIQUE,
+        created_at  TEXT NOT NULL,
+        created_by  INTEGER REFERENCES users(id)
+    )""")
+    cur.execute("SELECT COUNT(*) AS n FROM assignee_monitor_ignored_depts")
+    if (cur.fetchone() or {}).get("n", 0) == 0:
+        _now = datetime.utcnow().isoformat()
+        for _kw in ("clean", "housekeep"):
+            cur.execute(
+                "INSERT INTO assignee_monitor_ignored_depts (keyword, created_at) "
+                "VALUES (%s, %s) ON CONFLICT (keyword) DO NOTHING",
+                (_kw, _now),
+            )
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")
