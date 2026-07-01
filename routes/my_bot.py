@@ -144,37 +144,69 @@ _OPS_RE   = re.compile(r"^\s*operations\s*[-–:]\s*", re.IGNORECASE)
 _DATEISH_RE = re.compile(r"^[\d/.\-]+$")
 
 
-# Lease date range that LEADS a parent task name, e.g. "11/25-4/25/27 - ...".
-# The arrival (first) date carries no year; the departure (second) date does.
+# Lease date range that LEADS a parent task name. Two formats seen in the wild:
+#   "11/25-4/25/27 - House …"      arrival has NO year (inferred from departure)
+#   "11/21/26-1/1/2027 - House …"  arrival HAS a year; range can span New Year
+# The arrival year is optional in the pattern; the departure always carries one.
 # NOTE: the parent's Asana due_on field is the security-DEPOSIT return date, not
 # the move-out — so the real lease dates can ONLY be read from the name here.
 _LEASE_RANGE_RE = re.compile(
-    r"(\d{1,2})/(\d{1,2})\s*-\s*(\d{1,2})/(\d{1,2})/(\d{2,4})")
+    r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\s*-\s*(\d{1,2})/(\d{1,2})/(\d{2,4})")
+# The same leading range, for stripping it off the front of a house name
+# regardless of the delimiter spacing that follows ("…2027- Beaufort").
+_LEAD_DATES_RE = re.compile(
+    r"^\s*\d{1,2}/\d{1,2}(?:/\d{2,4})?\s*-\s*\d{1,2}/\d{1,2}/\d{2,4}\s*[-–]?\s*")
+
+
+def _yr(raw):
+    y = int(raw)
+    return y + 2000 if y < 100 else y
+
+
+def _mk_iso(y, mo, da):
+    """Build an ISO date, or None for an impossible one (month 15, day 40, …).
+    Never fabricate a bad date."""
+    try:
+        return date(y, mo, da).isoformat()
+    except ValueError:
+        return None
 
 
 def _lease_dates_from_parent_name(pname):
     """Extract (arrival_iso, departure_iso) from a parent lease name.
 
-    The departure date supplies the year; the arrival year is inferred from it,
-    rolling back one year when the arrival month/day falls after the departure's
-    (the lease spanned a New Year). Returns (None, None) if no range is found.
+    Departure always carries a year. Arrival uses its own year when present;
+    otherwise it is inferred from the departure year, rolling back one year when
+    the arrival month/day falls after the departure's (a lease spanning the New
+    Year). Returns (None, None) if no range is found, or None for either date if
+    it is impossible.
     """
     m = _LEASE_RANGE_RE.search(pname or "")
     if not m:
         return None, None
-    arr_m, arr_d, dep_m, dep_d, dep_y = (int(x) for x in m.groups())
-    if dep_y < 100:
-        dep_y += 2000
-    arr_y = dep_y if (arr_m, arr_d) <= (dep_m, dep_d) else dep_y - 1
+    arr_m, arr_d, arr_y_raw, dep_m, dep_d, dep_y_raw = m.groups()
+    arr_m, arr_d, dep_m, dep_d = int(arr_m), int(arr_d), int(dep_m), int(dep_d)
+    dep_y = _yr(dep_y_raw)
+    if arr_y_raw:
+        arr_y = _yr(arr_y_raw)
+    else:
+        arr_y = dep_y if (arr_m, arr_d) <= (dep_m, dep_d) else dep_y - 1
+    return _mk_iso(arr_y, arr_m, arr_d), _mk_iso(dep_y, dep_m, dep_d)
 
-    def _mk(y, mo, da):
-        # Reject impossible dates (month 15, day 40, …) — never fabricate one.
-        try:
-            return date(y, mo, da).isoformat()
-        except ValueError:
+
+def _normalize_date(s):
+    """Normalize a user-supplied date ('YYYY-MM-DD', 'M/D/YY', 'M/D/YYYY') to ISO,
+    or None if it isn't a valid date."""
+    s = (s or "").strip()
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+    if m:
+        y, mo, da = (int(x) for x in m.groups())
+    else:
+        m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$", s)
+        if not m:
             return None
-
-    return _mk(arr_y, arr_m, arr_d), _mk(dep_y, dep_m, dep_d)
+        mo, da, y = int(m.group(1)), int(m.group(2)), _yr(m.group(3))
+    return _mk_iso(y, mo, da)
 
 
 def _clean_house_name(raw):
@@ -189,6 +221,7 @@ def _clean_house_name(raw):
     raw = (raw or "").strip()
     if not raw:
         return ""
+    raw = _LEAD_DATES_RE.sub("", raw).strip()  # drop a leading lease date-range
     parts = [p.strip() for p in raw.split(" - ") if p.strip()]
     while parts and _DATEISH_RE.match(parts[0].replace(" ", "")):
         parts.pop(0)
@@ -655,6 +688,18 @@ def my_bot_chat():
                         "items": {"type": "string"},
                         "description": "Required when apply=true. The exact task GIDs (from the preview) the user approved. Only these are changed.",
                     },
+                    "date_overrides": {
+                        "type": "array",
+                        "description": "Manual dates for tasks the parser flagged 'NEEDS A DATE'. Each entry forces that task's arrival(Pre)/departure(Post) date.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task_gid": {"type": "string", "description": "Task GID from the preview"},
+                                "date":     {"type": "string", "description": "The date to use — YYYY-MM-DD or M/D/YY"},
+                            },
+                            "required": ["task_gid", "date"],
+                        },
+                    },
                 },
             },
         },
@@ -748,21 +793,35 @@ def my_bot_chat():
                 lines.append(f'  Notes: {t["notes"]}')
         return "\n".join(lines)
 
-    def _exec_stamp(property_name=None, apply=False, today_iso=None, approved_gids=None):
+    def _exec_stamp(property_name=None, apply=False, today_iso=None,
+                    approved_gids=None, date_overrides=None):
         """Restamp lease tasks: rename to '<M/D> <Arrival|Dept> - <House> -
         <original>' and reset the due date. apply=False previews only; apply=True
-        stamps ONLY the task GIDs listed in approved_gids."""
+        stamps ONLY the task GIDs listed in approved_gids. date_overrides supplies
+        a date for tasks whose parent title has no parseable date."""
         tasks, err = _fetch_my_tasks_raw("incomplete", None)
         if err:
             return f"Could not fetch tasks: {err}"
         if not tasks:
             return "No incomplete tasks assigned to you."
 
+        # Manual date overrides: {task_gid: iso}. Bad dates are collected so we can
+        # tell the user their supplied value didn't parse instead of ignoring it.
+        overrides, bad_overrides = {}, []
+        for o in (date_overrides or []):
+            g = str((o or {}).get("task_gid", "")).strip()
+            iso = _normalize_date((o or {}).get("date", ""))
+            if g and iso:
+                overrides[g] = iso
+            elif g:
+                bad_overrides.append((g, (o or {}).get("date", "")))
+
         pf      = (property_name or "").strip().lower()
         plan    = []   # (task, new_name, new_due_iso, old_due)
         skipped = []
         for t in tasks:
             name   = t.get("name", "") or ""
+            gid    = str(t.get("gid") or "")
             parent = t.get("parent") or {}
             house  = _clean_house_name(parent.get("name"))
             if pf and pf not in house.lower() and pf not in name.lower():
@@ -774,13 +833,19 @@ def my_bot_chat():
             if not house:
                 skipped.append((name, "no parent (house) task"))
                 continue
-            # Date source: the REAL lease dates live in the parent's NAME, not its
-            # date fields (start_on is empty; due_on is the deposit-return date).
-            arr_iso, dep_iso = _lease_dates_from_parent_name(parent.get("name", ""))
-            iso = arr_iso if kind == "pre" else dep_iso
+            # Date source: a manual override wins; otherwise the REAL lease dates
+            # live in the parent's NAME, not its date fields (start_on empty,
+            # due_on is the deposit-return date).
+            if gid in overrides:
+                iso = overrides[gid]
+            else:
+                arr_iso, dep_iso = _lease_dates_from_parent_name(parent.get("name", ""))
+                iso = arr_iso if kind == "pre" else dep_iso
             if not iso:
                 which = "arrival" if kind == "pre" else "departure"
-                skipped.append((name, f"no {which} date found in parent name '{house}'"))
+                skipped.append((name,
+                    f"NEEDS A DATE — couldn't read the {which} date from parent "
+                    f"'{house}' [task GID {gid}]. Give me the date and I'll use it."))
                 continue
             md = _iso_to_md(iso)
             if not md:
@@ -795,12 +860,20 @@ def my_bot_chat():
             plan.append((t, new_name, iso, t.get("due_on")))
 
         scope = f" for '{property_name}'" if pf else ""
+        ov_warn = []
+        if bad_overrides:
+            ov_warn.append(f"\n⚠️ {len(bad_overrides)} supplied date(s) didn't parse "
+                           "(use YYYY-MM-DD or M/D/YY):")
+            for g, d in bad_overrides:
+                ov_warn.append(f"  - GID {g}: '{d}'")
+
         if not plan:
             out = [f"Nothing to stamp{scope}."]
             if skipped:
                 out.append(f"\n{len(skipped)} task(s) skipped:")
                 for nm, why in skipped:
                     out.append(f"  - {nm}: {why}")
+            out += ov_warn
             return "\n".join(out)
 
         if not apply:
@@ -820,6 +893,11 @@ def my_bot_chat():
                 out.append(f"\nSkipped {len(skipped)} (won't be touched):")
                 for nm, why in skipped:
                     out.append(f"  - {nm}: {why}")
+            out += ov_warn
+            if any(w.startswith("NEEDS A DATE") for _, w in skipped):
+                out.append("\nFor any 'NEEDS A DATE' task: ask the user for that task's "
+                            "arrival/departure date, then re-preview with date_overrides "
+                            "[{task_gid, date}] so it appears above with the right date.")
             return "\n".join(out)
 
         # apply=True → STRUCTURAL GUARD: only stamp explicitly approved GIDs.
@@ -879,6 +957,7 @@ def my_bot_chat():
         if not_found:
             out.append(f"\nNote: {len(not_found)} approved GID(s) weren't in the plan "
                        f"(already stamped or skipped): {', '.join(sorted(not_found))}")
+        out += ov_warn
         return "\n".join(out)
 
     def _exec_batch_update(updates):
@@ -1191,7 +1270,12 @@ def my_bot_chat():
             "MUST NOT appear in approved_gids — never stamp a task the user excluded. Never pass "
             "apply=true without approved_gids, and never invent a GID that wasn't in the preview. "
             "The apply step re-reads each task afterward and reports any whose title or date "
-            "didn't stick — relay those to the user.\n\n"
+            "didn't stick — relay those to the user. "
+            "NEEDS A DATE: if the preview lists tasks under 'NEEDS A DATE' (the parser couldn't "
+            "read a date from that parent title), tell the user which houses need a date and ask "
+            "for them. When they give you a date, re-run the preview with date_overrides "
+            "[{task_gid, date}] (date as YYYY-MM-DD or M/D/YY) — the task then appears in the "
+            "numbered plan with that date. NEVER invent a date to fill one of these in.\n\n"
             "PROPERTY CONTEXT — when the user asks 'what do we know about [house]' or asks for a summary of a house:\n"
             "Run ALL of these in parallel (call them in one turn):\n"
             "  a) get_my_notifications(property_name='[house]') — unread comments on tasks for that house\n"
@@ -1371,7 +1455,8 @@ def my_bot_chat():
                                 ("Renaming, re-dating & verifying tasks" if apply_now
                                  else "Building rename preview") + label + "…"})
                             result = _exec_stamp(prop, apply_now, today_str,
-                                                 block.input.get("approved_gids"))
+                                                 block.input.get("approved_gids"),
+                                                 block.input.get("date_overrides"))
                         else:
                             result = f"Unknown tool: {block.name}"
                         tool_results.append({
