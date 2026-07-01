@@ -8,7 +8,7 @@ Handles all My Bot routes and Asana integration independently of the Ops Bot
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date
 
 import requests
 from flask import (Blueprint, render_template, request, jsonify, Response, stream_with_context)
@@ -166,12 +166,15 @@ def _lease_dates_from_parent_name(pname):
     if dep_y < 100:
         dep_y += 2000
     arr_y = dep_y if (arr_m, arr_d) <= (dep_m, dep_d) else dep_y - 1
-    try:
-        arr = f"{arr_y:04d}-{arr_m:02d}-{arr_d:02d}"
-        dep = f"{dep_y:04d}-{dep_m:02d}-{dep_d:02d}"
-    except Exception:
-        return None, None
-    return arr, dep
+
+    def _mk(y, mo, da):
+        # Reject impossible dates (month 15, day 40, …) — never fabricate one.
+        try:
+            return date(y, mo, da).isoformat()
+        except ValueError:
+            return None
+
+    return _mk(arr_y, arr_m, arr_d), _mk(dep_y, dep_m, dep_d)
 
 
 def _clean_house_name(raw):
@@ -629,9 +632,12 @@ def my_bot_chat():
                 "DEPARTURE date and are labelled 'Dept'. The tool fetches the tasks and reads the "
                 "house name + dates from the parent task itself, then renames everything in "
                 "parallel — DO NOT call get_my_asana_tasks first and DO NOT type the new titles "
-                "yourself. ALWAYS call with apply=false first to preview, show the user the exact "
-                "proposed changes, get a clear yes, then call again with apply=true. "
-                "Optionally pass property_name to limit it to one house."
+                "yourself. ALWAYS call with apply=false first to get a NUMBERED preview, show the "
+                "user the exact proposed changes, and ask which to apply. Then call again with "
+                "apply=true AND approved_gids = the exact list of task GIDs the user approved "
+                "(the preview prints each task's GID). apply=true does NOTHING without "
+                "approved_gids, so tasks the user excluded can never be touched. "
+                "Optionally pass property_name to limit the preview to one house."
             ),
             "input_schema": {
                 "type": "object",
@@ -642,7 +648,12 @@ def my_bot_chat():
                     },
                     "apply": {
                         "type": "boolean",
-                        "description": "false (default) = preview only, no changes written. true = actually rename and re-date.",
+                        "description": "false (default) = numbered preview, no changes. true = rename + re-date ONLY the approved_gids.",
+                    },
+                    "approved_gids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Required when apply=true. The exact task GIDs (from the preview) the user approved. Only these are changed.",
                     },
                 },
             },
@@ -737,9 +748,10 @@ def my_bot_chat():
                 lines.append(f'  Notes: {t["notes"]}')
         return "\n".join(lines)
 
-    def _exec_stamp(property_name=None, apply=False, today_iso=None):
+    def _exec_stamp(property_name=None, apply=False, today_iso=None, approved_gids=None):
         """Restamp lease tasks: rename to '<M/D> <Arrival|Dept> - <House> -
-        <original>' and reset the due date. apply=False previews only."""
+        <original>' and reset the due date. apply=False previews only; apply=True
+        stamps ONLY the task GIDs listed in approved_gids."""
         tasks, err = _fetch_my_tasks_raw("incomplete", None)
         if err:
             return f"Could not fetch tasks: {err}"
@@ -793,12 +805,14 @@ def my_bot_chat():
 
         if not apply:
             out = [
-                f"PREVIEW{scope} — {len(plan)} task(s) will be RENAMED and have their "
-                f"due date RESET. Nothing has changed yet.",
-                "Show the user this exact list, then ask them to confirm before applying.",
+                f"PREVIEW{scope} — {len(plan)} task(s) CAN be renamed and have their "
+                f"due date reset. Nothing has changed yet.",
+                "Show the user this NUMBERED list. Ask which to apply — 'all', "
+                "'all except 3, 7', or 'just 1, 2, 5'. Then call stamp_house_and_date again "
+                "with apply=true and approved_gids set to ONLY the GIDs the user approved.",
             ]
-            for (t, nn, iso, old_due) in plan:
-                out.append(f"\n• {t.get('name')}")
+            for i, (t, nn, iso, old_due) in enumerate(plan, 1):
+                out.append(f"\n{i}. [GID {t['gid']}] {t.get('name')}")
                 out.append(f"    → {nn}")
                 due_note = f"{old_due} → {iso}" if old_due and old_due != iso else iso
                 out.append(f"    due date: {due_note}")
@@ -808,38 +822,63 @@ def my_bot_chat():
                     out.append(f"  - {nm}: {why}")
             return "\n".join(out)
 
-        # apply=True → write renames + due dates in parallel
+        # apply=True → STRUCTURAL GUARD: only stamp explicitly approved GIDs.
+        approved = {str(g).strip() for g in (approved_gids or []) if str(g).strip()}
+        if not approved:
+            return ("REFUSED — apply requires approved_gids: the exact list of task GIDs the "
+                    "user approved from the preview. Nothing was changed. Re-run with "
+                    "apply=false, show the preview, get the user's selection, then pass ONLY "
+                    "those GIDs.")
+        to_do     = [it for it in plan if str(it[0]["gid"]) in approved]
+        plan_gids = {str(it[0]["gid"]) for it in plan}
+        not_found = approved - plan_gids
+        if not to_do:
+            return ("None of the approved GIDs matched a stampable task (they may already be "
+                    "stamped or in the skipped list). Nothing was changed. "
+                    f"Approved GIDs not in the plan: {', '.join(sorted(not_found)) or 'none'}")
+
+        # write rename + due date, then read each back to VERIFY it stuck
         from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
 
         def _do_one(item):
             t, nn, iso, _old = item
             _, e = _asana_request("PUT", f"/tasks/{t['gid']}",
                                   {"data": {"name": nn, "due_on": iso}})
-            return nn, (f"FAILED: {e}" if e else "✓")
+            if e:
+                return nn, f"FAILED: {e}"
+            chk, ce = _asana_request("GET", f"/tasks/{t['gid']}",
+                                     {"opt_fields": "name,due_on"})
+            if ce or not isinstance(chk, dict):
+                return nn, "WROTE (could not verify — read-back failed)"
+            probs = []
+            if chk.get("name") != nn:
+                probs.append("title didn't stick")
+            if chk.get("due_on") != iso:
+                probs.append(f"due is {chk.get('due_on')}, expected {iso}")
+            return nn, ("✓ verified" if not probs else "WROTE BUT MISMATCH: " + "; ".join(probs))
 
         rows = []
         with ThreadPoolExecutor(max_workers=10) as ex:
-            futures = {ex.submit(_do_one, it): it for it in plan}
-            for fut in as_completed(futures, timeout=120):
+            futures = {ex.submit(_do_one, it): it for it in to_do}
+            for fut in as_completed(futures, timeout=150):
                 try:
-                    label, status = fut.result(timeout=15)
+                    label, status = fut.result(timeout=20)
                 except FutureTimeout:
                     label, status = futures[fut][1], "TIMED OUT — Asana didn't respond"
                 except Exception as exc:
                     label, status = futures[fut][1], f"ERROR: {exc}"
                 rows.append((label, status))
 
-        ok  = sum(1 for _, s in rows if s == "✓")
-        bad = [(l, s) for l, s in rows if s != "✓"]
-        out = [f"Stamped {ok}/{len(plan)} task(s){scope}."]
+        ok  = sum(1 for _, s in rows if s == "✓ verified")
+        bad = [(l, s) for l, s in rows if s != "✓ verified"]
+        out = [f"Stamped & verified {ok}/{len(to_do)} task(s){scope}."]
         if bad:
-            out.append(f"⚠️ {len(bad)} issue(s):")
+            out.append(f"⚠️ {len(bad)} need your attention:")
             for l, s in bad:
                 out.append(f"  • {l}: {s}")
-        if skipped:
-            out.append(f"\nSkipped {len(skipped)} (not changed):")
-            for nm, why in skipped:
-                out.append(f"  - {nm}: {why}")
+        if not_found:
+            out.append(f"\nNote: {len(not_found)} approved GID(s) weren't in the plan "
+                       f"(already stamped or skipped): {', '.join(sorted(not_found))}")
         return "\n".join(out)
 
     def _exec_batch_update(updates):
@@ -1143,11 +1182,16 @@ def my_bot_chat():
             "titles into a batch_update call. It rewrites each title to "
             "'<M/D> <Arrival|Dept> - <House> - <original task>' and resets the due date to the "
             "arrival (Pre) or departure (Post) date, all server-side. "
-            "WORKFLOW (follow exactly): (1) call stamp_house_and_date with apply=false; "
-            "(2) show the user the preview verbatim and print "
-            "'CONFIRM_ACTION: rename and re-date these N tasks'; (3) wait for an explicit yes; "
-            "(4) call stamp_house_and_date again with apply=true and the SAME property_name. "
-            "Never pass apply=true without an explicit confirmation in the immediately prior message.\n\n"
+            "WORKFLOW (follow exactly): (1) call stamp_house_and_date with apply=false to get a "
+            "NUMBERED preview (each item shows its task GID); (2) show the user the numbered "
+            "preview verbatim and ask which to apply — 'all', 'all except 3, 7', or 'just 1, 2, "
+            "5'; (3) wait for the user's selection; (4) map their selection to the exact GIDs "
+            "from the preview and call stamp_house_and_date again with apply=true and "
+            "approved_gids = ONLY those GIDs. If the user said to skip some tasks, their GIDs "
+            "MUST NOT appear in approved_gids — never stamp a task the user excluded. Never pass "
+            "apply=true without approved_gids, and never invent a GID that wasn't in the preview. "
+            "The apply step re-reads each task afterward and reports any whose title or date "
+            "didn't stick — relay those to the user.\n\n"
             "PROPERTY CONTEXT — when the user asks 'what do we know about [house]' or asks for a summary of a house:\n"
             "Run ALL of these in parallel (call them in one turn):\n"
             "  a) get_my_notifications(property_name='[house]') — unread comments on tasks for that house\n"
@@ -1324,9 +1368,10 @@ def my_bot_chat():
                             prop = block.input.get("property_name") or ""
                             label = f" for '{prop}'" if prop else ""
                             yield sse({"type": "status", "text":
-                                ("Renaming & re-dating tasks" if apply_now
+                                ("Renaming, re-dating & verifying tasks" if apply_now
                                  else "Building rename preview") + label + "…"})
-                            result = _exec_stamp(prop, apply_now, today_str)
+                            result = _exec_stamp(prop, apply_now, today_str,
+                                                 block.input.get("approved_gids"))
                         else:
                             result = f"Unknown tool: {block.name}"
                         tool_results.append({

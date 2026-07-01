@@ -21,6 +21,7 @@ from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required
 
 from routes.auth import admin_required
+from routes.group_assign import _assignee_names
 
 bear_fence_bp = Blueprint("bear_fence", __name__)
 
@@ -207,7 +208,8 @@ def bear_fence_scan():
             title = title.get("value") or title.get("name") or ""
         pid   = str(t.get("property_id") or t.get("home_id") or "")
         sched = t.get("scheduled_date") or ""
-        entry = {"title": title, "date": sched[:10], "id": t.get("id")}
+        entry = {"title": title, "date": sched[:10], "id": t.get("id"),
+                 "assignees": _assignee_names(t)}
 
         if BEAR_FENCE_PATTERN.search(title):
             bear_fences.setdefault(pid, []).append(entry)
@@ -257,6 +259,7 @@ def bear_fence_scan():
                 "task_title":       wt["title"],
                 "task_type":        "Walk Thru",
                 "current_date":     wt["date"],
+                "assignees":        wt.get("assignees", []),
                 "bear_fence_title": bf_match["title"],
                 "bear_fence_date":  bf_match["date"],
             })
@@ -276,6 +279,7 @@ def bear_fence_scan():
                 "task_title":       hts["title"],
                 "task_type":        "Arrival Hot Tub Service",
                 "current_date":     hts["date"],
+                "assignees":        hts.get("assignees", []),
                 "bear_fence_title": bf_match["title"],
                 "bear_fence_date":  bf_match["date"],
             })

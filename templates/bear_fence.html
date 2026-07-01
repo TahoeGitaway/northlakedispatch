@@ -67,6 +67,7 @@
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Property</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Type</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Task</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Assigned To</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Current Date</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Bear Fence Task</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Move To</th>
@@ -167,6 +168,7 @@ async function runScan() {
           </span>
         </td>
         <td class="px-4 py-3 text-gray-500">${esc(p.task_title)}</td>
+        <td class="px-4 py-3 text-gray-600">${p.assignees && p.assignees.length ? esc(p.assignees.join(', ')) : '<span class="text-gray-300">Unassigned</span>'}</td>
         <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.current_date)}</td>
         <td class="px-4 py-3 text-gray-500" style="font-size:0.8rem;">
           <div>${esc(p.bear_fence_title)}</div>
