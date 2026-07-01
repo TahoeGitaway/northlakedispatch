@@ -209,6 +209,18 @@ def _normalize_date(s):
     return _mk_iso(y, mo, da)
 
 
+def _extract_address(pname):
+    """Pull the street address out of a parent lease title, e.g.
+    '… - 11059 Zermatt Dr. - (Mitch)' → '11059 Zermatt Dr.'. '' if none.
+    This is the RELIABLE key for matching to a Breezeway property — house-name
+    matching grabs the wrong house."""
+    m = re.search(r"\b(\d{2,6})\s+([A-Za-z][A-Za-z0-9 .#'/-]*)", pname or "")
+    if not m:
+        return ""
+    addr = re.split(r"\s*-\s*\(|\s*\(", m.group(1) + " " + m.group(2))[0]
+    return addr.rstrip(" -").strip()
+
+
 def _clean_house_name(raw):
     """Pull the short house name out of a long parent task name.
 
@@ -648,7 +660,11 @@ def my_bot_chat():
                     "start_date":     {"type": "string", "description": "Start date YYYY-MM-DD"},
                     "end_date":       {"type": "string", "description": "End date YYYY-MM-DD"},
                     "property_names": {"type": "array", "items": {"type": "string"},
-                                       "description": "One or more property names"},
+                                       "description": "One or more properties. PREFER the street "
+                                       "ADDRESS (e.g. '11059 Zermatt Dr.') shown by "
+                                       "get_my_asana_tasks — addresses match the correct Breezeway "
+                                       "property reliably. A house name also works but can match the "
+                                       "wrong house, so use the address whenever you have it."},
                     "status":         {"type": "string", "description": "Optional: housekeeping, maintenance, inspection, complete, pending"},
                 },
                 "required": ["start_date", "end_date", "property_names"],
@@ -774,20 +790,28 @@ def my_bot_chat():
             projects = ", ".join(p.get("name", "") for p in (t.get("projects") or []))
             parent   = t.get("parent") or {}
             pname    = parent.get("name", "")
-            pstart   = parent.get("start_on", "")
-            pdue     = parent.get("due_on", "")
             status   = "✓ done" if t.get("completed") else "open"
             due      = t.get("due_on") or "no due date"
             line = f'• [{t["gid"]}] {t["name"]} | {status} | due {due} | project: {projects or "none"}'
             pgid     = parent.get("gid", "")
             if pname:
-                lease_dates = ""
-                if pstart and pdue:
-                    lease_dates = f" [{pstart} → {pdue}]"
-                elif pdue:
-                    lease_dates = f" [ends {pdue}]"
+                # Show the CLEAN house name + the REAL reservation dates parsed
+                # from the parent title (the parent's Asana date fields are the
+                # deposit-date trap — never surface those).
+                house = _clean_house_name(pname)
+                addr  = _extract_address(pname)
+                arr_iso, dep_iso = _lease_dates_from_parent_name(pname)
+                addr_part = f" | address: {addr}" if addr else ""
+                if arr_iso and dep_iso:
+                    res = f" | reservation: {arr_iso} → {dep_iso}"
+                elif arr_iso:
+                    res = f" | reservation arrival: {arr_iso}"
+                elif dep_iso:
+                    res = f" | reservation departure: {dep_iso}"
+                else:
+                    res = " | reservation: (no dates in parent title)"
                 house_gid = f" (house task GID {pgid})" if pgid else ""
-                line += f' | property: {pname}{lease_dates}{house_gid}'
+                line += f' | property: {house}{addr_part}{res}{house_gid}'
             lines.append(line)
             if t.get("notes"):
                 lines.append(f'  Notes: {t["notes"]}')
@@ -1254,6 +1278,20 @@ def my_bot_chat():
             "    • ✓ Complete — [Month Day, Year]: [Task Name]\n"
             "    • ⏳ Pending — [Month Day, Year]: [Task Name]\n"
             "    • 🔄 In Progress — [Month Day, Year]: [Task Name]\n\n"
+            "BREEZEWAY CROSS-REFERENCE — when the user asks to cross-reference Breezeway against "
+            "Asana tasks (e.g. 'check Breezeway for the properties that have Asana tasks due "
+            "today'), bound the window by each property's RESERVATION dates — shown in "
+            "get_my_asana_tasks as 'reservation: <arrival> → <departure>' — NOT by today's date:\n"
+            "  • Arrival / Pre task → fetch Breezeway from 7 days BEFORE arrival THROUGH arrival.\n"
+            "  • Departure / Post task → fetch Breezeway from departure THROUGH 7 days AFTER departure.\n"
+            "CRITICAL — for property_names pass the street ADDRESS shown by get_my_asana_tasks as "
+            "'address: …' (e.g. '11059 Zermatt Dr.'), NOT the house name. House-name matching grabs "
+            "the WRONG house in Breezeway (Asana's 'Renegade TD' matches Breezeway's 'Secret Garden "
+            "Lodge'); the address matches the correct property. If a task has no 'address:' shown, "
+            "fall back to the house name but warn the user the match may be unreliable. "
+            "If a task shows 'reservation: (no dates in parent title)', tell the user you can't "
+            "date-bound that one and ask for the date. If the user asks for 'the week prior' or any "
+            "other window, honor that instead of the defaults above.\n\n"
             "STAMPING LEASE TASKS — stamp_house_and_date is the dedicated tool for this. "
             "When the user asks to 'add the house and date to my tasks', 'rename my pre/post tasks', "
             "'stamp my tasks', 'fix my task titles', or anything of that shape, call THIS tool — "

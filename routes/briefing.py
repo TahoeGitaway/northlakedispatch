@@ -241,17 +241,20 @@ def _load_property_cache() -> str:
                 # Capture external reference ID for the task API (reference_property_id)
                 ref_id = (p.get("reference_property_id") or p.get("reference_id") or
                           p.get("external_id") or p.get("external_property_id") or "")
-                # Try several common address field names Breezeway might use
-                addr = (p.get("address") or p.get("full_address") or
-                        p.get("street_address") or p.get("location") or "")
-                if isinstance(addr, dict):
-                    # Some APIs return address as a nested object
-                    parts = [
-                        addr.get("street") or addr.get("line1") or "",
-                        addr.get("city") or "",
-                        addr.get("state") or "",
-                    ]
-                    addr = ", ".join(x for x in parts if x)
+                # Breezeway returns the street address in `address1` (+ address2/
+                # city/state/zipcode). The older field names below never exist on
+                # this API, so the address cache used to come back empty.
+                addr = " ".join(x for x in [
+                    str(p.get("address1") or "").strip(),
+                    str(p.get("address2") or "").strip(),
+                    str(p.get("city") or "").strip(),
+                    str(p.get("state") or "").strip(),
+                    str(p.get("zipcode") or "").strip(),
+                ] if x)
+                if not addr:  # last-ditch fallback for other API shapes
+                    legacy = (p.get("address") or p.get("full_address") or
+                              p.get("street_address") or p.get("location") or "")
+                    addr = str(legacy).strip() if not isinstance(legacy, dict) else ""
                 if pid:
                     fetched[pid]      = name
                     fetched_addr[pid] = str(addr).strip()
@@ -288,6 +291,12 @@ def _get_live_ref_cache() -> dict:
     """Return the current _property_ref_cache, refreshing if stale."""
     _ensure_property_cache()
     return _property_ref_cache
+
+
+def _get_live_addr_cache() -> dict:
+    """Return {property_id: address_string}, refreshing if stale."""
+    _ensure_property_cache()
+    return _property_addr_cache
 
 
 def _get_property_name(property_id) -> str:

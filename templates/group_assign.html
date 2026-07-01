@@ -4,11 +4,12 @@
 <div class="max-w-6xl mx-auto px-4 py-6 pb-32">
 
   <div class="mb-5">
-    <h2 class="text-xl font-bold text-gray-800">Assign Tasks by Group</h2>
+    <h2 class="text-xl font-bold text-gray-800">Batch Task Assignment</h2>
     <p class="text-xs text-gray-400 mt-0.5">
-      Pick a date, then tick any tasks and assign them to a person — or move them to a
-      different day. Tasks are bucketed by the property's top-level group. Check-ins are
-      flagged. <span class="text-rose-500">Changing a task's date writes to Breezeway and can't be undone.</span>
+      Pick a date and Scan, then tick any tasks and assign them to a person — or move them to a
+      different day. Choose a tab: <b>By Group</b> buckets tasks by the property's top-level group;
+      <b>By Property Specialist</b> buckets by who's currently assigned. Check-ins are flagged.
+      <span class="text-rose-500">Changing a task's date writes to Breezeway and can't be undone.</span>
     </p>
 
     <div class="flex items-end gap-3 flex-wrap mt-3">
@@ -27,9 +28,20 @@
       </button>
     </div>
 
-    <!-- Saved views: show only chosen people's tasks -->
-    <div id="viewsBar" class="flex items-center gap-1.5 flex-wrap mt-3"></div>
-    <div id="viewEditor" class="hidden mt-2 max-w-md"></div>
+    <!-- Tabs -->
+    <div class="flex items-center gap-1 mt-4 border-b border-gray-200">
+      <button id="tabGroupBtn" onclick="switchTab('group')"></button>
+      <button id="tabSpecBtn"  onclick="switchTab('spec')"></button>
+    </div>
+
+    <!-- Group-tab controls: saved views (show only chosen people's tasks) -->
+    <div id="groupControls">
+      <div id="viewsBar" class="flex items-center gap-1.5 flex-wrap mt-3"></div>
+      <div id="viewEditor" class="hidden mt-2 max-w-md"></div>
+    </div>
+
+    <!-- Specialist-tab controls: pick which specialists to show -->
+    <div id="specControls" class="hidden mt-3"></div>
   </div>
 
   <!-- Loading -->
@@ -56,8 +68,10 @@
     No tasks found for the selected date.
   </div>
 
-  <!-- Results -->
+  <!-- Results (By Group) -->
   <div id="results" class="space-y-5"></div>
+  <!-- Results (By Property Specialist) -->
+  <div id="specResults" class="hidden space-y-4"></div>
 
   <!-- ── Assignment candidates (allow-list) ───────────────────────── -->
   <div class="mt-10 border-t border-gray-200 pt-5">
@@ -444,34 +458,8 @@ function renderScan() {
   const results = document.getElementById('results');
   results.innerHTML = '';
 
-  // Loud warning if Breezeway couldn't load some properties — those tasks would
-  // otherwise be silently missing. Offer a one-click force rescan.
-  const wb = document.getElementById('warnBox');
-  const _rescanBtn = (label) => `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">${label}</button>`;
-  const warnings = [];
-  if (SCAN.failed_properties) {
-    warnings.push(`⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties couldn't be loaded from Breezeway`
-      + ` (it throttled or errored), so some tasks may be missing. ` + _rescanBtn('Force a fresh rescan') + `.`);
-  }
-  if (!(SCAN.people || []).length) {
-    // No roster → the person dropdown is empty and nothing can be assigned. Say so.
-    warnings.push(`⚠ No staff roster loaded from Breezeway — you won't be able to assign anyone. ` + _rescanBtn('Retry') + `.`);
-  }
-  if (warnings.length) {
-    wb.innerHTML = warnings.join('<br>');
-    wb.classList.remove('hidden');
-  } else {
-    wb.classList.add('hidden');
-  }
-
-  // People dropdown (always the FULL roster, regardless of view)
-  const sel = document.getElementById('personSel');
-  sel.innerHTML = '<option value="">— pick a person —</option>';
-  (SCAN.people || []).forEach(p => {
-    const o = document.createElement('option');
-    o.value = p.id; o.textContent = p.name;
-    sel.appendChild(o);
-  });
+  _renderWarnings();
+  _populatePeople();
 
   const checkins = data.checkins || [];
   const groups   = data.groups || [];
@@ -692,7 +680,8 @@ async function runScan(force) {
     }
     SCAN = data;
     if (data.dept_counts) console.log('Departments seen (after hiding cleaning):', data.dept_counts);
-    renderScan();
+    if (activeTab === 'spec') renderSpecTab();
+    else renderScan();
   } catch (e) {
     document.getElementById('loading').classList.add('hidden');
     const eb = document.getElementById('errorBox');
@@ -1057,8 +1046,235 @@ function _markDateFailed(taskId) {
   const mb = row.querySelector('.moved-badge'); if (mb) mb.remove();
 }
 
-// Default date = today. Scan only on click. Show saved views immediately.
+// ── Shared (used by BOTH tabs) ───────────────────────────────────────
+// The person dropdown + Breezeway load-warnings are the same whichever tab
+// you're on, so they live here and each tab's renderer calls them.
+function _renderWarnings() {
+  const wb = document.getElementById('warnBox');
+  if (!SCAN) { wb.classList.add('hidden'); return; }
+  const _rescanBtn = (label) => `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">${label}</button>`;
+  const warnings = [];
+  if (SCAN.failed_properties) {
+    warnings.push(`⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties couldn't be loaded from Breezeway`
+      + ` (it throttled or errored), so some tasks may be missing. ` + _rescanBtn('Force a fresh rescan') + `.`);
+  }
+  if (!(SCAN.people || []).length) {
+    warnings.push(`⚠ No staff roster loaded from Breezeway — you won't be able to assign anyone. ` + _rescanBtn('Retry') + `.`);
+  }
+  if (warnings.length) { wb.innerHTML = warnings.join('<br>'); wb.classList.remove('hidden'); }
+  else { wb.classList.add('hidden'); }
+}
+function _populatePeople() {
+  const sel = document.getElementById('personSel');
+  sel.innerHTML = '<option value="">— pick a person —</option>';
+  ((SCAN && SCAN.people) || []).forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name;
+    sel.appendChild(o);
+  });
+}
+
+// ── Tab switching ────────────────────────────────────────────────────
+let activeTab = 'group';
+
+function switchTab(tab) {
+  activeTab = tab;
+  const gBtn = document.getElementById('tabGroupBtn');
+  const sBtn = document.getElementById('tabSpecBtn');
+  gBtn.textContent = 'By Group';
+  sBtn.textContent = 'By Property Specialist';
+  const on  = 'px-4 py-2 text-sm font-semibold border-b-2 border-indigo-600 text-indigo-700 -mb-px';
+  const off = 'px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-gray-500 hover:text-gray-700 -mb-px';
+  gBtn.className = (tab === 'group') ? on : off;
+  sBtn.className = (tab === 'spec')  ? on : off;
+
+  document.getElementById('groupControls').classList.toggle('hidden', tab !== 'group');
+  document.getElementById('specControls').classList.toggle('hidden', tab !== 'spec');
+  document.getElementById('results').classList.toggle('hidden', tab !== 'group');
+  document.getElementById('specResults').classList.toggle('hidden', tab !== 'spec');
+
+  // Only ONE tab's task rows may exist in the DOM at a time — otherwise there'd be
+  // two checkboxes per task and selections would double-count, corrupting assign /
+  // change-date. Clear the inactive tab, then rebuild the active one from SCAN.
+  if (tab === 'group') document.getElementById('specResults').innerHTML = '';
+  else                 document.getElementById('results').innerHTML = '';
+
+  if (!SCAN) { _refreshCount(); return; }
+  if (tab === 'group') renderScan();
+  else renderSpecTab();
+}
+
+// ── By Property Specialist ───────────────────────────────────────────
+// Same scan data, re-bucketed: specialist (current assignee) is the main
+// category, property group the sub-category. Nothing shows until she ticks
+// specialists and presses "Show" — never auto-populated.
+let SPEC_SELECTED = new Set();
+
+// Bucket EVERY task (check-ins folded in) by its current assignee.
+function _specBuckets() {
+  const byS = {};
+  _allScanTasks().forEach(t => {
+    const key = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'Unassigned';
+    (byS[key] = byS[key] || []).push(t);
+  });
+  return byS;
+}
+
+function renderSpecTab() {
+  if (!SCAN) return;
+  _renderWarnings();
+  _populatePeople();
+  const empty = document.getElementById('emptyBox');
+  if (!SCAN.total_tasks) {
+    empty.textContent = 'No tasks found for the selected date.';
+    empty.classList.remove('hidden');
+    document.getElementById('specControls').innerHTML = '';
+    document.getElementById('specResults').innerHTML = '';
+    document.getElementById('actionBar').classList.add('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  populateSpecSelector();
+  renderSpecResults();   // re-render whatever's currently selected (persists across tab flips)
+}
+
+function populateSpecSelector() {
+  const box = document.getElementById('specControls');
+  const byS = _specBuckets();
+  const names = Object.keys(byS).sort((a, b) =>
+    ((a === 'Unassigned') - (b === 'Unassigned')) || a.localeCompare(b));
+  if (!names.length) { box.innerHTML = ''; return; }
+
+  let html = `<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;background:#fff;">`
+    + `<div style="font-size:0.78rem;font-weight:600;color:#374151;margin-bottom:8px;">Tick the specialists to show, then press Show <span style="color:#9ca3af;font-weight:500;">(t = tasks · h = houses)</span>:</div>`
+    + `<div style="display:flex;flex-wrap:wrap;gap:6px 16px;max-height:220px;overflow:auto;">`;
+  names.forEach(n => {
+    const t = byS[n];
+    const houses  = new Set(t.map(x => x.property)).size;
+    const arr     = new Set(t.filter(x => x.arrival).map(x => x.property)).size;
+    const isUn    = n === 'Unassigned';
+    const checked = SPEC_SELECTED.has(n) ? 'checked' : '';
+    html += `<label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;cursor:pointer;color:${isUn ? '#b45309' : '#1f2937'};">`
+      + `<input type="checkbox" class="spec-pick" value="${esc(n)}" ${checked}>`
+      + `${esc(n)} <span style="color:#9ca3af;">(${t.length}t · ${houses}h${arr ? ` · <span style="color:#15803d;">${arr} arr</span>` : ''})</span></label>`;
+  });
+  html += `</div>`
+    + `<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap;">`
+    + `<button onclick="applySpecSelection()" style="padding:6px 18px;background:#4f46e5;color:#fff;font-size:0.82rem;font-weight:700;border:none;border-radius:8px;cursor:pointer;">Show selected</button>`
+    + `<button onclick="specPickAll(true)"  style="padding:6px 10px;font-size:0.78rem;color:#4f46e5;background:none;border:1px solid #c7d2fe;border-radius:8px;cursor:pointer;">Tick all</button>`
+    + `<button onclick="specPickAll(false)" style="padding:6px 10px;font-size:0.78rem;color:#6b7280;background:none;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">Clear</button>`
+    + `</div></div>`;
+  box.innerHTML = html;
+}
+
+function specPickAll(on) {
+  document.querySelectorAll('.spec-pick').forEach(cb => { cb.checked = on; });
+}
+
+function applySpecSelection() {
+  SPEC_SELECTED = new Set([...document.querySelectorAll('.spec-pick:checked')].map(cb => cb.value));
+  renderSpecResults();
+}
+
+function renderSpecResults() {
+  const cont = document.getElementById('specResults');
+  cont.innerHTML = '';
+  if (!SCAN) return;
+  const byS = _specBuckets();
+  const chosen = [...SPEC_SELECTED].filter(n => byS[n]);   // drop any no longer present
+  if (!chosen.length) {
+    cont.innerHTML = `<div style="border:1px dashed #c7d2fe;border-radius:12px;padding:22px;text-align:center;color:#6b7280;font-size:0.85rem;">`
+      + `Tick one or more specialists above, then press <b>Show selected</b>.</div>`;
+    _refreshCount();
+    return;
+  }
+  chosen.sort((a, b) => ((a === 'Unassigned') - (b === 'Unassigned')) || a.localeCompare(b));
+
+  // Grand total across the selected specialists (houses de-duped across everyone
+  // shown, so a house two specialists both visit is only counted once).
+  const selTasks  = chosen.flatMap(n => byS[n]);
+  const totTasks  = selTasks.length;
+  const totHouses = new Set(selTasks.map(t => t.property)).size;
+  const totArr    = new Set(selTasks.filter(t => t.arrival).map(t => t.property)).size;
+
+  const summary = document.createElement('div');
+  summary.style.cssText = 'border:1px solid #c7d2fe;background:#eef2ff;border-radius:12px;padding:10px 14px;font-size:0.85rem;';
+  summary.innerHTML = `<span style="font-weight:800;color:#3730a3;">${chosen.length} specialist${chosen.length !== 1 ? 's' : ''} shown</span>`
+    + ` <span style="color:#374151;">· <b>${totTasks}</b> task${totTasks !== 1 ? 's' : ''}`
+    + ` · <b>${totHouses}</b> house${totHouses !== 1 ? 's' : ''}`
+    + ` · <b style="color:#15803d;">${totArr}</b> house${totArr !== 1 ? 's' : ''} with arrivals</span>`
+    + ` <span style="color:#9ca3af;">on ${esc(SCAN.date)}</span>`;
+  cont.appendChild(summary);
+
+  chosen.forEach(n => cont.appendChild(buildSpecialist(n, byS[n])));
+  _refreshCount();
+}
+
+// One specialist card: header counts + property-group sub-sections + task rows.
+function buildSpecialist(name, tasks) {
+  const isUn = name === 'Unassigned';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'border-radius:12px;border:1px solid #e5e7eb;background:#fff;overflow:hidden;';
+
+  const houses    = new Set(tasks.map(t => t.property)).size;
+  const arrHouses = new Set(tasks.filter(t => t.arrival).map(t => t.property)).size;
+
+  const head = document.createElement('div');
+  head.style.cssText = `padding:10px 16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;gap:12px;background:${isUn ? '#fffbeb' : '#eef2ff'};`;
+  head.innerHTML = `
+    <div style="font-weight:700;font-size:0.95rem;color:${isUn ? '#b45309' : '#3730a3'};">👤 ${esc(name)}
+      <span style="font-weight:500;color:#6b7280;font-size:0.8rem;">
+        · ${tasks.length} task${tasks.length !== 1 ? 's' : ''}
+        · ${houses} house${houses !== 1 ? 's' : ''}${arrHouses ? ` · <span style="color:#15803d;font-weight:700;">${arrHouses} w/ arrival${arrHouses !== 1 ? 's' : ''}</span>` : ''}</span>
+    </div>
+    <label style="font-size:0.75rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:5px;">
+      <input type="checkbox" class="spec-cb"> Select all</label>`;
+  wrap.appendChild(head);
+
+  // Sub-category: property group.
+  const byGrp = {};
+  tasks.forEach(t => { const gk = t.group || 'Ungrouped'; (byGrp[gk] = byGrp[gk] || []).push(t); });
+  const gkeys = Object.keys(byGrp).sort((a, b) =>
+    ((a === 'Ungrouped') - (b === 'Ungrouped')) || a.localeCompare(b));
+
+  gkeys.forEach(gk => {
+    const gtasks = byGrp[gk].sort((a, b) =>
+      ((a.property || '').toLowerCase()).localeCompare((b.property || '').toLowerCase())
+      || ((a.name || '').toLowerCase()).localeCompare((b.name || '').toLowerCase()));
+    const gHouses = new Set(gtasks.map(t => t.property)).size;
+
+    const sub = document.createElement('div');
+    sub.style.cssText = 'background:#fafafa;padding:6px 16px;border-top:1px solid #eef0f2;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;justify-content:space-between;gap:10px;';
+    sub.innerHTML = `
+      <span style="font-size:0.75rem;font-weight:700;color:#4b5563;">🏘 ${esc(gk)}
+        <span style="font-weight:500;color:#9ca3af;">· ${gtasks.length} task${gtasks.length !== 1 ? 's' : ''} · ${gHouses} house${gHouses !== 1 ? 's' : ''}</span></span>
+      <label style="font-size:0.7rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" class="specgrp-cb"> Select all</label>`;
+    wrap.appendChild(sub);
+
+    const grpCbs = [];
+    gtasks.forEach(t => {
+      const row = _taskRow(t, false);   // arrival/PCI badges still render from the task itself
+      wrap.appendChild(row);
+      grpCbs.push(row.querySelector('.task-cb'));
+    });
+    sub.querySelector('.specgrp-cb').addEventListener('change', e => {
+      grpCbs.forEach(cb => { cb.checked = e.target.checked; });
+      _refreshCount();
+    });
+  });
+
+  head.querySelector('.spec-cb').addEventListener('change', e => {
+    wrap.querySelectorAll('.task-cb, .specgrp-cb').forEach(cb => { cb.checked = e.target.checked; });
+    _refreshCount();
+  });
+  wrap.querySelectorAll('.task-cb').forEach(cb => cb.addEventListener('change', _refreshCount));
+  return wrap;
+}
+
+// Default date = today. Scan only on click. Show saved views + tabs immediately.
 document.getElementById('theDate').value = _ymd(new Date());
 _renderViewsBar();
+switchTab('group');
 </script>
 {% endblock %}
