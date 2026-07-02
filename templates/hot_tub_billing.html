@@ -159,20 +159,39 @@ function buildTapeChart(reservations, marks, meta) {
     const clip = `polygon(${tl} 0, 100% 0, ${br} 100%, 0 100%)`;
     const color = RES_COLORS[r.kind] || RES_COLORS.block;
     const tip = `${r.kind}: ${prettyDay(r.checkin)} → ${prettyDay(r.checkout)}`;
-    return `<div title="${esc(tip)}" style="position:absolute;top:3px;bottom:3px;`
+    // Two stacked parallelograms: a white one (the outline) with the colored one
+    // inset 2px on top. The inset reveals ~2px of white along every edge —
+    // including the shared diagonal — so back-to-back bookings of the SAME color
+    // are clearly separated instead of blurring into one bar.
+    return `<div title="${esc(tip)}" style="position:absolute;top:2px;bottom:2px;`
          + `left:${(s / N * 100).toFixed(3)}%;width:${(barDays / N * 100).toFixed(3)}%;`
-         + `background:${color};clip-path:${clip};-webkit-clip-path:${clip};"></div>`;
+         + `background:#ffffff;clip-path:${clip};-webkit-clip-path:${clip};">`
+         + `<div style="position:absolute;inset:2px;background:${color};`
+         + `clip-path:${clip};-webkit-clip-path:${clip};"></div></div>`;
   }).join("");
 
-  // Service marks — a dark box centered on the service day, over the bar.
-  const pins = (marks || []).map(m => {
+  // Service marks — a dark box on the day each service was DONE. CRITICAL: more
+  // than one service can fall on the same day; if we centered them all they'd
+  // stack on the same pixel and only one would show (that's how a service went
+  // missing). So group by day and spread same-day marks across the cell — every
+  // service always gets its own visible dot.
+  const byDay = {};
+  (marks || []).forEach(m => {
     const i = dayIdx(m.date, first);
-    if (i < 0 || i >= N) return "";
-    const left = ((i + 0.5) / N * 100).toFixed(3);
-    const tip = `${prettyDay(m.date)} · ${m.type} · $${m.price}`;
-    return `<div title="${esc(tip)}" style="position:absolute;top:50%;left:${left}%;transform:translate(-50%,-50%);`
-         + `width:9px;height:9px;border-radius:2px;background:#0f172a;box-shadow:0 0 0 1.5px #fff;z-index:2;"></div>`;
-  }).join("");
+    if (i < 0 || i >= N) return;
+    (byDay[i] || (byDay[i] = [])).push(m);
+  });
+  let pins = "";
+  Object.keys(byDay).forEach(k => {
+    const i = +k, list = byDay[k], K = list.length;
+    const sz = K >= 3 ? 6 : 8;                 // shrink a touch when several share a day
+    list.forEach((m, j) => {
+      const left = ((i + (j + 1) / (K + 1)) / N * 100).toFixed(3);   // even spread in the cell
+      const tip = `${prettyDay(m.date)} · ${m.type} · $${m.price}` + (K > 1 ? `  (${j + 1} of ${K} this day)` : "");
+      pins += `<div title="${esc(tip)}" style="position:absolute;top:50%;left:${left}%;transform:translate(-50%,-50%);`
+           + `width:${sz}px;height:${sz}px;border-radius:2px;background:#0f172a;box-shadow:0 0 0 1.5px #fff;z-index:2;"></div>`;
+    });
+  });
 
   const empty = (!reservations || !reservations.length)
     ? `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#c7cbd1;">no reservations this month</div>`
@@ -219,10 +238,9 @@ async function fillTapeCharts(month) {
 
 const monthLabel = m => {
   const has = GEN.has(m);
-  let s = m;
-  if (m === MONTHS.current_month) s += " — in progress";
-  s += has ? " ✓" : " — not generated";
-  return s;
+  const cur = m === MONTHS.current_month;
+  if (has) return m + (cur ? " ✓ (partial — month not over)" : " ✓");
+  return m + (cur ? " — not scanned yet (current month)" : " — not generated");
 };
 
 async function loadMonths(keep) {
@@ -480,8 +498,13 @@ function rowActions(r, e) {
   }
   if (e.o) return `<button data-act="undo" data-tid="${tid}" class="text-gray-400 hover:underline text-[11px] mt-1 block">undo</button>`;
   const btns = [];
-  if (r.disposition === "billable" && r.completed)
+  if (r.disposition === "billable" && r.completed) {
     btns.push(`<button data-act="comp" data-tid="${tid}" class="text-indigo-600 hover:underline">comp</button>`);
+    // Re-price a billable row (e.g. title said Regular $50 but the tech summary
+    // says D&S $155). Opens the same 3-charge dropdown, pre-set to the flagged
+    // suggestion.
+    btns.push(`<button data-act="include-open" data-tid="${tid}" class="text-amber-700 hover:underline">change $</button>`);
+  }
   if (r.disposition === "review" || r.disposition === "excluded")
     btns.push(`<button data-act="include-open" data-tid="${tid}" class="text-emerald-700 hover:underline">bill…</button>`);
   if (r.disposition !== "excluded")
@@ -543,14 +566,16 @@ function render(d) {
       ? `<span class="text-xs font-normal text-gray-400 line-through ml-1">${money(p.total)}</span>` : "";
 
     // Tape-chart service marks: every performed service (billable OR comped —
-    // both physically happened), plotted on the in-month date.
+    // both physically happened), plotted on the day it was actually DONE
+    // (completed date) so a service that was scheduled one day but done another
+    // shows on the day it happened; fall back to the scheduled date.
     CHARTDATA[pid] = {
       marks: rc.eff
         .filter(x => x.e.performed)
         .map(({ r, e }) => {
           const sd = (r.scheduled_date || "").slice(0, 7) === d.month ? r.scheduled_date : "";
           const cd = (r.completed_date || "").slice(0, 7) === d.month ? r.completed_date : "";
-          return { date: sd || cd, type: e.type, price: e.price };
+          return { date: cd || sd, type: e.type, price: e.price };
         })
         .filter(m => m.date),
     };
