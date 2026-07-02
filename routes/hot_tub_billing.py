@@ -35,6 +35,8 @@ import re
 import sys
 import glob
 import json
+import time
+import calendar
 import subprocess
 import threading
 from datetime import date, datetime
@@ -43,6 +45,13 @@ from flask import Blueprint, render_template, jsonify, send_file, request, abort
 from flask_login import login_required
 
 from routes.auth import admin_required
+# Reuse briefing's proven, read-only Breezeway helpers so the tape charts share
+# exactly one auth + reservation-classification code path with the rest of the app.
+from routes.briefing import (
+    _get_breezeway_token,
+    _fetch_bw_reservations,
+    _classify_reservation,
+)
 
 hot_tub_billing_bp = Blueprint("hot_tub_billing", __name__)
 
@@ -59,6 +68,13 @@ _PICK_BACK = 18
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 
+# Cached per-month reservation buckets for the tape charts: month → (ts, payload).
+# Reservations move slowly relative to a billing review session, so a short TTL
+# keeps the charts responsive without hammering Breezeway on every page load.
+_RES_CACHE = {}
+_RES_CACHE_LOCK = threading.Lock()
+_RES_CACHE_TTL = 15 * 60   # 15 minutes
+
 
 def _json_path(month: str) -> str:
     return os.path.join(_ROOT, f"hot_tub_billing_{month}.json")
@@ -70,6 +86,94 @@ def _csv_path(month: str) -> str:
 
 def _log_path(month: str) -> str:
     return os.path.join(_ROOT, f"hot_tub_billing_{month}.log")
+
+
+def _overrides_path(month: str) -> str:
+    """Local, app-side file holding Madeline's manual adjustments for a month
+    (comps / review resolutions / hypothetical credit+service lines). This is the
+    ONLY place her edits live — it is never sent to Breezeway, so the scan stays
+    strictly read-only. Kept separate from the worksheet JSON so a re-scan never
+    clobbers her decisions (they're keyed by task_id)."""
+    return os.path.join(_ROOT, f"hot_tub_billing_{month}_overrides.json")
+
+
+_EMPTY_OVERRIDES = {"rows": {}, "manual": []}
+
+
+def _load_overrides(month: str) -> dict:
+    path = _overrides_path(month)
+    if not os.path.exists(path):
+        return {"month": month, **_EMPTY_OVERRIDES}
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        if not isinstance(doc, dict):
+            return {"month": month, **_EMPTY_OVERRIDES}
+        doc.setdefault("rows", {})
+        doc.setdefault("manual", [])
+        return doc
+    except Exception:
+        return {"month": month, **_EMPTY_OVERRIDES}
+
+
+_ALLOWED_ROW_ACTIONS = {"comp", "exclude", "include"}
+_ALLOWED_MANUAL_KINDS = {"service", "credit"}
+
+
+def _sanitize_overrides(month: str, body: dict) -> dict:
+    """Coerce a client-submitted overrides doc into a safe, minimal shape before
+    writing it. Defensive because this file drives the billed totals — we never
+    trust arbitrary keys or unbounded values."""
+    rows_in = body.get("rows") or {}
+    manual_in = body.get("manual") or []
+    rows = {}
+    if isinstance(rows_in, dict):
+        for tid, o in list(rows_in.items())[:2000]:
+            if not isinstance(o, dict):
+                continue
+            action = str(o.get("action") or "").strip().lower()
+            if action not in _ALLOWED_ROW_ACTIONS:
+                continue
+            entry = {"action": action}
+            if action == "include":
+                try:
+                    entry["price"] = max(0, min(100000, int(round(float(o.get("price", 0))))))
+                except (TypeError, ValueError):
+                    entry["price"] = 0
+                st = str(o.get("service_type") or "").strip()[:40]
+                if st:
+                    entry["service_type"] = st
+            note = str(o.get("note") or "").strip()[:500]
+            if note:
+                entry["note"] = note
+            rows[str(tid)[:40]] = entry
+    manual = []
+    if isinstance(manual_in, list):
+        for m in manual_in[:500]:
+            if not isinstance(m, dict):
+                continue
+            kind = str(m.get("kind") or "").strip().lower()
+            if kind not in _ALLOWED_MANUAL_KINDS:
+                continue
+            try:
+                amount = max(0, min(100000, int(round(float(m.get("amount", 0))))))
+            except (TypeError, ValueError):
+                amount = 0
+            manual.append({
+                "id": str(m.get("id") or "")[:40] or f"m{len(manual)+1}",
+                "property_id": str(m.get("property_id") or "")[:40],
+                "kind": kind,
+                "service_type": str(m.get("service_type") or "").strip()[:40],
+                "amount": amount,
+                "date": str(m.get("date") or "")[:10],
+                "note": str(m.get("note") or "").strip()[:500],
+            })
+    return {
+        "month": month,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "rows": rows,
+        "manual": manual,
+    }
 
 
 def _available_months() -> list:
@@ -273,3 +377,117 @@ def hot_tub_billing_status():
                         "returncode": rc, "failed": True,
                         "message": "Scan finished but wrote no worksheet.",
                         "log_tail": _tail(log)})
+
+
+@hot_tub_billing_bp.route("/admin/hot-tub-billing/reservations")
+@login_required
+@admin_required
+def hot_tub_billing_reservations():
+    """Reservations overlapping a month, bucketed by property, for the per-house
+    tape charts on the worksheet page.
+
+    This is READ-ONLY and independent of the billing engine — it fetches live
+    from Breezeway so already-generated worksheets get tape charts without a
+    re-scan. One overlap query returns every reservation touching the month
+    (including ones that span it entirely); we classify each with the same
+    guest/owner/lease/block logic the rest of the app uses and return only the
+    fields the chart needs.
+    """
+    month = (request.args.get("month") or "").strip()
+    if not _MONTH_FMT.fullmatch(month or ""):
+        abort(400, "month must be YYYY-MM.")
+
+    now = time.time()
+    with _RES_CACHE_LOCK:
+        hit = _RES_CACHE.get(month)
+        if hit and now - hit[0] < _RES_CACHE_TTL:
+            return jsonify(hit[1])
+
+    y, mo = int(month[:4]), int(month[5:7])
+    first = date(y, mo, 1)
+    last = date(y, mo, calendar.monthrange(y, mo)[1])
+
+    token = _get_breezeway_token()
+    if not token:
+        # Never fail silently — tell the page so it can show a small notice
+        # instead of pretending there are no reservations.
+        return jsonify({"ok": False, "month": month,
+                        "reason": "Could not authenticate with Breezeway."}), 200
+
+    # A reservation overlaps the month iff it checks in on/before the last day
+    # AND checks out on/after the first day. Breezeway ANDs these two filters,
+    # so this single query captures full-month spans that a checkin-only query
+    # would miss (verified live).
+    raw = _fetch_bw_reservations(token, {
+        "checkin_date_le": last.isoformat(),
+        "checkout_date_ge": first.isoformat(),
+    })
+
+    by_property = {}
+    seen = set()
+    for r in raw:
+        rid = r.get("id")
+        if rid in seen:
+            continue
+        seen.add(rid)
+        pid = r.get("property_id")
+        if pid is None:
+            continue
+        ci = (r.get("checkin_date") or "")[:10]
+        co = (r.get("checkout_date") or "")[:10]
+        if not ci or not co:
+            continue
+        by_property.setdefault(str(pid), []).append({
+            "checkin": ci,
+            "checkout": co,
+            "kind": _classify_reservation(r),
+        })
+    for lst in by_property.values():
+        lst.sort(key=lambda x: x["checkin"])
+
+    payload = {
+        "ok": True,
+        "month": month,
+        "first": first.isoformat(),
+        "last": last.isoformat(),
+        "days": (last - first).days + 1,
+        "count": len(seen),
+        "by_property": by_property,
+    }
+    with _RES_CACHE_LOCK:
+        _RES_CACHE[month] = (now, payload)
+    return jsonify(payload)
+
+
+@hot_tub_billing_bp.route("/admin/hot-tub-billing/overrides")
+@login_required
+@admin_required
+def hot_tub_billing_overrides_get():
+    """Return the local, app-side manual adjustments for a month (never touches
+    Breezeway)."""
+    month = (request.args.get("month") or "").strip()
+    if not _MONTH_FMT.fullmatch(month or ""):
+        abort(400, "month must be YYYY-MM.")
+    return jsonify(_load_overrides(month))
+
+
+@hot_tub_billing_bp.route("/admin/hot-tub-billing/overrides", methods=["POST"])
+@login_required
+@admin_required
+def hot_tub_billing_overrides_save():
+    """Save the month's manual adjustments locally. The client sends the full
+    overrides doc; we sanitize and write it. This is the ONLY write in the whole
+    feature and it writes ONLY to a local file — Breezeway is never modified."""
+    month = (request.args.get("month") or "").strip()
+    if not _MONTH_FMT.fullmatch(month or ""):
+        abort(400, "month must be YYYY-MM.")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        abort(400, "Expected a JSON overrides object.")
+    doc = _sanitize_overrides(month, body)
+    try:
+        with open(_overrides_path(month), "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+    except Exception as e:
+        return jsonify({"saved": False, "message": f"Could not save adjustments: {e}"}), 500
+    return jsonify({"saved": True, **doc})

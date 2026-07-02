@@ -482,7 +482,7 @@ async function loadDaySummary(ds, force = false) {
       if (data.source === "saved") {
         cachedEl.textContent = data.cached_at ? `Saved ${data.cached_at}` : "Saved snapshot";
       } else {
-        cachedEl.textContent = data.cached_at ? `Live · ${data.cached_at}` : "Live";
+        cachedEl.textContent = data.cached_at ? `Last updated ${data.cached_at}` : "Last updated just now";
       }
     }
 

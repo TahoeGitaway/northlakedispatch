@@ -221,6 +221,70 @@ def _extract_address(pname):
     return addr.rstrip(" -").strip()
 
 
+# ── My Bot's OWN Breezeway address matching (ISOLATED) ─────────────
+# This lives entirely in My Bot and does NOT modify the shared Breezeway
+# integration (routes/admin.py, routes/briefing.py). It translates an Asana
+# street address → the EXACT Breezeway property name, so the unchanged shared
+# fetcher can match it by exact name (no fuzzy matching, no wrong houses).
+_mybot_bw_prop = {"ts": 0.0, "by_num": {}}   # street# -> [(pid, address1, name)]
+
+
+def _mybot_bw_property_index():
+    """Index active Breezeway properties by leading street number, reading the
+    real address field (`address1`). Cached 1 hour. Read-only; My-Bot-owned."""
+    import time as _t
+    from routes.briefing import _get_breezeway_token
+    if _mybot_bw_prop["by_num"] and _t.time() - _mybot_bw_prop["ts"] < 3600:
+        return _mybot_bw_prop["by_num"]
+    tok = _get_breezeway_token()
+    if not tok:
+        return {}
+    by_num, page = {}, 1
+    for _ in range(20):
+        try:
+            r = requests.get(
+                "https://api.breezeway.io/public/inventory/v1/property",
+                headers={"Authorization": f"JWT {tok}"},
+                params={"limit": 200, "page": page, "status": "active"},
+                timeout=20,
+            )
+            if not r.ok:
+                break
+            items = (r.json().get("results") or r.json().get("data") or [])
+        except Exception:
+            break
+        for p in items:
+            pid = p.get("id")
+            a1  = (p.get("address1") or "").strip()
+            m = re.match(r"\s*#?\s*(\d{2,6})\b", a1)
+            if pid and m:
+                by_num.setdefault(m.group(1), []).append((pid, a1, p.get("name") or ""))
+        if len(items) < 200:
+            break
+        page += 1
+    if by_num:
+        _mybot_bw_prop["by_num"] = by_num
+        _mybot_bw_prop["ts"] = _t.time()
+    return by_num
+
+
+def _mybot_resolve_name_by_address(address):
+    """Return the EXACT Breezeway property name for a street address, or None if
+    there isn't a single confident match (prefer not-found over the wrong house)."""
+    m = re.search(r"\b(\d{2,6})\s+([A-Za-z][A-Za-z0-9 .#'/-]*)", address or "")
+    if not m:
+        return None
+    cands = _mybot_bw_property_index().get(m.group(1), [])
+    if len(cands) == 1:
+        return cands[0][2]
+    if len(cands) > 1:  # same street number — disambiguate by street name
+        w = set(re.findall(r"[a-z]+", m.group(2).lower()))
+        nb = [c for c in cands if w & set(re.findall(r"[a-z]+", (c[1] or "").lower()))]
+        if len(nb) == 1:
+            return nb[0][2]
+    return None
+
+
 def _clean_house_name(raw):
     """Pull the short house name out of a long parent task name.
 
@@ -1477,12 +1541,30 @@ def my_bot_chat():
                             )
                         elif block.name == "fetch_breezeway_tasks":
                             names = block.input.get("property_names") or []
-                            n = len(names)
+                            # My Bot only: coerce to strings and translate any
+                            # street ADDRESS → the EXACT Breezeway property name
+                            # (reliable). Plain names pass through unchanged. This
+                            # keeps the shared fetcher untouched.
+                            resolved = []
+                            for p in names:
+                                if isinstance(p, dict):
+                                    s = (p.get("address") or p.get("name")
+                                         or p.get("property_name") or p.get("value") or "")
+                                else:
+                                    s = str(p or "")
+                                s = s.strip()
+                                if not s:
+                                    continue
+                                if re.search(r"\b\d{2,6}\s+[A-Za-z]", s):
+                                    resolved.append(_mybot_resolve_name_by_address(s) or s)
+                                else:
+                                    resolved.append(s)
+                            n = len(resolved)
                             yield sse({"type": "status", "text": f"Fetching Breezeway tasks for {n} propert{'y' if n==1 else 'ies'}…"})
                             result = _execute_fetch_tasks_multi_standalone(
                                 block.input.get("start_date", ""),
                                 block.input.get("end_date", ""),
-                                names,
+                                resolved,
                                 block.input.get("status"),
                             )
                         elif block.name == "stamp_house_and_date":

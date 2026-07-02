@@ -262,7 +262,18 @@ def task_title(t):
 
 
 def task_desc(t):
-    for k in ("description", "summary", "notes", "instructions"):
+    for k in ("description", "notes", "instructions"):
+        if t.get(k):
+            return _s(t.get(k)).strip()
+    return ""
+
+
+def task_summary(t):
+    """The tech's completion write-up — this is where they confirm what they
+    actually did (regular / WWM / D&S / partial …). Distinct from `description`
+    (which is just the template name). Kept separate so it can be shown verbatim
+    on the worksheet for human confirmation and used to flag mis-priced rows."""
+    for k in ("summary", "report", "completion_note", "result"):
         if t.get(k):
             return _s(t.get(k)).strip()
     return ""
@@ -312,11 +323,14 @@ def task_tag_names(t):
 
 # ── Classifier (text only) ───────────────────────────────────────────────────
 
-def classify(title, desc):
+def classify(title, desc, summary=""):
     """Return dict: {disposition, service_type, price, reason, flags[]}.
 
-    disposition ∈ {billable, excluded, review}. Decisions use TITLE+DESC text
-    ONLY — never tags. price is 0 unless billable.
+    disposition ∈ {billable, excluded, review}. Pricing/inclusion decisions use
+    the TITLE (+ description) ONLY — never tags — so the locked rules stay stable.
+    The tech's completion `summary` is used ONLY to raise a confirm-flag when it
+    names a heavier service than the title priced (regular vs WWM/D&S); it never
+    silently changes the price. price is 0 unless billable.
     """
     blob = f"{title}  {desc}".strip()
     tl = title.lower()
@@ -361,12 +375,17 @@ def classify(title, desc):
         stype, price = "dump_scrub", PRICE_DS
     else:
         stype, price = "regular", PRICE_REGULAR
-        # Description hints at a heavier service the title didn't name — flag, don't
-        # silently re-price (human confirms).
-        if WWM_RX.search(desc) and not re.search(r"do\s*not", desc, re.IGNORECASE):
-            flags.append("description mentions WWM — confirm $250")
-        elif DS_RX.search(desc) and not re.search(r"do\s*not", desc, re.IGNORECASE):
-            flags.append("description mentions D&S — confirm $155")
+        # The description OR the tech's completion summary hints at a heavier
+        # service the title didn't name — flag it, don't silently re-price (human
+        # confirms). The tech summary is the operator's stated source of truth for
+        # what was actually done, so scanning it here catches $50-vs-$250 misses.
+        hint = f"{desc}  {summary}".strip()
+        if WWM_RX.search(hint) and not re.search(r"do\s*not", hint, re.IGNORECASE):
+            where = "tech summary" if (WWM_RX.search(summary) and not WWM_RX.search(desc)) else "description"
+            flags.append(f"{where} mentions WWM — confirm $250")
+        elif DS_RX.search(hint) and not re.search(r"do\s*not", hint, re.IGNORECASE):
+            where = "tech summary" if (DS_RX.search(summary) and not DS_RX.search(desc)) else "description"
+            flags.append(f"{where} mentions D&S — confirm $155")
 
     if partial:
         flags.append("partial — billed as Regular $50, confirm")
@@ -501,6 +520,7 @@ def build(token, properties, month_str, workers, max_props):
             rows = []
             for t in tasks:
                 title, desc = task_title(t), task_desc(t)
+                summary = task_summary(t)
                 sched = str(t.get("scheduled_date") or "")[:10]
                 comp = task_completion_date(t)
                 status = task_status(t)
@@ -517,7 +537,7 @@ def build(token, properties, month_str, workers, max_props):
                     continue
 
                 REPORT.candidate_tasks += 1
-                c = classify(title, desc)
+                c = classify(title, desc, summary)
                 flags = list(c["flags"])
                 if not done:
                     flags.append(f"NOT completed yet (status={status or 'unknown'})")
@@ -530,8 +550,10 @@ def build(token, properties, month_str, workers, max_props):
 
                 rows.append({
                     "task_id": t.get("id"),
+                    "report_url": _s(t.get("report_url")).strip(),  # deep link to the tech's report
                     "title": title,
                     "description": desc[:160],
+                    "summary": summary[:400],   # tech's completion note (verbatim)
                     "scheduled_date": sched,
                     "completed_date": comp,
                     "status": status,
@@ -593,7 +615,7 @@ def build(token, properties, month_str, workers, max_props):
 # ── Output ───────────────────────────────────────────────────────────────────
 
 CSV_FIELDS = ["property", "property_floor", "scheduled_date", "completed_date", "status",
-              "disposition", "service_type", "price", "title", "description",
+              "disposition", "service_type", "price", "title", "description", "summary",
               "flags", "assignees", "task_tags", "reason"]
 
 
@@ -615,6 +637,7 @@ def write_csv(path, data):
                     "price": r["price"] if r["disposition"] == "billable" and r["completed"] else "",
                     "title": r["title"],
                     "description": r["description"],
+                    "summary": r.get("summary", ""),
                     "flags": " | ".join(r["flags"]),
                     "assignees": "; ".join(r["assignees"]),
                     "task_tags": "; ".join(r["task_tags"]),

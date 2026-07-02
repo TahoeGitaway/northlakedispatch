@@ -53,9 +53,9 @@
     </summary>
     <div class="px-4 pb-4 text-xs text-gray-700 space-y-1.5">
       <p class="text-gray-500">A read-only counting tool — you still bill by hand in Streamline. Nothing here writes to Breezeway.</p>
-      <div><span class="text-emerald-700 font-semibold">✅ Done —</span> sampled 2,300+ real tasks to learn the wording; locked the price model &amp; floors; built the read-only monthly engine; this page with the rules table, <b>pick-any-month picker that scans on demand</b> (Generate / ↻ Regenerate), per-property worksheet (both dates, boundary flags), and CSV download.</div>
-      <div><span class="text-amber-700 font-semibold">🔎 Now needs you —</span> open a month you've already billed by hand and check the numbers against it. Confirm flagged &amp; “REVIEW” rows. Tell me anything mis-classified so I can tune the rules.</div>
-      <div><span class="text-gray-500 font-semibold">⏭ Next —</span> tune the classifier from your feedback (e.g. standalone “WWM Treatment” titles); add per-row approve/reject that sticks; lease-arrival vs lease handling review.</div>
+      <div><span class="text-emerald-700 font-semibold">✅ Done —</span> sampled 2,300+ real tasks to learn the wording; locked the price model &amp; floors; built the read-only monthly engine; this page with the rules table, <b>pick-any-month picker that scans on demand</b>, per-property worksheet (both dates, boundary flags), and CSV download. <b>New:</b> per-house <b>tape chart</b> (June reservations + a mark on every service performed); the <b>tech's completion summary</b> shown per row (and a flag when it names a heavier service than the title priced); and <b>local, on-your-side adjustments</b> — comp a service, resolve a REVIEW row (bill / skip), and add hypothetical <b>credit / service</b> lines. Your edits save to a local file and adjust the total live; the Breezeway scan stays 100% read-only.</div>
+      <div><span class="text-amber-700 font-semibold">🔎 Now needs you —</span> <b>Regenerate June</b> so the worksheet picks up the tech summaries + task-report links (older scans won't have them). Then work a house: confirm flagged / REVIEW rows, comp or credit where needed, and check the adjusted total. Note: the <b>Download CSV is the raw scan</b> — it doesn't include your local adjustments yet.</div>
+      <div><span class="text-gray-500 font-semibold">⏭ Next —</span> calendar-view link per house (need one example URL from you); optional adjusted-CSV export that bakes in your comps/credits; classifier tuning from your feedback.</div>
     </div>
   </details>
 
@@ -81,6 +81,100 @@ const dispBadge = d => ({
 let MONTHS = { generated: [], pickable: [], current_month: "", default: "" };
 let GEN = new Set();          // months that already have a worksheet
 let polling = null;           // active poll timer
+let CHARTDATA = {};           // property_id → { marks:[{date,type,price}] } for tape charts
+
+// ── Per-house tape chart ─────────────────────────────────────────────────────
+// Colors: green = guest (the important one); others just need to be distinct.
+const RES_COLORS = { guest: "#10b981", owner: "#6366f1", lease: "#f59e0b", block: "#9ca3af" };
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Whole-day index of an ISO date relative to the month's first day (UTC math so
+// there's no timezone drift).
+const dayIdx = (iso, firstIso) =>
+  Math.round((Date.parse(iso + "T00:00:00Z") - Date.parse(firstIso + "T00:00:00Z")) / 86400000);
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+const prettyDay = iso => {
+  const p = iso.split("-");
+  return MONTH_ABBR[(+p[1]) - 1] + " " + (+p[2]);
+};
+
+// Build the SVG-free tape chart for one house from its reservations + service marks.
+function buildTapeChart(reservations, marks, meta) {
+  const N = meta.days, first = meta.first;
+  const track = `position:relative;height:20px;border-radius:4px;background:#f3f4f6;overflow:hidden;`;
+
+  // Reservation segments, clipped to the month's window.
+  const segs = (reservations || []).map(r => {
+    const s = clamp(dayIdx(r.checkin, first), 0, N);
+    const e = clamp(dayIdx(r.checkout, first), 0, N);
+    const w = Math.max(e - s, 0.35);           // keep a sliver visible for 1-day spans
+    const color = RES_COLORS[r.kind] || RES_COLORS.block;
+    const tip = `${r.kind}: ${prettyDay(r.checkin)} → ${prettyDay(r.checkout)}`;
+    return `<div title="${esc(tip)}" style="position:absolute;top:0;bottom:0;left:${(s/N*100).toFixed(2)}%;`
+         + `width:${(w/N*100).toFixed(2)}%;background:${color};opacity:.9;"></div>`;
+  }).join("");
+
+  // Week gridlines for orientation (every 7 days).
+  let grid = "";
+  for (let dd = 7; dd < N; dd += 7) {
+    grid += `<div style="position:absolute;top:0;bottom:0;left:${(dd/N*100).toFixed(2)}%;width:1px;background:rgba(255,255,255,.6);"></div>`;
+  }
+
+  // Service marks (billed services only), centered on their day.
+  const pins = (marks || []).map(m => {
+    const i = dayIdx(m.date, first);
+    if (i < 0 || i >= N) return "";
+    const left = ((i + 0.5) / N * 100).toFixed(2);
+    const tip = `${prettyDay(m.date)} · ${m.type} · $${m.price}`;
+    return `<div title="${esc(tip)}" style="position:absolute;top:50%;left:${left}%;transform:translate(-50%,-50%);`
+         + `width:9px;height:9px;border-radius:50%;background:#0f172a;box-shadow:0 0 0 2px #fff;z-index:2;"></div>`;
+  }).join("");
+
+  // Day-number axis: label the 1st, then every 5th, then the last day.
+  const ticks = [];
+  for (let dd = 1; dd <= N; dd++) {
+    if (dd === 1 || dd === N || dd % 5 === 0) {
+      const left = ((dd - 0.5) / N * 100).toFixed(2);
+      ticks.push(`<span style="position:absolute;left:${left}%;transform:translateX(-50%);">${dd}</span>`);
+    }
+  }
+  const axis = `<div style="position:relative;height:12px;margin-top:2px;font-size:9px;color:#9ca3af;">${ticks.join("")}</div>`;
+
+  const empty = (!reservations || !reservations.length)
+    ? `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#c7cbd1;">no reservations this month</div>`
+    : "";
+
+  return `<div style="${track}">${grid}${segs}${empty}${pins}</div>${axis}`;
+}
+
+// Fetch this month's reservations once, then drop a tape chart into every house.
+async function fillTapeCharts(month) {
+  const pids = Object.keys(CHARTDATA);
+  if (!pids.length) return;
+  let data = RESDATA[month];   // reuse across re-renders so edits don't refetch
+  if (!data) {
+    try {
+      const r = await fetch("/admin/hot-tub-billing/reservations?month=" + encodeURIComponent(month));
+      data = await r.json();
+    } catch (e) {
+      data = { ok: false, reason: "Could not reach the reservations service." };
+    }
+    if (data && data.ok !== false) RESDATA[month] = data;   // only cache good payloads
+  }
+  const meta = { days: data.days || 30, first: data.first || (month + "-01") };
+  const byProp = (data && data.by_property) || {};
+  for (const pid of pids) {
+    const el = document.getElementById("htchart-" + pid);
+    if (!el) continue;
+    if (data && data.ok === false) {
+      el.innerHTML = `<div class="text-[11px] text-amber-600">Tape chart unavailable — ${esc(data.reason || "reservation lookup failed")}.</div>`;
+      continue;
+    }
+    el.innerHTML = buildTapeChart(byProp[pid] || [], CHARTDATA[pid].marks, meta);
+  }
+}
 
 const monthLabel = m => {
   const has = GEN.has(m);
@@ -140,6 +234,16 @@ async function load(month) {
   const url = "/admin/hot-tub-billing/data" + (month ? `?month=${month}` : "");
   const r = await fetch(url);
   const d = await r.json();
+  // Pull this month's local adjustments alongside the worksheet so the first
+  // render already reflects her comps / credits / resolutions.
+  OVERRIDES = { rows: {}, manual: [] };
+  saveState = "";
+  if (d && d.exists) {
+    try {
+      const o = await (await fetch("/admin/hot-tub-billing/overrides?month=" + encodeURIComponent(d.month))).json();
+      OVERRIDES = { rows: o.rows || {}, manual: o.manual || [] };
+    } catch (e) { /* no adjustments yet — start clean */ }
+  }
   setLoading(false);
   render(d);
 }
@@ -214,9 +318,133 @@ async function generate(month) {
   polling = setTimeout(poll, 1500);
 }
 
+// ── Local adjustments (comp / resolve review / hypothetical credit+service) ──
+// Every edit here lives ONLY in the per-month overrides file on our side. The
+// Breezeway scan is never written to — it stays strictly read-only. These
+// helpers apply the saved overrides on top of the read-only worksheet and
+// recompute the billed total live as she edits.
+let CURRENT = null;                       // last-loaded worksheet payload
+let OVERRIDES = { rows: {}, manual: [] }; // this month's local adjustments
+let RESDATA = {};                         // month → reservations payload (client cache)
+let EDIT = { includeTid: null, manualPid: null };  // which inline editor is open
+let saveState = "";                       // "" | "saving" | "saved" | "error"
+
+const ovFor = tid => OVERRIDES.rows[String(tid)] || null;
+
+// Effective state of a scanned row after applying its override (if any).
+function effRow(r) {
+  const o = ovFor(r.task_id);
+  let status = r.disposition;                                   // billable|review|excluded
+  let price  = (r.disposition === "billable" && r.completed) ? (+r.price || 0) : 0;
+  let type   = r.service_type;
+  if (o) {
+    if (o.action === "comp")         { status = "comped";   price = 0; }
+    else if (o.action === "exclude") { status = "excluded"; price = 0; }
+    else if (o.action === "include") { status = "billable"; price = +o.price || 0; if (o.service_type) type = o.service_type; }
+  }
+  // A performed service counts toward the monthly floor (comped ones still
+  // happened — comping just zeroes the charge, it doesn't un-perform the visit).
+  const performed = (status === "billable" || status === "comped") &&
+                    (r.completed || (o && o.action === "include"));
+  return { o, status, price, type, performed };
+}
+
+// Per-property totals under the current overrides.
+function recompute(p) {
+  const eff = p.rows.map(r => ({ r, e: effRow(r) }));
+  let subtotal = 0, visits = 0;
+  for (const { e } of eff) {
+    if (e.performed) visits++;
+    if (e.status === "billable") subtotal += e.price;
+  }
+  const floor = p.floor || 0;
+  const topup = Math.max(0, floor - visits);
+  const floorAmt = topup * 50;
+  const manual = (OVERRIDES.manual || []).filter(m => String(m.property_id) === String(p.property_id));
+  let manualSum = 0;
+  for (const m of manual) manualSum += (m.kind === "credit" ? -(+m.amount || 0) : (+m.amount || 0));
+  return { eff, subtotal, visits, floor, topup, floorAmt, manual, manualSum,
+           total: subtotal + floorAmt + manualSum };
+}
+
+const signMoney = (kind, amt) => (kind === "credit" ? "−" : "+") + "$" + Number(amt || 0).toLocaleString();
+
+async function saveOverrides() {
+  const month = CURRENT && CURRENT.month;
+  if (!month) return;
+  saveState = "saving"; paintSaveState();
+  try {
+    const r = await fetch("/admin/hot-tub-billing/overrides?month=" + encodeURIComponent(month), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: OVERRIDES.rows, manual: OVERRIDES.manual }),
+    });
+    const j = await r.json();
+    if (j && j.saved) { OVERRIDES = { rows: j.rows || {}, manual: j.manual || [] }; saveState = "saved"; }
+    else saveState = "error";
+  } catch (e) { saveState = "error"; }
+  paintSaveState();
+}
+
+function paintSaveState() {
+  const el = document.getElementById("saveState");
+  if (!el) return;
+  el.textContent = saveState === "saving" ? "saving…"
+    : saveState === "saved" ? "✓ your adjustments are saved locally"
+    : saveState === "error" ? "⚠ couldn't save adjustments — retry your last edit"
+    : "";
+  el.className = "text-[11px] " + (saveState === "error" ? "text-rose-600" : "text-gray-400");
+}
+
+const rerender = () => { if (CURRENT) render(CURRENT); };
+
+function setRow(tid, entry) {
+  if (entry) OVERRIDES.rows[String(tid)] = entry;
+  else delete OVERRIDES.rows[String(tid)];
+  saveOverrides(); rerender();
+}
+function addManual(pid, m) {
+  const id = "m" + Date.now() + Math.floor(Math.random() * 1000);
+  OVERRIDES.manual.push({ id, property_id: String(pid), ...m });
+  saveOverrides(); rerender();
+}
+function delManual(mid) {
+  OVERRIDES.manual = OVERRIDES.manual.filter(m => m.id !== mid);
+  saveOverrides(); rerender();
+}
+
+// The effective badge + the action buttons for one scanned row.
+function effBadge(r, e) {
+  if (e.o && e.o.action === "comp")    return `<span class="text-slate-700 bg-slate-100 border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-semibold">COMPED $0</span>`;
+  if (e.o && e.o.action === "exclude") return `<span class="text-gray-500 bg-gray-100 border border-gray-300 rounded px-1.5 py-0.5 text-[10px] font-semibold">EXCLUDED</span>`;
+  if (e.o && e.o.action === "include") return `<span class="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 text-[10px] font-semibold">BILL·set</span>`;
+  return dispBadge(r.disposition);
+}
+
+function rowActions(r, e) {
+  const tid = esc(String(r.task_id));
+  if (EDIT.includeTid === String(r.task_id)) {
+    return `<span class="inline-flex items-center gap-1 mt-1">
+      <input data-inc-price type="number" min="0" value="${e.price || 50}" class="w-14 border border-gray-200 rounded px-1 py-0.5 text-[11px]">
+      <select data-inc-type class="border border-gray-200 rounded px-1 py-0.5 text-[11px]">
+        <option value="regular">regular</option><option value="dump_scrub">D&amp;S</option><option value="wwm">WWM</option></select>
+      <button data-act="include-save" data-tid="${tid}" class="text-emerald-700 hover:underline text-[11px]">save</button>
+      <button data-act="edit-cancel" class="text-gray-400 hover:underline text-[11px]">cancel</button></span>`;
+  }
+  if (e.o) return `<button data-act="undo" data-tid="${tid}" class="text-gray-400 hover:underline text-[11px] mt-1 block">undo</button>`;
+  const btns = [];
+  if (r.disposition === "billable" && r.completed)
+    btns.push(`<button data-act="comp" data-tid="${tid}" class="text-indigo-600 hover:underline">comp</button>`);
+  if (r.disposition === "review" || r.disposition === "excluded")
+    btns.push(`<button data-act="include-open" data-tid="${tid}" class="text-emerald-700 hover:underline">bill…</button>`);
+  if (r.disposition !== "excluded")
+    btns.push(`<button data-act="exclude" data-tid="${tid}" class="text-gray-400 hover:underline">skip</button>`);
+  return btns.length ? `<span class="inline-flex flex-wrap gap-x-2 text-[11px] mt-1">${btns.join("")}</span>` : "";
+}
+
 function render(d) {
   const sb = document.getElementById("statusBar");
   const cn = document.getElementById("content");
+  CURRENT = d.exists ? d : null;
   if (!d.exists) {
     setCsv(null, false);
     sb.innerHTML = `<div class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-4 py-3">
@@ -225,63 +453,190 @@ function render(d) {
   }
   setCsv(d.month, d.has_csv !== false);
 
+  const props = (d.props || []).filter(p => p.rows && p.rows.length);
+  const computed = props.map(p => ({ p, rc: recompute(p) }));
+  const adjTotal = computed.reduce((s, c) => s + c.rc.total, 0);
+
   const partial = d.status !== "COMPLETE";
+  const changed = adjTotal !== d.money_total;
   const types = Object.entries(d.type_totals || {}).map(([k,v]) => `${k}×${v}`).join(" · ") || "none";
   sb.innerHTML = `
     <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm ${partial ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'} border rounded-md px-4 py-3">
       <span class="font-bold ${partial ? 'text-amber-800' : 'text-emerald-800'}">
         ${partial ? '⚠️ PARTIAL — ' + (d.failures||[]).length + ' failure(s)' : '✅ ' + esc(d.month)}</span>
-      <span class="text-gray-700"><b>${money(d.money_total)}</b> estimated owner total</span>
+      <span class="text-gray-700"><b>${money(adjTotal)}</b> owner total${changed ? ` <span class="text-gray-400 line-through ml-1">${money(d.money_total)}</span> <span class="text-indigo-600 text-xs">adjusted</span>` : ''}</span>
       <span class="text-gray-500">${esc(types)}</span>
       <span class="text-gray-500">${d.properties_scanned}/${d.properties_tagged} properties · ${d.candidate_tasks} tasks examined</span>
       <span class="text-gray-400 text-xs">generated ${esc((d.generated_at||"").slice(0,16))}</span>
+      <span id="saveState" class="text-[11px] text-gray-400"></span>
     </div>`;
 
-  const props = (d.props || []).filter(p => p.rows && p.rows.length);
-  cn.innerHTML = props.map(p => {
-    const floorNote = p.floor_topup
-      ? `<span class="text-amber-700 text-xs ml-2">⬆ floor ${p.floor}: only ${p.visits_billable} performed, +${p.floor_topup}×$50 minimum (${money(p.floor_amount)})</span>`
-      : (p.floor ? `<span class="text-gray-400 text-xs ml-2">floor ${p.floor}/mo</span>` : "");
-    const flagNote = p.flagged ? `<span class="text-amber-600 text-xs ml-2">⚑ ${p.flagged} flagged</span>` : "";
-    const revNote = p.needs_review ? `<span class="text-amber-600 text-xs ml-2">🔎 ${p.needs_review} to review</span>` : "";
-    const rows = p.rows.map(r => {
-      const price = (r.disposition === "billable" && r.completed) ? money(r.price) : "";
-      const flags = (r.flags || []).join("; ");
+  // Reset the per-render map of tape-chart data (property_id → marks), filled
+  // below as we build each card and consumed by fillTapeCharts() once the
+  // reservations arrive.
+  CHARTDATA = {};
+
+  const legend = `
+    <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-500">
+      <span class="font-medium text-gray-600">Tape chart:</span>
+      <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm" style="background:#10b981"></span>Guest</span>
+      <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm" style="background:#6366f1"></span>Owner</span>
+      <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm" style="background:#f59e0b"></span>Lease</span>
+      <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm" style="background:#9ca3af"></span>Owner block</span>
+      <span class="inline-flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full ring-2 ring-white" style="background:#0f172a"></span>Hot-tub service performed</span>
+    </div>`;
+
+  cn.innerHTML = legend + computed.map(({ p, rc }) => {
+    const pid = String(p.property_id);
+    const floorNote = rc.topup
+      ? `<span class="text-amber-700 text-xs ml-2">⬆ floor ${rc.floor}: ${rc.visits} performed, +${rc.topup}×$50 minimum (${money(rc.floorAmt)})</span>`
+      : (rc.floor ? `<span class="text-gray-400 text-xs ml-2">floor ${rc.floor}/mo</span>` : "");
+    const scanStrike = (rc.total !== p.total)
+      ? `<span class="text-xs font-normal text-gray-400 line-through ml-1">${money(p.total)}</span>` : "";
+
+    // Tape-chart service marks: every performed service (billable OR comped —
+    // both physically happened), plotted on the in-month date.
+    CHARTDATA[pid] = {
+      marks: rc.eff
+        .filter(x => x.e.performed)
+        .map(({ r, e }) => {
+          const sd = (r.scheduled_date || "").slice(0, 7) === d.month ? r.scheduled_date : "";
+          const cd = (r.completed_date || "").slice(0, 7) === d.month ? r.completed_date : "";
+          return { date: sd || cd, type: e.type, price: e.price };
+        })
+        .filter(m => m.date),
+    };
+
+    const rows = rc.eff.map(({ r, e }) => {
+      let priceCell = "";
+      if (e.status === "comped")        priceCell = `<span class="line-through text-gray-300">${money(r.price)}</span>`;
+      else if (e.status === "billable") priceCell = money(e.price);
+      const flagChips = (r.flags || []).map(f =>
+        `<span class="inline-block bg-amber-50 border border-amber-200 text-amber-700 rounded px-1.5 py-0.5 text-[10px] mr-1 mb-0.5">${esc(f)}</span>`
+      ).join("");
+      const ovNote = e.o && e.o.note
+        ? `<div class="text-[10px] text-indigo-600 mt-0.5">✎ ${esc(e.o.note)}</div>` : "";
+      const summaryTxt = r.summary
+        ? `<span class="text-gray-700">${esc(r.summary)}</span>`
+        : `<span class="text-gray-300">—</span>`;
       const notDone = !r.completed ? ` <span class="text-rose-500 text-[10px]">(not done)</span>` : "";
-      return `<tr class="border-t border-gray-100 ${r.disposition==='excluded'?'opacity-50':''}">
-        <td class="py-1 pr-3 whitespace-nowrap text-gray-500">${esc(r.scheduled_date||"—")}</td>
-        <td class="py-1 pr-3 whitespace-nowrap text-gray-500">${esc(r.completed_date||"—")}${notDone}</td>
-        <td class="py-1 pr-3">${dispBadge(r.disposition)}</td>
-        <td class="py-1 pr-3 whitespace-nowrap font-medium text-gray-700">${esc(r.service_type)}</td>
-        <td class="py-1 pr-3 text-right font-semibold text-gray-800">${price}</td>
-        <td class="py-1 pr-3 text-gray-700">${esc(r.title)}</td>
-        <td class="py-1 text-amber-700">${esc(flags)}</td>
+      const taskLink = r.report_url
+        ? ` <a href="${esc(r.report_url)}" target="_blank" rel="noopener" class="text-indigo-500 hover:underline text-[10px] whitespace-nowrap">report ↗</a>` : "";
+      const dim = (e.status === "excluded") ? "opacity-50" : "";
+      return `<tr class="border-t border-gray-100 ${dim}">
+        <td class="py-1 pr-3 whitespace-nowrap text-gray-500 align-top">${esc(r.scheduled_date||"—")}</td>
+        <td class="py-1 pr-3 whitespace-nowrap text-gray-500 align-top">${esc(r.completed_date||"—")}${notDone}</td>
+        <td class="py-1 pr-3 align-top">${effBadge(r, e)}${rowActions(r, e)}</td>
+        <td class="py-1 pr-3 whitespace-nowrap font-medium text-gray-700 align-top">${esc(e.type)}</td>
+        <td class="py-1 pr-3 text-right font-semibold text-gray-800 align-top">${priceCell}</td>
+        <td class="py-1 pr-3 text-gray-700 align-top">${esc(r.title)}${taskLink}</td>
+        <td class="py-1 align-top min-w-[16rem]">${flagChips ? `<div class="mb-0.5">${flagChips}</div>` : ""}${summaryTxt}${ovNote}</td>
       </tr>`;
     }).join("");
+
+    // Manual credit / service lines she added locally.
+    const manualRows = rc.manual.map(m => {
+      const col = m.kind === "credit" ? "text-rose-600" : "text-emerald-700";
+      return `<tr class="border-t border-gray-100 bg-indigo-50/30">
+        <td class="py-1 pr-3 whitespace-nowrap text-gray-500 align-top">${esc(m.date||"—")}</td>
+        <td class="py-1 pr-3 align-top text-gray-300">—</td>
+        <td class="py-1 pr-3 align-top"><span class="text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 text-[10px] font-semibold">MANUAL ${m.kind === "credit" ? "CREDIT" : "SERVICE"}</span></td>
+        <td class="py-1 pr-3 whitespace-nowrap font-medium text-gray-700 align-top">${esc(m.service_type || m.kind)}</td>
+        <td class="py-1 pr-3 text-right font-semibold ${col} align-top">${signMoney(m.kind, m.amount)}</td>
+        <td class="py-1 pr-3 text-gray-500 italic align-top" colspan="2">${esc(m.note || "manual line")}
+          <button data-act="manual-del" data-mid="${esc(m.id)}" class="ml-2 text-gray-400 hover:underline text-[11px] not-italic">remove</button></td>
+      </tr>`;
+    }).join("");
+
+    const addForm = EDIT.manualPid === pid ? `
+      <tr class="border-t border-gray-100 bg-indigo-50/40"><td colspan="7" class="py-2 px-1">
+        <div class="flex flex-wrap items-end gap-2 text-[11px]">
+          <label class="flex flex-col text-gray-500">kind
+            <select data-mf="kind" class="border border-gray-200 rounded px-1 py-0.5 text-[11px]">
+              <option value="service">service (adds)</option><option value="credit">credit (subtracts)</option></select></label>
+          <label class="flex flex-col text-gray-500">type / label
+            <input data-mf="type" placeholder="e.g. regular, courtesy credit" class="border border-gray-200 rounded px-1 py-0.5 text-[11px] w-44"></label>
+          <label class="flex flex-col text-gray-500">amount $
+            <input data-mf="amount" type="number" min="0" value="50" class="border border-gray-200 rounded px-1 py-0.5 text-[11px] w-20"></label>
+          <label class="flex flex-col text-gray-500">date
+            <input data-mf="date" type="date" value="${esc(d.month)}-01" class="border border-gray-200 rounded px-1 py-0.5 text-[11px]"></label>
+          <label class="flex flex-col text-gray-500 grow">note
+            <input data-mf="note" placeholder="why" class="border border-gray-200 rounded px-1 py-0.5 text-[11px] w-full"></label>
+          <button data-act="manual-save" data-pid="${esc(pid)}" class="bg-indigo-600 text-white rounded px-2 py-1">Add</button>
+          <button data-act="edit-cancel" class="text-gray-400 hover:underline px-1 py-1">cancel</button>
+        </div></td></tr>` : "";
+
     return `<div class="mb-4 border border-gray-200 rounded-lg bg-white">
       <div class="px-4 py-2.5 flex items-baseline justify-between border-b border-gray-100">
         <h3 class="font-semibold text-gray-800">${esc(p.property)}
-          ${floorNote}${flagNote}${revNote}</h3>
-        <div class="text-lg font-bold text-gray-900">${money(p.total)}
-          <span class="text-xs font-normal text-gray-400">(${p.visits_billable} billable)</span></div>
+          <span data-cal-link="${esc(pid)}" data-ref="${esc(String(p.property_id))}"></span>
+          ${floorNote}</h3>
+        <div class="text-lg font-bold text-gray-900">${money(rc.total)}${scanStrike}
+          <span class="text-xs font-normal text-gray-400">(${rc.visits} performed)</span></div>
+      </div>
+      <div id="htchart-${esc(pid)}" class="px-4 pt-3 pb-1 border-b border-gray-50">
+        <div class="text-[11px] text-gray-300">Loading tape chart…</div>
       </div>
       <div class="px-4 py-2 overflow-x-auto">
         <table class="text-xs w-full border-collapse">
           <thead><tr class="text-gray-400 text-left">
             <th class="font-medium pb-1 pr-3">sched</th><th class="font-medium pb-1 pr-3">done</th>
-            <th class="font-medium pb-1 pr-3"></th><th class="font-medium pb-1 pr-3">type</th>
+            <th class="font-medium pb-1 pr-3">status / action</th><th class="font-medium pb-1 pr-3">type</th>
             <th class="font-medium pb-1 pr-3 text-right">$</th><th class="font-medium pb-1 pr-3">title</th>
-            <th class="font-medium pb-1">flags / notes</th>
+            <th class="font-medium pb-1">summary (tech note)</th>
           </tr></thead>
-          <tbody>${rows}</tbody>
+          <tbody>${rows}${manualRows}${addForm}</tbody>
         </table>
+        <div class="pt-2">
+          <button data-act="manual-open" data-pid="${esc(pid)}" class="text-[11px] text-indigo-600 hover:underline">+ add credit / service</button>
+        </div>
       </div>
     </div>`;
   }).join("") || `<div class="text-sm text-gray-400 py-8 text-center">No hot-tub services found this month.</div>`;
+
+  // Overlay the tape charts once the cards are in the DOM (reservations load
+  // live and independently, so the worksheet never waits on them).
+  if (props.length) fillTapeCharts(d.month);
+  paintSaveState();
+}
+
+// One delegated handler for every comp / resolve / manual-line control. The
+// #content container is never itself replaced (only its innerHTML), so this
+// listener, attached once, survives every re-render.
+function onContentClick(ev) {
+  const b = ev.target.closest("[data-act]");
+  if (!b) return;
+  const act = b.dataset.act, tid = b.dataset.tid, pid = b.dataset.pid;
+  if (act === "comp")            setRow(tid, { action: "comp" });
+  else if (act === "exclude")    setRow(tid, { action: "exclude" });
+  else if (act === "undo")       setRow(tid, null);
+  else if (act === "include-open") { EDIT = { includeTid: tid, manualPid: null }; rerender(); }
+  else if (act === "edit-cancel")  { EDIT = { includeTid: null, manualPid: null }; rerender(); }
+  else if (act === "manual-open")  { EDIT = { includeTid: null, manualPid: pid }; rerender(); }
+  else if (act === "include-save") {
+    const cell = b.closest("td");
+    const price = cell.querySelector("[data-inc-price]").value;
+    const type  = cell.querySelector("[data-inc-type]").value;
+    EDIT = { includeTid: null, manualPid: null };
+    setRow(tid, { action: "include", price: Number(price) || 0, service_type: type });
+  }
+  else if (act === "manual-save") {
+    const cell = b.closest("td");
+    const g = s => cell.querySelector(`[data-mf="${s}"]`);
+    const amount = Number(g("amount").value) || 0;
+    if (amount <= 0) { g("amount").focus(); return; }
+    EDIT = { includeTid: null, manualPid: null };
+    addManual(pid, {
+      kind: g("kind").value, service_type: g("type").value.trim(),
+      amount, date: g("date").value, note: g("note").value.trim(),
+    });
+  }
+  else if (act === "manual-del") delManual(b.dataset.mid);
 }
 
 (async () => {
   setCsv(null, false);
+  document.getElementById("content").addEventListener("click", onContentClick);
   await loadMonths();
   const sel = document.getElementById("monthSel");
   sel.addEventListener("change", () => select(sel.value));

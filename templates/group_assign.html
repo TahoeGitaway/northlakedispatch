@@ -1110,12 +1110,18 @@ function switchTab(tab) {
 // specialists and presses "Show" — never auto-populated.
 let SPEC_SELECTED = new Set();
 
-// Bucket EVERY task (check-ins folded in) by its current assignee.
+// Bucket EVERY task (check-ins folded in) by its current assignee, THEN fold in
+// every approved assignment candidate (the roster the assign dropdown uses) with an
+// empty bucket — so people you assign to (e.g. Jonah) are always pickable even on a
+// day they have no tasks. Task-derived team/combo entries (e.g. "267 Zone") stay.
 function _specBuckets() {
   const byS = {};
   _allScanTasks().forEach(t => {
     const key = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'Unassigned';
     (byS[key] = byS[key] || []).push(t);
+  });
+  ((SCAN && SCAN.people) || []).forEach(p => {
+    if (p && p.name && !(p.name in byS)) byS[p.name] = [];
   });
   return byS;
 }
@@ -1230,6 +1236,16 @@ function buildSpecialist(name, tasks) {
     <label style="font-size:0.75rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:5px;">
       <input type="checkbox" class="spec-cb"> Select all</label>`;
   wrap.appendChild(head);
+
+  // Roster person with nothing scheduled that day — still show the card so it's
+  // clear they were selected and simply have no tasks.
+  if (!tasks.length) {
+    const note = document.createElement('div');
+    note.style.cssText = 'padding:10px 16px;font-size:0.76rem;color:#9ca3af;font-style:italic;';
+    note.textContent = '— no tasks on this date —';
+    wrap.appendChild(note);
+    return wrap;
+  }
 
   // Sub-category: property group.
   const byGrp = {};

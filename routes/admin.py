@@ -862,57 +862,7 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
     )
     import difflib
 
-    # Property specs arrive as plain strings OR dicts (models vary; some send
-    # {"name": ..., "address": ...}). Normalize each to (label, address, name).
-    # Coercing here also prevents name.lower() from throwing
-    # "'dict' object has no attribute 'lower'" on dict input.
-    import re as _re
-    from routes.my_bot import _clean_house_name
-    from routes.briefing import _get_live_addr_cache
-
-    # Index Breezeway addresses by leading street number. Address matching is far
-    # safer than fuzzy house-name matching, which grabs the wrong house (Asana's
-    # "Renegade TD" fuzzy-matched to Breezeway's "Secret Garden Lodge").
-    _addr_num_index = {}
-    for _pid, _a in (_get_live_addr_cache() or {}).items():
-        _mn = _re.match(r"\s*#?\s*(\d{2,6})\b", _a or "")
-        if _mn:
-            _addr_num_index.setdefault(_mn.group(1), []).append((_pid, _a))
-
-    def _resolve_by_address(text):
-        """property_id from a street address in `text`, or None if there isn't a
-        single confident match (prefer not-found over the wrong house)."""
-        m = _re.search(r"\b(\d{2,6})\s+([A-Za-z][A-Za-z0-9 .#'/-]*)", text or "")
-        if not m:
-            return None
-        cands = _addr_num_index.get(m.group(1), [])
-        if len(cands) == 1:
-            return cands[0][0]
-        if len(cands) > 1:  # same street number — disambiguate by street name
-            w = set(_re.findall(r"[a-z]+", m.group(2).lower()))
-            narrowed = [c for c in cands
-                        if w & set(_re.findall(r"[a-z]+", (c[1] or "").lower()))]
-            if len(narrowed) == 1:
-                return narrowed[0][0]
-        return None
-
-    def _spec(p):
-        if isinstance(p, dict):
-            nm = (p.get("name") or p.get("property_name") or p.get("property")
-                  or p.get("value") or "").strip()
-            ad = (p.get("address") or "").strip()
-        else:
-            s = str(p or "").strip()
-            if _re.match(r"^\s*\d{2,6}\s+[A-Za-z]", s):   # a bare address string
-                nm, ad = "", s
-            else:
-                nm, ad = s, ""
-        return (nm or ad, ad or None, nm or None)
-
-    specs = [x for x in (_spec(p) for p in (property_names or [])) if x[0]]
-
-    def _fetch_one(spec):
-        label, address, name = spec
+    def _fetch_one(name):
         from datetime import date as _d, timedelta
         try:
             s = _d.fromisoformat(start_str); e = _d.fromisoformat(end_str)
@@ -924,41 +874,32 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
         if not tok:
             return "Breezeway not configured."
         params = {"scheduled_date": f"{start_str},{e.isoformat()}"}
+        cache  = _get_live_property_cache()
+        nl     = name.lower().strip()
+        rev    = {v.lower(): k for k, v in cache.items() if isinstance(v, str)}
 
-        # 1) Address is the reliable key — try it first.
-        pid = _resolve_by_address(address) if address else None
-        if pid is None and address:
-            # An address was supplied but didn't resolve to one property — do NOT
-            # fall back to fuzzy name matching; prefer not-found.
-            return f"Property not found for address '{address}'."
+        def _norm(s):
+            return s.lower().replace(" ", "").replace("-", "").replace("'", "")
 
-        # 2) Legacy name matching (only when no address was supplied).
-        if pid is None:
-            cache = _get_live_property_cache()
-            nl    = _clean_house_name(name or label).lower().strip()
-            rev   = {v.lower(): k for k, v in cache.items() if isinstance(v, str)}
+        nl_norm  = _norm(nl)
+        norm_rev = {_norm(k): k for k in rev}
 
-            def _norm(x):
-                return x.lower().replace(" ", "").replace("-", "").replace("'", "")
-
-            nl_norm  = _norm(nl)
-            norm_rev = {_norm(k): k for k in rev}
-            if nl in rev:
-                pid = rev[nl]
-            else:
-                qw = set(nl.split())
-                matches = (
-                    [k for k in rev if k.startswith(nl)] or
-                    [k for k in rev if nl in k] or
-                    [k for k in rev if qw and qw.issubset(set(k.split()))] or
-                    difflib.get_close_matches(nl, rev.keys(), n=3, cutoff=0.4) or
-                    [norm_rev[nk] for nk in norm_rev if nk.startswith(nl_norm)] or
-                    [norm_rev[nk] for nk in norm_rev if nl_norm in nk] or
-                    [norm_rev[nk] for nk in norm_rev if len(nk) > 4 and nk in nl_norm]
-                )
-                pid = rev[matches[0]] if matches else None
+        if nl in rev:
+            pid = rev[nl]
+        else:
+            qw = set(nl.split())
+            matches = (
+                [k for k in rev if k.startswith(nl)] or
+                [k for k in rev if nl in k] or
+                [k for k in rev if qw and qw.issubset(set(k.split()))] or
+                difflib.get_close_matches(nl, rev.keys(), n=3, cutoff=0.4) or
+                [norm_rev[nk] for nk in norm_rev if nk.startswith(nl_norm)] or
+                [norm_rev[nk] for nk in norm_rev if nl_norm in nk] or
+                [norm_rev[nk] for nk in norm_rev if len(nk) > 4 and nk in nl_norm]
+            )
+            pid = rev[matches[0]] if matches else None
         if not pid:
-            return f"Property '{label}' not found."
+            return f"Property '{name}' not found."
         ref_id = _get_live_ref_cache().get(pid)
         for prop_key, prop_val in (
             [("reference_property_id", ref_id)] if ref_id else []
@@ -966,8 +907,8 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
             t, _, sc = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", {**params, prop_key: prop_val})
             if sc == 200:
                 if not t:
-                    return f"No tasks found at {label} between {start_str} and {e.isoformat()}."
-                lines = [f"Tasks at {label}:"]
+                    return f"No tasks found at {name} between {start_str} and {e.isoformat()}."
+                lines = [f"Tasks at {name}:"]
                 for task in t:
                     title = (task.get("title") or task.get("name") or "Untitled")
                     if isinstance(title, dict):
@@ -988,19 +929,18 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
                         status_label = "⏳ Pending"
                     lines.append(f"  • [{status_label}] {title} | {sdate} {stime} | assigned: {', '.join(names_list) or 'unassigned'}")
                 return "\n".join(lines)
-        return f"Could not retrieve tasks for '{label}'."
+        return f"Could not retrieve tasks for '{name}'."
 
-    if not specs:
+    if not property_names:
         return "No property names provided."
-    if len(specs) == 1:
-        return _fetch_one(specs[0])
+    if len(property_names) == 1:
+        return _fetch_one(property_names[0])
     results = {}
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_fetch_one, sp): sp[0] for sp in specs}
+        futures = {executor.submit(_fetch_one, n): n for n in property_names}
         for future in as_completed(futures):
             results[futures[future]] = future.result()
-    return "\n\n".join(f"=== {lbl} ===\n{results.get(lbl, 'No data.')}"
-                       for lbl in [sp[0] for sp in specs])
+    return "\n\n".join(f"=== {n} ===\n{results.get(n,'No data.')}" for n in property_names)
 
 # ── PRI dismissals (shared across all users/browsers) ────────────────
 

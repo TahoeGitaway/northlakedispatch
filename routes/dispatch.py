@@ -796,7 +796,7 @@ def optimize():
                 end_node=end_node, front_flags=front_flags
             )
             if ordered_nodes is None:
-                return jsonify({"error": "The route optimizer failed on all three passes (hard constraints, soft penalties, and unconstrained). This is unexpected — check that OR-Tools is installed correctly and that the stop coordinates are in a reachable area."}), 500
+                return jsonify({"error": "The route optimizer couldn't find a valid route on any of its three passes (hard constraints, soft penalties, and unconstrained). This usually means the stops can't be reached in the available time — try removing a stop, widening the time window, or checking that every stop's address resolved to a real location."}), 500
 
     if not preserve_order:
         node_arrival_sec = {}
