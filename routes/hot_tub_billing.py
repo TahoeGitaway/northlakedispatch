@@ -31,7 +31,9 @@ Endpoints:
 """
 
 import os
+import io
 import re
+import csv
 import sys
 import glob
 import json
@@ -41,10 +43,11 @@ import subprocess
 import threading
 from datetime import date, datetime
 
-from flask import Blueprint, render_template, jsonify, send_file, request, abort
+from flask import Blueprint, render_template, jsonify, send_file, request, abort, Response
 from flask_login import login_required
 
 from routes.auth import admin_required
+from db import get_db, get_cursor
 # Reuse briefing's proven, read-only Breezeway helpers so the tape charts share
 # exactly one auth + reservation-classification code path with the rest of the app.
 from routes.briefing import (
@@ -88,6 +91,219 @@ def _log_path(month: str) -> str:
     return os.path.join(_ROOT, f"hot_tub_billing_{month}.log")
 
 
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# ── Durable storage (Postgres) ───────────────────────────────────────────────
+# The host wipes the local filesystem on every deploy/restart, so worksheets and
+# adjustments must live in the DB or they vanish. All app-side; never Breezeway.
+
+def _db_save_worksheet(month: str, payload: dict) -> None:
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO hot_tub_worksheets (month, payload, generated_at, updated_at) "
+            "VALUES (%s,%s,%s,%s) ON CONFLICT (month) DO UPDATE SET "
+            "payload=EXCLUDED.payload, generated_at=EXCLUDED.generated_at, updated_at=EXCLUDED.updated_at",
+            (month, json.dumps(payload), payload.get("generated_at") or _now_iso(), _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_load_worksheet(month: str):
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute("SELECT payload FROM hot_tub_worksheets WHERE month=%s", (month,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row["payload"])
+    except Exception:
+        return None
+
+
+def _db_worksheet_months() -> list:
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute("SELECT month FROM hot_tub_worksheets")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [r["month"] for r in rows]
+
+
+def _db_load_overrides(month: str):
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute("SELECT doc FROM hot_tub_overrides WHERE month=%s", (month,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row["doc"])
+    except Exception:
+        return None
+
+
+def _db_save_overrides(month: str, doc: dict) -> None:
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO hot_tub_overrides (month, doc, updated_at) VALUES (%s,%s,%s) "
+            "ON CONFLICT (month) DO UPDATE SET doc=EXCLUDED.doc, updated_at=EXCLUDED.updated_at",
+            (month, json.dumps(doc), doc.get("updated_at") or _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _import_file_to_db_if_needed(month: str):
+    """If the DB has no worksheet for `month` but a JSON file is on disk (a fresh
+    scan this dyno, or the committed sample month), load it into the DB so it
+    survives the next deploy. Returns the payload (from DB or file) or None."""
+    payload = _db_load_worksheet(month)
+    if payload is not None:
+        return payload
+    path = _json_path(month)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return None
+    try:
+        _db_save_worksheet(month, payload)
+    except Exception:
+        pass   # serving still works even if the persist fails
+    return payload
+
+
+def _worksheet_exists(month: str) -> bool:
+    return _db_load_worksheet(month) is not None or os.path.exists(_json_path(month))
+
+
+def _build_csv_text(payload: dict) -> str:
+    """Rebuild the worksheet CSV from a stored payload (the on-disk CSV is gone
+    after a deploy). Mirrors the engine's columns; still the RAW scan."""
+    fields = ["property", "property_floor", "scheduled_date", "completed_date", "status",
+              "disposition", "service_type", "price", "title", "description", "summary",
+              "flags", "assignees", "task_tags", "reason"]
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    for prop in payload.get("props", []):
+        for r in prop.get("rows", []):
+            billed = r.get("disposition") == "billable" and r.get("completed")
+            w.writerow({
+                "property": prop.get("property", ""),
+                "property_floor": prop.get("floor", ""),
+                "scheduled_date": r.get("scheduled_date", ""),
+                "completed_date": r.get("completed_date", ""),
+                "status": r.get("status", ""),
+                "disposition": r.get("disposition", ""),
+                "service_type": r.get("service_type", ""),
+                "price": r.get("price", "") if billed else "",
+                "title": r.get("title", ""),
+                "description": r.get("description", ""),
+                "summary": r.get("summary", ""),
+                "flags": " | ".join(r.get("flags", []) or []),
+                "assignees": "; ".join(r.get("assignees", []) or []),
+                "task_tags": "; ".join(r.get("task_tags", []) or []),
+                "reason": r.get("reason", ""),
+            })
+    return buf.getvalue()
+
+
+def _adjusted_csv_text(payload: dict, overrides: dict) -> str:
+    """Billing-ready CSV that REFLECTS her local adjustments (comps, resolutions,
+    do-not-bill, manual credits/services, floor minimums) — mirrors exactly what
+    the page shows and totals. Same effective logic as the frontend so the CSV
+    and the screen never disagree. Still app-side; Breezeway is untouched."""
+    rows_ov = (overrides or {}).get("rows", {}) or {}
+    manual = (overrides or {}).get("manual", []) or []
+    fields = ["property", "scheduled_date", "completed_date", "status", "service_type",
+              "charge", "title", "summary", "adjustment_note"]
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    grand = 0
+    for prop in payload.get("props", []):
+        pid = str(prop.get("property_id"))
+        pname = prop.get("property", "")
+        floor = prop.get("floor", 0) or 0
+        visits, subtotal = 0, 0
+        for r in prop.get("rows", []):
+            o = rows_ov.get(str(r.get("task_id")))
+            disp = r.get("disposition")
+            completed = bool(r.get("completed"))
+            stype = r.get("service_type", "")
+            charge = r.get("price", 0) if (disp == "billable" and completed) else 0
+            status = "Billed" if (disp == "billable" and completed) else \
+                     ("Review" if disp == "review" else "Not a service")
+            note = ""
+            included = False
+            if o:
+                act = o.get("action")
+                note = o.get("note", "")
+                if act == "comp":
+                    status, charge = "Comped ($0)", 0
+                elif act == "exclude":
+                    status, charge = "Not billed", 0
+                elif act == "include":
+                    status, charge, included = "Billed", int(o.get("price", 0) or 0), True
+                    if o.get("service_type"):
+                        stype = o.get("service_type")
+            performed = status in ("Billed", "Comped ($0)") and (completed or included)
+            if performed:
+                visits += 1
+            if status == "Billed":
+                subtotal += charge
+            w.writerow({
+                "property": pname, "scheduled_date": r.get("scheduled_date", ""),
+                "completed_date": r.get("completed_date", ""), "status": status,
+                "service_type": stype, "charge": charge if status in ("Billed", "Comped ($0)") else "",
+                "title": r.get("title", ""), "summary": r.get("summary", ""),
+                "adjustment_note": note,
+            })
+        topup = max(0, floor - visits)
+        if topup:
+            amt = topup * PRICE_REGULAR_CSV
+            subtotal += amt
+            w.writerow({"property": pname, "status": "Floor minimum", "service_type": "regular",
+                        "charge": amt, "adjustment_note": f"+{topup} to meet {floor}/mo floor"})
+        for m in manual:
+            if str(m.get("property_id")) == pid:
+                amt = int(m.get("amount", 0) or 0)
+                signed = -amt if m.get("kind") == "credit" else amt
+                subtotal += signed
+                w.writerow({"property": pname, "scheduled_date": m.get("date", ""),
+                            "status": "Manual credit" if m.get("kind") == "credit" else "Manual service",
+                            "service_type": m.get("service_type", ""), "charge": signed,
+                            "adjustment_note": m.get("note", "")})
+        w.writerow({"property": pname, "status": "SUBTOTAL", "charge": subtotal})
+        grand += subtotal
+    w.writerow({"property": "ALL PROPERTIES", "status": "GRAND TOTAL", "charge": grand})
+    return buf.getvalue()
+
+
+PRICE_REGULAR_CSV = 50   # floor top-up unit (matches the engine's Regular price)
+
+
 def _overrides_path(month: str) -> str:
     """Local, app-side file holding Madeline's manual adjustments for a month
     (comps / review resolutions / hypothetical credit+service lines). This is the
@@ -101,19 +317,32 @@ _EMPTY_OVERRIDES = {"rows": {}, "manual": []}
 
 
 def _load_overrides(month: str) -> dict:
-    path = _overrides_path(month)
-    if not os.path.exists(path):
-        return {"month": month, **_EMPTY_OVERRIDES}
+    # DB is the source of truth (survives deploys).
+    doc = None
     try:
-        with open(path, encoding="utf-8") as f:
-            doc = json.load(f)
-        if not isinstance(doc, dict):
-            return {"month": month, **_EMPTY_OVERRIDES}
-        doc.setdefault("rows", {})
-        doc.setdefault("manual", [])
-        return doc
+        doc = _db_load_overrides(month)
     except Exception:
+        doc = None
+    # One-time migration: if the DB has nothing but a legacy local file exists
+    # (written before we moved to the DB), adopt it and persist to the DB.
+    if doc is None:
+        path = _overrides_path(month)
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    doc = json.load(f)
+                if isinstance(doc, dict):
+                    try:
+                        _db_save_overrides(month, doc)
+                    except Exception:
+                        pass
+            except Exception:
+                doc = None
+    if not isinstance(doc, dict):
         return {"month": month, **_EMPTY_OVERRIDES}
+    doc.setdefault("rows", {})
+    doc.setdefault("manual", [])
+    return doc
 
 
 _ALLOWED_ROW_ACTIONS = {"comp", "exclude", "include"}
@@ -177,13 +406,18 @@ def _sanitize_overrides(month: str, body: dict) -> dict:
 
 
 def _available_months() -> list:
-    """Months that already have a worksheet JSON on disk (newest first)."""
-    months = []
+    """Months that have a worksheet — in the DB (durable) or as a JSON file on
+    disk (a fresh scan this dyno, or the committed sample). Newest first."""
+    months = set()
+    try:
+        months.update(_db_worksheet_months())
+    except Exception:
+        pass
     for p in glob.glob(os.path.join(_ROOT, "hot_tub_billing_*.json")):
         m = _MONTH_RE.search(os.path.basename(p))
         if m:
-            months.append(m.group(1))
-    return sorted(set(months), reverse=True)
+            months.add(m.group(1))
+    return sorted(months, reverse=True)
 
 
 def _pickable_months(n_back: int = _PICK_BACK) -> list:
@@ -205,6 +439,9 @@ def _current_month() -> str:
 
 
 def _generated_at(month: str):
+    payload = _db_load_worksheet(month)
+    if payload is not None:
+        return payload.get("generated_at")
     path = _json_path(month)
     if not os.path.exists(path):
         return None
@@ -271,18 +508,14 @@ def hot_tub_billing_data():
             return jsonify({"exists": False,
                             "reason": "No worksheet generated yet. Pick a month and Generate it."})
         month = avail[0]
-    path = _json_path(month)
-    if not os.path.exists(path):
+    # DB first (durable); fall back to a fresh/committed file and import it so it
+    # survives the next deploy.
+    payload = _import_file_to_db_if_needed(month)
+    if payload is None:
         return jsonify({"exists": False, "month": month,
                         "reason": f"No worksheet for {month} yet — click Generate to scan it."})
-    try:
-        with open(path, encoding="utf-8") as f:
-            payload = json.load(f)
-    except Exception as e:
-        return jsonify({"exists": False, "month": month,
-                        "reason": f"Worksheet file exists but could not be read: {e}"})
     payload["exists"] = True
-    payload["has_csv"] = os.path.exists(_csv_path(month))
+    payload["has_csv"] = True   # rebuilt from the stored payload on demand
     return jsonify(payload)
 
 
@@ -293,11 +526,19 @@ def hot_tub_billing_download():
     month = (request.args.get("month") or "").strip()
     if not _MONTH_FMT.fullmatch(month or ""):
         abort(400, "month must be YYYY-MM.")
-    path = _csv_path(month)
-    if not os.path.exists(path):
-        abort(404, f"No CSV for {month}. Generate the month first.")
-    return send_file(path, as_attachment=True,
-                     download_name=os.path.basename(path), mimetype="text/csv")
+    # ?raw=1 downloads the untouched scan; default is the billing-ready CSV that
+    # reflects her comps / credits / resolutions (what she actually bills from).
+    payload = _import_file_to_db_if_needed(month)
+    if payload is None:
+        abort(404, f"No worksheet for {month}. Generate the month first.")
+    if request.args.get("raw"):
+        text, suffix = _build_csv_text(payload), "_raw"
+    else:
+        text, suffix = _adjusted_csv_text(payload, _load_overrides(month)), "_adjusted"
+    return Response(
+        text, mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="hot_tub_billing_{month}{suffix}.csv"'},
+    )
 
 
 @hot_tub_billing_bp.route("/admin/hot-tub-billing/generate", methods=["POST"])
@@ -348,11 +589,11 @@ def hot_tub_billing_status():
     if not _MONTH_FMT.fullmatch(month or ""):
         abort(400, "month must be YYYY-MM.")
 
-    exists = os.path.exists(_json_path(month))
+    exists = _worksheet_exists(month)
     with _JOBS_LOCK:
         job = _JOBS.get(month)
         if job is None:
-            # Not running here. Report whatever is on disk.
+            # Not running here. Report whatever is durably stored.
             return jsonify({"month": month, "running": False, "exists": exists,
                             "generated_at": _generated_at(month)})
 
@@ -369,8 +610,10 @@ def hot_tub_billing_status():
             pass
         log = job["log"]
         _JOBS.pop(month, None)
-        exists = os.path.exists(_json_path(month))
-        if exists:
+        # Persist the just-written file to the DB immediately so it survives the
+        # next deploy/restart (the file itself lives on the ephemeral disk).
+        payload = _import_file_to_db_if_needed(month)
+        if payload is not None:
             return jsonify({"month": month, "running": False, "exists": True,
                             "returncode": rc, "generated_at": _generated_at(month)})
         return jsonify({"month": month, "running": False, "exists": False,
@@ -475,9 +718,9 @@ def hot_tub_billing_overrides_get():
 @login_required
 @admin_required
 def hot_tub_billing_overrides_save():
-    """Save the month's manual adjustments locally. The client sends the full
-    overrides doc; we sanitize and write it. This is the ONLY write in the whole
-    feature and it writes ONLY to a local file — Breezeway is never modified."""
+    """Save the month's manual adjustments to the DB (durable across deploys).
+    The client sends the full overrides doc; we sanitize and store it. This
+    writes ONLY to our own database — Breezeway is never modified."""
     month = (request.args.get("month") or "").strip()
     if not _MONTH_FMT.fullmatch(month or ""):
         abort(400, "month must be YYYY-MM.")
@@ -486,8 +729,7 @@ def hot_tub_billing_overrides_save():
         abort(400, "Expected a JSON overrides object.")
     doc = _sanitize_overrides(month, body)
     try:
-        with open(_overrides_path(month), "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2)
+        _db_save_overrides(month, doc)
     except Exception as e:
         return jsonify({"saved": False, "message": f"Could not save adjustments: {e}"}), 500
     return jsonify({"saved": True, **doc})

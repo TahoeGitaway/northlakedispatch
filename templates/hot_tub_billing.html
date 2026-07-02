@@ -53,9 +53,9 @@
     </summary>
     <div class="px-4 pb-4 text-xs text-gray-700 space-y-1.5">
       <p class="text-gray-500">A read-only counting tool — you still bill by hand in Streamline. Nothing here writes to Breezeway.</p>
-      <div><span class="text-emerald-700 font-semibold">✅ Done —</span> sampled 2,300+ real tasks to learn the wording; locked the price model &amp; floors; built the read-only monthly engine; this page with the rules table, <b>pick-any-month picker that scans on demand</b>, per-property worksheet (both dates, boundary flags), and CSV download. <b>New:</b> per-house <b>tape chart</b> (June reservations + a mark on every service performed); the <b>tech's completion summary</b> shown per row (and a flag when it names a heavier service than the title priced); and <b>local, on-your-side adjustments</b> — comp a service, resolve a REVIEW row (bill / skip), and add hypothetical <b>credit / service</b> lines. Your edits save to a local file and adjust the total live; the Breezeway scan stays 100% read-only.</div>
-      <div><span class="text-amber-700 font-semibold">🔎 Now needs you —</span> <b>Regenerate June</b> so the worksheet picks up the tech summaries + task-report links (older scans won't have them). Then work a house: confirm flagged / REVIEW rows, comp or credit where needed, and check the adjusted total. Note: the <b>Download CSV is the raw scan</b> — it doesn't include your local adjustments yet.</div>
-      <div><span class="text-gray-500 font-semibold">⏭ Next —</span> optional adjusted-CSV export that bakes in your comps/credits; classifier tuning from your feedback.</div>
+      <div><span class="text-emerald-700 font-semibold">✅ Done —</span> sampled 2,300+ real tasks to learn the wording; locked the price model &amp; floors; built the read-only monthly engine; this page with the rules table, <b>pick-any-month picker that scans on demand</b>, per-property worksheet (both dates, boundary flags), and CSV download. <b>New:</b> per-house <b>tape chart</b> (June reservations + a mark on every service performed); the <b>tech's completion summary</b> shown per row (and a flag when it names a heavier service than the title priced); and <b>local, on-your-side adjustments</b> — comp a service, resolve a REVIEW row (bill / skip), and add hypothetical <b>credit / service</b> lines. Your edits save to the database (they survive deploys/restarts) and adjust the total live; the Breezeway scan stays 100% read-only.</div>
+      <div><span class="text-amber-700 font-semibold">🔎 Now needs you —</span> <b>Regenerate June</b> so the worksheet picks up the tech summaries + task-report links (older scans won't have them). Then work a house: confirm flagged / REVIEW rows, comp or credit where needed, and check the adjusted total. The <b>Download CSV now reflects your adjustments</b> (comps, credits, resolutions, floor minimums, with per-property subtotals + a grand total) — it's billing-ready. Add <code>?raw=1</code> to the URL if you ever want the untouched scan.</div>
+      <div><span class="text-gray-500 font-semibold">⏭ Next —</span> classifier tuning from your feedback (e.g. any mis-classified titles).</div>
     </div>
   </details>
 
@@ -138,16 +138,30 @@ function buildTapeChart(reservations, marks, meta) {
     cells += `<div style="${bg}border-left:1px solid #e5e7eb;"></div>`;
   }
 
-  // Reservation bars, clipped to the month and drawn by night span.
+  // Reservation bars drawn like the PMS tape chart: a parallelogram whose
+  // arrival and departure days are cut by a one-day diagonal (guest arrives
+  // mid-arrival-day, leaves mid-departure-day), so a turnover day shows two
+  // half-day triangles — the outgoing stay's morning + the incoming stay's
+  // afternoon — instead of one bar eating the whole day. A stay that runs past
+  // the month edge is flush (no slash) on that side.
   const segs = (reservations || []).map(r => {
-    const s = clamp(dayIdx(r.checkin, first), 0, N);
-    const e = clamp(dayIdx(r.checkout, first), 0, N);   // exclusive (checkout day is free)
-    if (e <= s) return "";
+    const rawS = dayIdx(r.checkin, first);
+    const rawE = dayIdx(r.checkout, first);   // the checkout DAY column (inclusive end)
+    if (rawE <= rawS) return "";              // 0-night / invalid
+    const leftFlush  = rawS < 0;              // arrival was before this month
+    const rightFlush = rawE > N - 1;          // departure is after this month
+    const s = clamp(rawS, 0, N - 1);
+    const e = clamp(rawE, 0, N - 1);
+    const barDays = e - s + 1;                // columns the box spans
+    const S = (100 / barDays).toFixed(3) + "%";   // one-day slant, as % of the box
+    const tl = leftFlush  ? "0"  : S;             // top-left x  (arrival diagonal)
+    const br = rightFlush ? "100%" : `calc(100% - ${S})`;  // bottom-right x (departure diagonal)
+    const clip = `polygon(${tl} 0, 100% 0, ${br} 100%, 0 100%)`;
     const color = RES_COLORS[r.kind] || RES_COLORS.block;
     const tip = `${r.kind}: ${prettyDay(r.checkin)} → ${prettyDay(r.checkout)}`;
     return `<div title="${esc(tip)}" style="position:absolute;top:3px;bottom:3px;`
-         + `left:${(s / N * 100).toFixed(3)}%;width:${((e - s) / N * 100).toFixed(3)}%;`
-         + `background:${color};border-radius:2px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);"></div>`;
+         + `left:${(s / N * 100).toFixed(3)}%;width:${(barDays / N * 100).toFixed(3)}%;`
+         + `background:${color};clip-path:${clip};-webkit-clip-path:${clip};"></div>`;
   }).join("");
 
   // Service marks — a dark box centered on the service day, over the bar.

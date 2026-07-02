@@ -316,6 +316,23 @@ def init_db():
                 (_kw, _now),
             )
 
+    # Hot Tub Billing — durable storage so nothing is lost when the host wipes
+    # the ephemeral filesystem on deploy/restart. `hot_tub_worksheets` holds each
+    # month's read-only scan output (JSON); `hot_tub_overrides` holds Madeline's
+    # local billing adjustments (comps / credits / resolutions) as JSON. Neither
+    # is ever sent to Breezeway — this is app-side persistence only.
+    cur.execute("""CREATE TABLE IF NOT EXISTS hot_tub_worksheets (
+        month        TEXT PRIMARY KEY,
+        payload      TEXT NOT NULL,
+        generated_at TEXT,
+        updated_at   TEXT NOT NULL
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS hot_tub_overrides (
+        month      TEXT PRIMARY KEY,
+        doc        TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")
