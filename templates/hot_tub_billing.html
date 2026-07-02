@@ -34,6 +34,7 @@
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600 w-44">Regular — $50</td><td class="py-1.5 text-gray-700">arrival / biweekly / weekly / monthly hot tub service</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Dump &amp; Scrub — $155</td><td class="py-1.5 text-gray-700">dump &amp; scrub / d&amp;s / d/s</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">WWM / Bacterial — $250</td><td class="py-1.5 text-gray-700">wwm / white water mold / bacterial</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Cold Plunge — $75</td><td class="py-1.5 text-gray-700">flat, any type (billed Regular even if the note says D&amp;S/WWM — small tub). Special house <b>Aerial Grace Lakeside Retreat</b> is always included (floor 2/mo) even without a hot-tub tag.</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Partial</td><td class="py-1.5 text-gray-700">billed as Regular $50, but flagged for review</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Floors</td><td class="py-1.5 text-gray-700">“Hot Tub - TG Service” ≥2/mo · “Weekly Service” ≥4/mo · “Monthly Service” ≥1/mo (bill the floor even if fewer happened)</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — tenant</td><td class="py-1.5 text-gray-700">lease / prepaid / post-lease D&amp;S — <i>but</i> a <b>lease&nbsp;arrival</b> service IS owner-billable</td></tr>
@@ -85,9 +86,13 @@ let CHARTDATA = {};           // property_id → { marks:[{date,type,price}] } f
 
 // ── Per-house tape chart ─────────────────────────────────────────────────────
 // Colors: green = guest (the important one); others just need to be distinct.
-// The only three charges she bills — resolving a REVIEW row picks one of these
-// (fixed price), never a free-typed dollar amount.
-const SERVICE_PRICES = { regular: 50, dump_scrub: 155, wwm: 250 };
+// The charges she bills — resolving/reclassifying a row picks one of these
+// (fixed price), never a free-typed dollar amount. Cold plunge is a flat $75.
+const SERVICE_PRICES = { regular: 50, dump_scrub: 155, wwm: 250, cold_plunge: 75 };
+
+// Prettier labels for the service-type column.
+const TYPE_LABEL = { dump_scrub: "D&S", wwm: "WWM / bacterial", cold_plunge: "cold plunge" };
+const typeLabel = t => TYPE_LABEL[t] || t;
 
 const RES_COLORS = { guest: "#10b981", owner: "#6366f1", lease: "#f59e0b", block: "#9ca3af" };
 const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -485,13 +490,15 @@ function rowActions(r, e) {
     // Default the dropdown to the type already detected, or bump it up if a flag
     // hints the tech did a heavier service.
     const flagsStr = (r.flags || []).join(" ").toLowerCase();
-    let def = ["regular", "dump_scrub", "wwm"].includes(e.type) ? e.type : "regular";
-    if (/250|wwm|mold|bacter/.test(flagsStr)) def = "wwm";
-    else if (/155|d&s|d\/s|dump|scrub/.test(flagsStr)) def = "dump_scrub";
+    let def = ["regular", "dump_scrub", "wwm", "cold_plunge"].includes(e.type) ? e.type : "regular";
+    if (e.type !== "cold_plunge") {   // cold plunge is flat $75 — don't up-charge it
+      if (/250|wwm|mold|bacter/.test(flagsStr)) def = "wwm";
+      else if (/155|d&s|d\/s|dump|scrub/.test(flagsStr)) def = "dump_scrub";
+    }
     const opt = (v, l) => `<option value="${v}"${v === def ? " selected" : ""}>${l}</option>`;
     return `<span class="inline-flex items-center gap-1 mt-1">
       <select data-inc-choice class="border border-gray-200 rounded px-1 py-0.5 text-[11px]">
-        ${opt("regular", "Regular — $50")}${opt("dump_scrub", "Dump &amp; Scrub — $155")}${opt("wwm", "WWM / Bacterial — $250")}
+        ${opt("regular", "Regular — $50")}${opt("dump_scrub", "Dump &amp; Scrub — $155")}${opt("wwm", "WWM / Bacterial — $250")}${opt("cold_plunge", "Cold Plunge — $75")}
         <option value="donotbill">Do not bill — $0</option></select>
       <button data-act="include-save" data-tid="${tid}" class="text-emerald-700 hover:underline text-[11px]">save</button>
       <button data-act="edit-cancel" class="text-gray-400 hover:underline text-[11px]">cancel</button></span>`;
@@ -600,7 +607,7 @@ function render(d) {
         <td class="py-1 pr-3 whitespace-nowrap text-gray-500 align-top">${esc(r.scheduled_date||"—")}</td>
         <td class="py-1 pr-3 whitespace-nowrap text-gray-500 align-top">${esc(r.completed_date||"—")}${notDone}</td>
         <td class="py-1 pr-3 align-top">${effBadge(r, e)}${rowActions(r, e)}</td>
-        <td class="py-1 pr-3 whitespace-nowrap font-medium text-gray-700 align-top">${esc(e.type)}</td>
+        <td class="py-1 pr-3 whitespace-nowrap font-medium text-gray-700 align-top">${esc(typeLabel(e.type))}</td>
         <td class="py-1 pr-3 text-right font-semibold text-gray-800 align-top">${priceCell}</td>
         <td class="py-1 pr-3 text-gray-700 align-top">${esc(r.title)}${taskLink}</td>
         <td class="py-1 align-top min-w-[16rem]">${flagChips ? `<div class="mb-0.5">${flagChips}</div>` : ""}${summaryTxt}${ovNote}</td>

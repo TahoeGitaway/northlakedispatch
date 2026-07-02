@@ -303,6 +303,117 @@ def _adjusted_csv_text(payload: dict, overrides: dict) -> str:
 
 PRICE_REGULAR_CSV = 50   # floor top-up unit (matches the engine's Regular price)
 
+_NUM_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+              "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen",
+              "Sixteen", "Seventeen", "Eighteen", "Nineteen", "Twenty"]
+
+
+def _num_word(n: int) -> str:
+    return _NUM_WORDS[n] if 0 <= n < len(_NUM_WORDS) else str(n)
+
+
+def _join_and(items: list) -> str:
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
+def _month_name(month: str) -> str:
+    try:
+        y, m = int(month[:4]), int(month[5:7])
+        return f"{calendar.month_name[m]} {y}"
+    except Exception:
+        return month
+
+
+def _summary_csv_text(payload: dict, overrides: dict, month: str) -> str:
+    """One row per house: name, a plain-English tally of what was billed, and the
+    total — reflecting her adjustments. E.g. 'One Regular and Two Dump & Scrub Hot
+    Tub Services, June 2026'. WWM reads as 'Bacterial Treatment'; cold plunge as
+    'Cold Plunge Service'. This is what she hands to billing."""
+    rows_ov = (overrides or {}).get("rows", {}) or {}
+    manual = (overrides or {}).get("manual", []) or []
+    mlabel = _month_name(month)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=["house", "summary", "total"])
+    w.writeheader()
+    for prop in payload.get("props", []):
+        pid = str(prop.get("property_id"))
+        counts = {"regular": 0, "dump_scrub": 0, "wwm": 0, "cold_plunge": 0}
+        extra_parts, comped = [], 0
+        visits, total = 0, 0
+        for r in prop.get("rows", []):
+            o = rows_ov.get(str(r.get("task_id")))
+            disp, completed = r.get("disposition"), bool(r.get("completed"))
+            stype = r.get("service_type", "")
+            charge = r.get("price", 0) if (disp == "billable" and completed) else 0
+            billed = (disp == "billable" and completed)
+            if o:
+                act = o.get("action")
+                if act == "comp":
+                    comped += 1; visits += 1; continue
+                if act == "exclude":
+                    continue
+                if act == "include":
+                    billed = True; charge = int(o.get("price", 0) or 0)
+                    stype = o.get("service_type") or stype
+            if not billed:
+                continue
+            visits += 1
+            total += charge
+            counts[stype] = counts.get(stype, 0) + 1
+        # Floor minimum → billed as Regular hot-tub services.
+        floor = prop.get("floor", 0) or 0
+        topup = max(0, floor - visits)
+        if topup:
+            counts["regular"] += topup
+            total += topup * PRICE_REGULAR_CSV
+        # Manual lines.
+        credit_note = 0
+        for m in manual:
+            if str(m.get("property_id")) != pid:
+                continue
+            amt = int(m.get("amount", 0) or 0)
+            if m.get("kind") == "credit":
+                total -= amt; credit_note += amt
+            else:
+                total += amt
+                st = m.get("service_type", "")
+                if st in counts:
+                    counts[st] += 1
+                else:
+                    extra_parts.append(f"One {st or 'Manual Service'}")
+
+        # Build the phrase. Regular + D&S share the "Hot Tub Service(s)" noun.
+        parts = []
+        ht = [(lbl, counts[t]) for t, lbl in (("regular", "Regular"), ("dump_scrub", "Dump & Scrub")) if counts.get(t)]
+        if ht:
+            tot_ht = sum(c for _, c in ht)
+            noun = "Hot Tub Service" + ("s" if tot_ht > 1 else "")
+            parts.append(" and ".join(f"{_num_word(c)} {lbl}" for lbl, c in ht) + f" {noun}")
+        if counts.get("wwm"):
+            c = counts["wwm"]; parts.append(f"{_num_word(c)} Bacterial Treatment" + ("s" if c > 1 else ""))
+        if counts.get("cold_plunge"):
+            c = counts["cold_plunge"]; parts.append(f"{_num_word(c)} Cold Plunge Service" + ("s" if c > 1 else ""))
+        parts.extend(extra_parts)
+
+        body = _join_and(parts)
+        summary = (f"{body}, {mlabel}" if body else f"No billable services, {mlabel}")
+        notes = []
+        if comped:
+            notes.append(f"{comped} comped")
+        if credit_note:
+            notes.append(f"less ${credit_note} credit")
+        if notes:
+            summary += f" ({'; '.join(notes)})"
+        w.writerow({"house": prop.get("property", ""), "summary": summary, "total": total})
+    return buf.getvalue()
+
 
 def _overrides_path(month: str) -> str:
     """Local, app-side file holding Madeline's manual adjustments for a month
@@ -526,15 +637,18 @@ def hot_tub_billing_download():
     month = (request.args.get("month") or "").strip()
     if not _MONTH_FMT.fullmatch(month or ""):
         abort(400, "month must be YYYY-MM.")
-    # ?raw=1 downloads the untouched scan; default is the billing-ready CSV that
-    # reflects her comps / credits / resolutions (what she actually bills from).
+    # Default = the per-house summary she bills from (name, plain-English tally,
+    # total), reflecting her adjustments. ?detail=1 = full line-item CSV with her
+    # adjustments; ?raw=1 = the untouched scan.
     payload = _import_file_to_db_if_needed(month)
     if payload is None:
         abort(404, f"No worksheet for {month}. Generate the month first.")
     if request.args.get("raw"):
         text, suffix = _build_csv_text(payload), "_raw"
+    elif request.args.get("detail"):
+        text, suffix = _adjusted_csv_text(payload, _load_overrides(month)), "_detail"
     else:
-        text, suffix = _adjusted_csv_text(payload, _load_overrides(month)), "_adjusted"
+        text, suffix = _summary_csv_text(payload, _load_overrides(month), month), "_summary"
     return Response(
         text, mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="hot_tub_billing_{month}{suffix}.csv"'},

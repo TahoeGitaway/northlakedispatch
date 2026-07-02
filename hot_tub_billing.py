@@ -93,9 +93,18 @@ TAG_FLOORS = {
     "monthly service":      1,
 }
 
-PRICE_REGULAR = 50
-PRICE_DS      = 155
-PRICE_WWM     = 250
+# Special houses that must ALWAYS be scanned even when they carry no hot-tub floor
+# tag, with an explicit monthly floor. Keyed by Breezeway property id (string).
+# Aerial Grace bills COLD PLUNGE services (plus hot tub) — it has no TG tag, so
+# without this it would be skipped entirely and those services lost.
+ALWAYS_INCLUDE = {
+    "1137736": {"floor": 2, "name": "Aerial Grace Lakeside Retreat"},
+}
+
+PRICE_REGULAR     = 50
+PRICE_DS          = 155
+PRICE_WWM         = 250
+PRICE_COLD_PLUNGE = 75    # flat, any type (small tub — billed Regular even if D&S/WWM)
 
 # Completed statuses (confirmed from the sample: approved/finished/closed).
 DONE_STATUSES = {"approved", "finished", "closed", "complete", "completed", "done"}
@@ -110,6 +119,10 @@ SERVICE_TITLE = re.compile(r"hot\s*tub\s*service|\bht\s*service\b", re.IGNORECAS
 # Anything that merely mentions a tub but ISN'T caught as a service goes to
 # NEEDS-REVIEW (never silently dropped) so the operator can eyeball it.
 MENTIONS_TUB = re.compile(r"hot\s*tub|hottub|\bht\b|\bspa\b|\btub\b", re.IGNORECASE)
+
+# Cold plunge is a distinct billable service (flat rate). "CPS" = Cold Plunge
+# Service, which techs use in summaries ("CPS complete").
+COLD_PLUNGE = re.compile(r"cold\s*plunge|\bcps\b", re.IGNORECASE)
 
 NO_CHARGE   = re.compile(r"no\s*(ho\s*)?charge|do\s*not\s*bill|do\s*not\s*service|no\s*ho\s*charge", re.IGNORECASE)
 POST_LEASE  = re.compile(r"post[\s\-]*lease", re.IGNORECASE)
@@ -337,6 +350,7 @@ def classify(title, desc, summary=""):
     flags = []
 
     is_service_title = bool(SERVICE_TITLE.search(title))
+    is_cold_plunge   = bool(COLD_PLUNGE.search(title))
 
     # 1) Explicit no-charge / do-not-bill wins over everything.
     if NO_CHARGE.search(blob):
@@ -351,12 +365,22 @@ def classify(title, desc, summary=""):
     # 3) Lease: a lease ARRIVAL service is owner-billable; any other lease/prepaid
     #    service is tenant-billed and excluded.
     if LEASE_WORD.search(blob):
-        if ARRIVAL.search(blob) and is_service_title:
+        if ARRIVAL.search(blob) and (is_service_title or is_cold_plunge):
             flags.append("lease-arrival → owner-billable (confirm)")
             # falls through to be priced as a normal service below
         else:
             return {"disposition": "excluded", "service_type": "lease_tenant", "price": 0,
                     "reason": "lease/prepaid service — billed to tenant", "flags": flags}
+
+    # 3b) Cold plunge is its own billable service: FLAT $75, any type. Techs bill
+    #     Regular even when the note says D&S/WWM ("charge regular as this a cold
+    #     plunge and only 1/3 of size"), so we do NOT raise an up-charge flag.
+    if is_cold_plunge:
+        if PARTIAL_RX.search(blob):
+            flags.append("partial — confirm")
+        return {"disposition": "billable", "service_type": "cold_plunge",
+                "price": PRICE_COLD_PLUNGE, "reason": "owner-billable cold-plunge service",
+                "flags": flags}
 
     # 4) Must read as an actual hot-tub service in the TITLE; otherwise it's a
     #    repair/issue/inspection (or unknown) — never silently dropped.
@@ -463,6 +487,13 @@ def collect_tagged_properties(token, properties, workers):
                 floor, matched = fut.result()
             except Exception as e:
                 REPORT.warn(f"tag classify failed for {property_name(p)}: {e}"); continue
+            # Force-include special houses (e.g. Aerial Grace / cold plunge) even
+            # if they carry no floor tag, honoring their explicit floor.
+            forced = ALWAYS_INCLUDE.get(str(property_id(p)))
+            if forced:
+                floor = max(floor, forced["floor"])
+                matched = matched + ["special-house (always included)"]
+                p["_special"] = True
             if floor > 0:
                 p["_floor"] = floor
                 p["_floor_tags"] = matched
@@ -533,7 +564,8 @@ def build(token, properties, month_str, workers, max_props):
                 in_comp = comp[:7] == mkey if comp else False
                 if not (in_sched or in_comp):
                     continue
-                if not MENTIONS_TUB.search(f"{title} {desc}"):
+                blob = f"{title} {desc}"
+                if not (MENTIONS_TUB.search(blob) or COLD_PLUNGE.search(blob)):
                     continue
 
                 REPORT.candidate_tasks += 1
