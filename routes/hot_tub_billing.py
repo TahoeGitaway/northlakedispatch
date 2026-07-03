@@ -79,6 +79,71 @@ _RES_CACHE_LOCK = threading.Lock()
 _RES_CACHE_TTL = 15 * 60   # 15 minutes
 
 
+def _month_reservations(month: str) -> dict:
+    """All reservations overlapping a month, bucketed by property_id (cached).
+    Read-only; classifies each guest/owner/lease/block. Shared by the tape-chart
+    endpoint and the lease/floor-waiver logic so they always agree."""
+    now = time.time()
+    with _RES_CACHE_LOCK:
+        hit = _RES_CACHE.get(month)
+        if hit and now - hit[0] < _RES_CACHE_TTL:
+            return hit[1]
+
+    y, mo = int(month[:4]), int(month[5:7])
+    first = date(y, mo, 1)
+    last = date(y, mo, calendar.monthrange(y, mo)[1])
+
+    token = _get_breezeway_token()
+    if not token:
+        return {"ok": False, "month": month,
+                "reason": "Could not authenticate with Breezeway."}
+
+    # Overlap: checks in on/before the last day AND out on/after the first day.
+    raw = _fetch_bw_reservations(token, {
+        "checkin_date_le": last.isoformat(),
+        "checkout_date_ge": first.isoformat(),
+    })
+    by_property, seen = {}, set()
+    for r in raw:
+        rid = r.get("id")
+        if rid in seen:
+            continue
+        seen.add(rid)
+        pid = r.get("property_id")
+        if pid is None:
+            continue
+        ci = (r.get("checkin_date") or "")[:10]
+        co = (r.get("checkout_date") or "")[:10]
+        if not ci or not co:
+            continue
+        by_property.setdefault(str(pid), []).append(
+            {"checkin": ci, "checkout": co, "kind": _classify_reservation(r)})
+    for lst in by_property.values():
+        lst.sort(key=lambda x: x["checkin"])
+
+    payload = {"ok": True, "month": month, "first": first.isoformat(),
+               "last": last.isoformat(), "days": (last - first).days + 1,
+               "count": len(seen), "by_property": by_property}
+    with _RES_CACHE_LOCK:
+        _RES_CACHE[month] = (now, payload)
+    return payload
+
+
+def _leased_property_ids(month: str) -> set:
+    """Property ids (str) that had a LEASE overlapping the month. The owner floor
+    minimum is WAIVED for these — during a lease the tenant covers service, so
+    charging the owner a minimum would be a lie. Returns None if reservations
+    couldn't be fetched (caller then leaves the floor as-is rather than guessing)."""
+    data = _month_reservations(month)
+    if not data or data.get("ok") is False:
+        return None
+    leased = set()
+    for pid, lst in (data.get("by_property") or {}).items():
+        if any(x.get("kind") == "lease" for x in lst):
+            leased.add(str(pid))
+    return leased
+
+
 def _json_path(month: str) -> str:
     return os.path.join(_ROOT, f"hot_tub_billing_{month}.json")
 
@@ -229,7 +294,7 @@ def _build_csv_text(payload: dict) -> str:
     return buf.getvalue()
 
 
-def _adjusted_csv_text(payload: dict, overrides: dict) -> str:
+def _adjusted_csv_text(payload: dict, overrides: dict, leased: set = None) -> str:
     """Billing-ready CSV that REFLECTS her local adjustments (comps, resolutions,
     do-not-bill, manual credits/services, floor minimums) — mirrors exactly what
     the page shows and totals. Same effective logic as the frontend so the CSV
@@ -280,12 +345,15 @@ def _adjusted_csv_text(payload: dict, overrides: dict) -> str:
                 "title": r.get("title", ""), "summary": r.get("summary", ""),
                 "adjustment_note": note,
             })
-        topup = max(0, floor - visits)
+        topup = 0 if (leased and pid in leased) else max(0, floor - visits)
         if topup:
             amt = topup * PRICE_REGULAR_CSV
             subtotal += amt
             w.writerow({"property": pname, "status": "Floor minimum", "service_type": "regular",
                         "charge": amt, "adjustment_note": f"+{topup} to meet {floor}/mo floor"})
+        elif floor and (leased and pid in leased) and visits < floor:
+            w.writerow({"property": pname, "status": "Floor waived", "service_type": "",
+                        "charge": 0, "adjustment_note": f"{floor}/mo minimum waived — lease active"})
         for m in manual:
             if str(m.get("property_id")) == pid:
                 amt = int(m.get("amount", 0) or 0)
@@ -331,7 +399,7 @@ def _month_name(month: str) -> str:
         return month
 
 
-def _summary_csv_text(payload: dict, overrides: dict, month: str) -> str:
+def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = None) -> str:
     """One row per house: name, a plain-English tally of what was billed, and the
     total — reflecting her adjustments. E.g. 'One Regular and Two Dump & Scrub Hot
     Tub Services, June 2026'. WWM reads as 'Bacterial Treatment'; cold plunge as
@@ -367,9 +435,11 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str) -> str:
             visits += 1
             total += charge
             counts[stype] = counts.get(stype, 0) + 1
-        # Floor minimum → billed as Regular hot-tub services.
+        # Floor minimum → billed as Regular hot-tub services, UNLESS the house was
+        # leased this month (tenant covers service; the owner minimum is waived).
         floor = prop.get("floor", 0) or 0
-        topup = max(0, floor - visits)
+        is_leased = bool(leased and pid in leased)
+        topup = 0 if is_leased else max(0, floor - visits)
         if topup:
             counts["regular"] += topup
             total += topup * PRICE_REGULAR_CSV
@@ -405,6 +475,8 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str) -> str:
         body = _join_and(parts)
         summary = (f"{body}, {mlabel}" if body else f"No billable services, {mlabel}")
         notes = []
+        if is_leased and floor and visits < floor:
+            notes.append("lease — owner floor waived")
         if comped:
             notes.append(f"{comped} comped")
         if credit_note:
@@ -643,12 +715,13 @@ def hot_tub_billing_download():
     payload = _import_file_to_db_if_needed(month)
     if payload is None:
         abort(404, f"No worksheet for {month}. Generate the month first.")
+    leased = _leased_property_ids(month)   # None if reservations couldn't be fetched
     if request.args.get("raw"):
         text, suffix = _build_csv_text(payload), "_raw"
     elif request.args.get("detail"):
-        text, suffix = _adjusted_csv_text(payload, _load_overrides(month)), "_detail"
+        text, suffix = _adjusted_csv_text(payload, _load_overrides(month), leased), "_detail"
     else:
-        text, suffix = _summary_csv_text(payload, _load_overrides(month), month), "_summary"
+        text, suffix = _summary_csv_text(payload, _load_overrides(month), month, leased), "_summary"
     return Response(
         text, mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="hot_tub_billing_{month}{suffix}.csv"'},
@@ -753,67 +826,7 @@ def hot_tub_billing_reservations():
     month = (request.args.get("month") or "").strip()
     if not _MONTH_FMT.fullmatch(month or ""):
         abort(400, "month must be YYYY-MM.")
-
-    now = time.time()
-    with _RES_CACHE_LOCK:
-        hit = _RES_CACHE.get(month)
-        if hit and now - hit[0] < _RES_CACHE_TTL:
-            return jsonify(hit[1])
-
-    y, mo = int(month[:4]), int(month[5:7])
-    first = date(y, mo, 1)
-    last = date(y, mo, calendar.monthrange(y, mo)[1])
-
-    token = _get_breezeway_token()
-    if not token:
-        # Never fail silently — tell the page so it can show a small notice
-        # instead of pretending there are no reservations.
-        return jsonify({"ok": False, "month": month,
-                        "reason": "Could not authenticate with Breezeway."}), 200
-
-    # A reservation overlaps the month iff it checks in on/before the last day
-    # AND checks out on/after the first day. Breezeway ANDs these two filters,
-    # so this single query captures full-month spans that a checkin-only query
-    # would miss (verified live).
-    raw = _fetch_bw_reservations(token, {
-        "checkin_date_le": last.isoformat(),
-        "checkout_date_ge": first.isoformat(),
-    })
-
-    by_property = {}
-    seen = set()
-    for r in raw:
-        rid = r.get("id")
-        if rid in seen:
-            continue
-        seen.add(rid)
-        pid = r.get("property_id")
-        if pid is None:
-            continue
-        ci = (r.get("checkin_date") or "")[:10]
-        co = (r.get("checkout_date") or "")[:10]
-        if not ci or not co:
-            continue
-        by_property.setdefault(str(pid), []).append({
-            "checkin": ci,
-            "checkout": co,
-            "kind": _classify_reservation(r),
-        })
-    for lst in by_property.values():
-        lst.sort(key=lambda x: x["checkin"])
-
-    payload = {
-        "ok": True,
-        "month": month,
-        "first": first.isoformat(),
-        "last": last.isoformat(),
-        "days": (last - first).days + 1,
-        "count": len(seen),
-        "by_property": by_property,
-    }
-    with _RES_CACHE_LOCK:
-        _RES_CACHE[month] = (now, payload)
-    return jsonify(payload)
+    return jsonify(_month_reservations(month))
 
 
 @hot_tub_billing_bp.route("/admin/hot-tub-billing/overrides")

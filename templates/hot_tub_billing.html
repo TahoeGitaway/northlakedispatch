@@ -214,20 +214,35 @@ function buildTapeChart(reservations, marks, meta) {
   </div>`;
 }
 
-// Fetch this month's reservations once, then drop a tape chart into every house.
+// Fetch this month's reservations once and cache them (used by both the tape
+// charts and the lease/floor-waiver logic, so they always agree).
+async function ensureReservations(month) {
+  if (RESDATA[month]) return RESDATA[month];
+  let data;
+  try {
+    const r = await fetch("/admin/hot-tub-billing/reservations?month=" + encodeURIComponent(month));
+    data = await r.json();
+  } catch (e) {
+    data = { ok: false, reason: "Could not reach the reservations service." };
+  }
+  if (data && data.ok !== false) RESDATA[month] = data;   // only cache good payloads
+  return data;
+}
+
+// Does this property have a LEASE overlapping the month? If so its owner floor
+// minimum is waived (tenant covers service — charging the owner would be a lie).
+function hasLease(pid) {
+  const month = CURRENT && CURRENT.month;
+  const data = month && RESDATA[month];
+  if (!data || !data.by_property) return false;
+  return (data.by_property[String(pid)] || []).some(x => x.kind === "lease");
+}
+
+// Drop a tape chart into every house from the (already-loaded) reservations.
 async function fillTapeCharts(month) {
   const pids = Object.keys(CHARTDATA);
   if (!pids.length) return;
-  let data = RESDATA[month];   // reuse across re-renders so edits don't refetch
-  if (!data) {
-    try {
-      const r = await fetch("/admin/hot-tub-billing/reservations?month=" + encodeURIComponent(month));
-      data = await r.json();
-    } catch (e) {
-      data = { ok: false, reason: "Could not reach the reservations service." };
-    }
-    if (data && data.ok !== false) RESDATA[month] = data;   // only cache good payloads
-  }
+  const data = await ensureReservations(month);
   const meta = { days: data.days || 30, first: data.first || (month + "-01") };
   const byProp = (data && data.by_property) || {};
   for (const pid of pids) {
@@ -307,6 +322,9 @@ async function load(month) {
       const o = await (await fetch("/admin/hot-tub-billing/overrides?month=" + encodeURIComponent(d.month))).json();
       OVERRIDES = { rows: o.rows || {}, manual: o.manual || [] };
     } catch (e) { /* no adjustments yet — start clean */ }
+    // Load reservations BEFORE first render so the floor calc can waive the
+    // minimum on leased houses (otherwise it'd briefly show a false minimum).
+    await ensureReservations(d.month);
   }
   setLoading(false);
   render(d);
@@ -422,12 +440,14 @@ function recompute(p) {
     if (e.status === "billable") subtotal += e.price;
   }
   const floor = p.floor || 0;
-  const topup = Math.max(0, floor - visits);
+  // A lease this month waives the owner floor minimum (tenant covers service).
+  const leased = hasLease(p.property_id);
+  const topup = leased ? 0 : Math.max(0, floor - visits);
   const floorAmt = topup * 50;
   const manual = (OVERRIDES.manual || []).filter(m => String(m.property_id) === String(p.property_id));
   let manualSum = 0;
   for (const m of manual) manualSum += (m.kind === "credit" ? -(+m.amount || 0) : (+m.amount || 0));
-  return { eff, subtotal, visits, floor, topup, floorAmt, manual, manualSum,
+  return { eff, subtotal, visits, floor, topup, floorAmt, leased, manual, manualSum,
            total: subtotal + floorAmt + manualSum };
 }
 
@@ -566,9 +586,11 @@ function render(d) {
 
   cn.innerHTML = legend + computed.map(({ p, rc }) => {
     const pid = String(p.property_id);
-    const floorNote = rc.topup
-      ? `<span class="text-amber-700 text-xs ml-2">⬆ floor ${rc.floor}: ${rc.visits} performed, +${rc.topup}×$50 minimum (${money(rc.floorAmt)})</span>`
-      : (rc.floor ? `<span class="text-gray-400 text-xs ml-2">floor ${rc.floor}/mo</span>` : "");
+    const floorNote = (rc.leased && rc.floor)
+      ? `<span class="text-emerald-700 text-xs ml-2">floor ${rc.floor}/mo waived — lease active this month</span>`
+      : (rc.topup
+        ? `<span class="text-amber-700 text-xs ml-2">⬆ floor ${rc.floor}: ${rc.visits} performed, +${rc.topup}×$50 minimum (${money(rc.floorAmt)})</span>`
+        : (rc.floor ? `<span class="text-gray-400 text-xs ml-2">floor ${rc.floor}/mo</span>` : ""));
     const scanStrike = (rc.total !== p.total)
       ? `<span class="text-xs font-normal text-gray-400 line-through ml-1">${money(p.total)}</span>` : "";
 
