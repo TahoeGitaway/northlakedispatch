@@ -84,7 +84,10 @@ function overlapCard(o, bg, border, accent) {
   return _card(bg, border, `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
       <div style="min-width:0;">
-        <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${o.property}</div>
+        <div style="font-weight:600;font-size:0.875rem;color:#1f2937;">${o.property}
+          <a href="https://app.breezeway.io/property/${o.property_id}/calendar" target="_blank" rel="noopener"
+             class="text-indigo-500 hover:underline text-xs font-normal ml-1 whitespace-nowrap"
+             title="Open ${o.property}'s calendar in Breezeway">📅 calendar ↗</a></div>
         <div style="font-size:0.8rem;color:${accent};font-weight:500;margin-top:2px;">${o.task}${reason}</div>
         <div style="font-size:0.75rem;color:#6b7280;margin-top:3px;">
           ${who} in house · ${kind} stay ${_fmtDate(o.checkin)} → ${_fmtDate(o.checkout)}

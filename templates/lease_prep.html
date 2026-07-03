@@ -256,6 +256,25 @@ async function _loadLeaseWeek(box, lease, mode){
     }
     const tasksByDay = {};
     tasks.forEach(t => { (tasksByDay[t.date] = tasksByDay[t.date] || []).push(t); });
+
+    // Also drop the lease's own prep tasks (the ones listed above the calendar)
+    // onto their scheduled block dates, so the week view and the list agree.
+    // Dedupe against what house-week already returned for that day.
+    const _seen = new Set(tasks.map(t => (t.date||'') + '|' + (t.name||'').trim().toLowerCase()));
+    (lease.tasks || []).forEach(t => {
+      const day = t.sched_date;
+      if (!day || day < d.start || day > d.end) return;   // outside this week window
+      const key = day + '|' + (t.title||'').trim().toLowerCase();
+      if (_seen.has(key)) return;                          // already shown for this day
+      _seen.add(key);
+      const st = t.status === 'complete'    ? '✓ Done'
+               : t.status === 'in_progress' ? '🔄 In progress'
+               :                              '⏳ Scheduled';
+      (tasksByDay[day] = tasksByDay[day] || []).push({
+        name: t.title, date: day, time: t.sched_time,
+        status: st, assignees: t.assignees || [],
+      });
+    });
     // The reservation covering a day — prefer the one arriving (pre) / departing (post) that day.
     function resForDay(iso){
       let cover = null;
@@ -276,7 +295,7 @@ async function _loadLeaseWeek(box, lease, mode){
       const md = dd.toLocaleDateString('en-US',{month:'short',day:'numeric'});
       const isAnchor = iso === d.anchor;
       const rv = resForDay(iso);
-      const dayTasks = tasksByDay[iso] || [];
+      const dayTasks = (tasksByDay[iso] || []).slice().sort((a,b) => (a.time||'~').localeCompare(b.time||'~'));
 
       html += `<div style="flex:0 0 146px;border:1px solid ${isAnchor?'#2563eb':'#e5e7eb'};border-radius:8px;overflow:hidden;background:#fff;${isAnchor?'box-shadow:0 0 0 2px #bfdbfe;':''}">`;
       html += `<div style="padding:4px 7px;background:${isAnchor?'#eff6ff':'#f9fafb'};border-bottom:1px solid #f1f5f9;">`

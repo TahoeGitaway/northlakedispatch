@@ -197,7 +197,10 @@ def occupancy_check():
 
     failed   = 0
     overlaps = []
-    with ThreadPoolExecutor(max_workers=16) as ex:
+    # Breezeway's task API has no company-wide day query — it requires a
+    # reference_property_id per call — so we fan out one call per occupied house.
+    # 32 workers is the sweet spot here (48 just starts drawing 429s).
+    with ThreadPoolExecutor(max_workers=32) as ex:
         for pid, tasks, ok in ex.map(_job, list(occupied.keys())):
             if not ok:
                 failed += 1
@@ -214,6 +217,7 @@ def occupancy_check():
                 reason = _expected_reason(title)
                 overlaps.append({
                     "property":        prop_name,
+                    "property_id":     pid,   # for the Breezeway calendar link
                     "task":            title,
                     "guest":           stay["guest"],
                     "kind":            stay["kind"],     # guest | lease
