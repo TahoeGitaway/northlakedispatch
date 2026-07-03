@@ -477,6 +477,62 @@ function recompute(p) {
 
 const signMoney = (kind, amt) => (kind === "credit" ? "−" : "+") + "$" + Number(amt || 0).toLocaleString();
 
+// Plain-English billing description — IDENTICAL logic to the summary CSV
+// (routes/hot_tub_billing.py _summary_csv_text), so what the biller reads on the
+// page is exactly what the CSV will say for this house.
+const NUM_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+  "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+  "Seventeen", "Eighteen", "Nineteen", "Twenty"];
+const numWord = n => NUM_WORDS[n] || String(n);
+const MONTH_FULL = ["", "January", "February", "March", "April", "May", "June", "July",
+  "August", "September", "October", "November", "December"];
+const monthFull = m => (MONTH_FULL[+(m.split("-")[1])] || "") + " " + m.split("-")[0];
+const joinAnd = a => {
+  a = a.filter(Boolean);
+  if (a.length <= 1) return a[0] || "";
+  if (a.length === 2) return a[0] + " and " + a[1];
+  return a.slice(0, -1).join(", ") + ", and " + a[a.length - 1];
+};
+
+function billingDescription(p, rc) {
+  const counts = { regular: 0, dump_scrub: 0, wwm: 0, cold_plunge: 0 };
+  const extra = [];
+  let comped = 0;
+  for (const { e } of rc.eff) {
+    if (e.status === "comped") { comped++; continue; }
+    if (e.status === "excluded") continue;
+    if (e.status === "billable") counts[e.type] = (counts[e.type] || 0) + 1;
+  }
+  let creditNote = 0;
+  for (const m of rc.manual) {
+    if (m.kind === "credit") creditNote += (+m.amount || 0);
+    else if (counts[m.service_type] != null) counts[m.service_type]++;
+    else extra.push("One " + (m.service_type || "Manual Service"));
+  }
+  if (rc.topup) counts.regular += rc.topup;   // floor top-up bills as Regular
+
+  const parts = [];
+  const ht = [["regular", "Regular"], ["dump_scrub", "Dump & Scrub"]].filter(([t]) => counts[t]);
+  if (ht.length) {
+    const totHt = ht.reduce((s, [t]) => s + counts[t], 0);
+    parts.push(ht.map(([t, lbl]) => numWord(counts[t]) + " " + lbl).join(" and ")
+      + " Hot Tub Service" + (totHt > 1 ? "s" : ""));
+  }
+  if (counts.wwm) parts.push(numWord(counts.wwm) + " Bacterial Treatment" + (counts.wwm > 1 ? "s" : ""));
+  if (counts.cold_plunge) parts.push(numWord(counts.cold_plunge) + " Cold Plunge Service" + (counts.cold_plunge > 1 ? "s" : ""));
+  parts.push(...extra);
+
+  const body = joinAnd(parts);
+  const mlabel = monthFull(CURRENT.month);
+  let desc = body ? `${body}, ${mlabel}` : `No billable services, ${mlabel}`;
+  const notes = [];
+  if (rc.leased && rc.floor && rc.visits < rc.floor) notes.push("lease — owner floor waived");
+  if (comped) notes.push(`${comped} comped`);
+  if (creditNote) notes.push(`less $${creditNote} credit`);
+  if (notes.length) desc += ` (${notes.join("; ")})`;
+  return desc;
+}
+
 async function saveOverrides() {
   const month = CURRENT && CURRENT.month;
   if (!month) return;
@@ -693,13 +749,17 @@ function render(d) {
         </div></td></tr>` : "";
 
     return `<div class="mb-4 border border-gray-200 rounded-lg bg-white">
-      <div class="px-4 py-2.5 flex items-baseline justify-between border-b border-gray-100">
-        <h3 class="font-semibold text-gray-800">${esc(p.property)}
+      <div class="px-4 py-2.5 flex items-baseline justify-between gap-3 border-b border-gray-100">
+        <h3 class="font-semibold text-gray-800 shrink-0">${esc(p.property)}
           <a href="https://app.breezeway.io/property/${esc(pid)}/calendar" target="_blank" rel="noopener"
              class="text-indigo-500 hover:underline text-xs font-normal ml-1 whitespace-nowrap"
              title="Open ${esc(p.property)}'s calendar in Breezeway">📅 calendar ↗</a>
           ${floorNote}</h3>
-        <div class="text-lg font-bold text-gray-900">${money(rc.total)}${scanStrike}
+        <div class="flex-1 min-w-0 text-xs text-gray-500 italic text-center px-2"
+             title="This is exactly what the billing CSV will say for this house — it updates live with your edits.">
+          <span class="text-gray-400 not-italic">bills as:</span> ${esc(billingDescription(p, rc))}
+        </div>
+        <div class="text-lg font-bold text-gray-900 shrink-0 whitespace-nowrap">${money(rc.total)}${scanStrike}
           <span class="text-xs font-normal text-gray-400">(${rc.visits} performed)</span></div>
       </div>
       <div id="htchart-${esc(pid)}" class="px-4 pt-3 pb-1 border-b border-gray-50">
