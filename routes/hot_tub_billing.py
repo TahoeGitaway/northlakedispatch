@@ -76,7 +76,9 @@ _JOBS_LOCK = threading.Lock()
 # keeps the charts responsive without hammering Breezeway on every page load.
 _RES_CACHE = {}
 _RES_CACHE_LOCK = threading.Lock()
-_RES_CACHE_TTL = 15 * 60   # 15 minutes
+# Short TTL: she cross-checks the tape chart against Breezeway live, so stale
+# reservations are confusing. 2 min still dedupes rapid reloads without lag.
+_RES_CACHE_TTL = 2 * 60
 
 
 def _month_reservations(month: str) -> dict:
@@ -405,8 +407,8 @@ def _month_name(month: str) -> str:
 
 def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = None) -> str:
     """One row per house: name, a plain-English tally of what was billed, and the
-    total — reflecting her adjustments. E.g. 'One Regular and Two Dump & Scrub Hot
-    Tub Services, June 2026'. WWM reads as 'Bacterial Treatment'; cold plunge as
+    total — reflecting her adjustments. E.g. 'One Regular Hot Tub Service and Two
+    Dump & Scrub Services, June 2026'. WWM reads as 'Bacterial Treatment'; cold plunge as
     'Cold Plunge Service'. This is what she hands to billing."""
     rows_ov = (overrides or {}).get("rows", {}) or {}
     manual = (overrides or {}).get("manual", []) or []
@@ -465,13 +467,13 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
             counts["regular"] += topup
             total += topup * PRICE_REGULAR_CSV
 
-        # Build the phrase. Regular + D&S share the "Hot Tub Service(s)" noun.
+        # Build the phrase. Regular carries the full "Hot Tub Service(s)" noun;
+        # Dump & Scrub gets its own "Service(s)".
         parts = []
-        ht = [(lbl, counts[t]) for t, lbl in (("regular", "Regular"), ("dump_scrub", "Dump & Scrub")) if counts.get(t)]
-        if ht:
-            tot_ht = sum(c for _, c in ht)
-            noun = "Hot Tub Service" + ("s" if tot_ht > 1 else "")
-            parts.append(" and ".join(f"{_num_word(c)} {lbl}" for lbl, c in ht) + f" {noun}")
+        if counts.get("regular"):
+            c = counts["regular"]; parts.append(f"{_num_word(c)} Regular Hot Tub Service" + ("s" if c > 1 else ""))
+        if counts.get("dump_scrub"):
+            c = counts["dump_scrub"]; parts.append(f"{_num_word(c)} Dump & Scrub Service" + ("s" if c > 1 else ""))
         if counts.get("wwm"):
             c = counts["wwm"]; parts.append(f"{_num_word(c)} Bacterial Treatment" + ("s" if c > 1 else ""))
         if counts.get("cold_plunge"):

@@ -47,18 +47,6 @@
     </div>
   </details>
 
-  <!-- Build progress — so you can track this feature across deploys -->
-  <details class="mb-5 border border-indigo-200 rounded-lg bg-indigo-50/40">
-    <summary class="cursor-pointer px-4 py-2.5 text-sm font-semibold text-indigo-800 select-none">
-      ℹ️ Notes &amp; recent updates (loading the page never re-scans — only “Regenerate” does)
-    </summary>
-    <div class="px-4 pb-4 text-xs text-gray-700 space-y-1.5">
-      <p class="text-gray-500">A read-only counting tool — you still bill by hand in Streamline. Nothing here writes to Breezeway.</p>
-      <div><span class="text-emerald-700 font-semibold">✅ Done —</span> sampled 2,300+ real tasks to learn the wording; locked the price model &amp; floors; built the read-only monthly engine; this page with the rules table, <b>pick-any-month picker that scans on demand</b>, per-property worksheet (both dates, boundary flags), and CSV download. <b>New:</b> per-house <b>tape chart</b> (June reservations + a mark on every service performed); the <b>tech's completion summary</b> shown per row (and a flag when it names a heavier service than the title priced); and <b>local, on-your-side adjustments</b> — comp a service, resolve a REVIEW row (bill / skip), and add hypothetical <b>credit / service</b> lines. Your edits save to the database (they survive deploys/restarts) and adjust the total live; the Breezeway scan stays 100% read-only.</div>
-      <div><span class="text-amber-700 font-semibold">🔎 Now needs you —</span> <b>Regenerate June</b> so the worksheet picks up the tech summaries + task-report links (older scans won't have them). Then work a house: confirm flagged / REVIEW rows, comp or credit where needed, and check the adjusted total. The <b>Download CSV now reflects your adjustments</b> (comps, credits, resolutions, floor minimums, with per-property subtotals + a grand total) — it's billing-ready. Add <code>?raw=1</code> to the URL if you ever want the untouched scan.</div>
-      <div><span class="text-gray-500 font-semibold">⏭ Next —</span> classifier tuning from your feedback (e.g. any mis-classified titles).</div>
-    </div>
-  </details>
 
   <div id="statusBar" class="mb-4"></div>
   <div id="content"></div>
@@ -494,30 +482,34 @@ const joinAnd = a => {
   return a.slice(0, -1).join(", ") + ", and " + a[a.length - 1];
 };
 
-function billingDescription(p, rc) {
+// Effective service tally for one house AFTER all edits (comps drop out,
+// reclassifications change type, manual services add in, floor top-ups count as
+// Regular). The single source the "bills as:" phrase AND the top-of-page count
+// both use, so every count on the page reflects exactly what's been logged.
+function houseCounts(rc) {
   const counts = { regular: 0, dump_scrub: 0, wwm: 0, cold_plunge: 0 };
   const extra = [];
-  let comped = 0;
+  let comped = 0, creditNote = 0;
   for (const { e } of rc.eff) {
     if (e.status === "comped") { comped++; continue; }
     if (e.status === "excluded") continue;
     if (e.status === "billable") counts[e.type] = (counts[e.type] || 0) + 1;
   }
-  let creditNote = 0;
   for (const m of rc.manual) {
     if (m.kind === "credit") creditNote += (+m.amount || 0);
     else if (counts[m.service_type] != null) counts[m.service_type]++;
     else extra.push("One " + (m.service_type || "Manual Service"));
   }
   if (rc.topup) counts.regular += rc.topup;   // floor top-up bills as Regular
+  return { counts, extra, comped, creditNote };
+}
 
+function billingDescription(p, rc) {
+  const { counts, extra, comped, creditNote } = houseCounts(rc);
   const parts = [];
-  const ht = [["regular", "Regular"], ["dump_scrub", "Dump & Scrub"]].filter(([t]) => counts[t]);
-  if (ht.length) {
-    const totHt = ht.reduce((s, [t]) => s + counts[t], 0);
-    parts.push(ht.map(([t, lbl]) => numWord(counts[t]) + " " + lbl).join(" and ")
-      + " Hot Tub Service" + (totHt > 1 ? "s" : ""));
-  }
+  // Regular carries the full "Hot Tub Service(s)" noun; Dump & Scrub gets its own "Service(s)".
+  if (counts.regular) parts.push(numWord(counts.regular) + " Regular Hot Tub Service" + (counts.regular > 1 ? "s" : ""));
+  if (counts.dump_scrub) parts.push(numWord(counts.dump_scrub) + " Dump & Scrub Service" + (counts.dump_scrub > 1 ? "s" : ""));
   if (counts.wwm) parts.push(numWord(counts.wwm) + " Bacterial Treatment" + (counts.wwm > 1 ? "s" : ""));
   if (counts.cold_plunge) parts.push(numWord(counts.cold_plunge) + " Cold Plunge Service" + (counts.cold_plunge > 1 ? "s" : ""));
   parts.push(...extra);
@@ -633,17 +625,24 @@ function render(d) {
 
   const props = (d.props || []).filter(p => p.rows && p.rows.length);
   const computed = props.map(p => ({ p, rc: recompute(p) }));
-  const adjTotal = computed.reduce((s, c) => s + c.rc.total, 0);
 
   const partial = d.status !== "COMPLETE";
-  const changed = adjTotal !== d.money_total;
-  const types = Object.entries(d.type_totals || {}).map(([k,v]) => `${k}×${v}`).join(" · ") || "none";
+  // Live service-type tally across ALL houses AFTER your edits (comps drop out,
+  // reclassifications move between types, manual services + floor top-ups add in).
+  // Never the stale scan counts.
+  const agg = { regular: 0, dump_scrub: 0, wwm: 0, cold_plunge: 0 };
+  for (const { rc } of computed) {
+    const c = houseCounts(rc).counts;
+    agg.regular += c.regular; agg.dump_scrub += c.dump_scrub;
+    agg.wwm += c.wwm; agg.cold_plunge += c.cold_plunge;
+  }
+  const typeBits = [["regular", "Regular"], ["dump_scrub", "D&S"], ["wwm", "Bacterial"], ["cold_plunge", "Cold Plunge"]]
+    .filter(([k]) => agg[k]).map(([k, l]) => `${l} ×${agg[k]}`).join(" · ") || "none";
   sb.innerHTML = `
     <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm ${partial ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'} border rounded-md px-4 py-3">
       <span class="font-bold ${partial ? 'text-amber-800' : 'text-emerald-800'}">
         ${partial ? '⚠️ PARTIAL — ' + (d.failures||[]).length + ' failure(s)' : '✅ ' + esc(d.month)}</span>
-      <span class="text-gray-700"><b>${money(adjTotal)}</b> owner total${changed ? ` <span class="text-gray-400 line-through ml-1">${money(d.money_total)}</span> <span class="text-indigo-600 text-xs">adjusted</span>` : ''}</span>
-      <span class="text-gray-500">${esc(types)}</span>
+      <span class="text-gray-600">${esc(typeBits)} <span class="text-gray-400 text-xs">(live — reflects your edits)</span></span>
       <span class="text-gray-500">${d.properties_scanned}/${d.properties_tagged} properties · ${d.candidate_tasks} tasks examined</span>
       <span class="text-gray-400 text-xs">generated ${esc((d.generated_at||"").slice(0,16))}</span>
       <span id="saveState" class="text-[11px] text-gray-400"></span>
