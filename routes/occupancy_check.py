@@ -1,5 +1,5 @@
 """
-routes/occupancy_check.py — "Serviced while occupied" check.
+routes/occupancy_check.py — "Scheduled while in house" check.
 
 For ONE selected day: find every property that has a guest or long-term
 tenant in the house that day, then list the Breezeway tasks scheduled there
@@ -92,6 +92,12 @@ def _task_assignees(t: dict) -> list:
     return out
 
 
+def _task_assignee_ids(t: dict) -> list:
+    # Same shape group_assign uses, so the person filter matches by roster id.
+    return [a.get("assignee_id") for a in (t.get("assignments") or [])
+            if isinstance(a, dict) and a.get("assignee_id") is not None]
+
+
 def _robust_property_tasks(token, ref_id, date_str):
     """Fetch ONE property's tasks for a single day with retry/backoff, so a
     momentary Breezeway throttle (429 / 5xx) doesn't silently drop the property.
@@ -121,6 +127,16 @@ def occupancy_check():
         _get_breezeway_token, _fetch_bw_reservations, _classify_reservation,
         _get_property_name, _get_live_ref_cache, _guest_name, _ensure_property_cache,
     )
+    # Reuse the app's canonical "whose tasks" roster — the assignment allow-list —
+    # so the person dropdown here shows the exact same people as everywhere else.
+    from routes.group_assign import _fetch_people, _candidate_keys, _is_candidate
+
+    def _people_roster():
+        try:
+            keys = _candidate_keys()
+            return [p for p in _fetch_people(token) if _is_candidate(p["name"], keys)]
+        except Exception:
+            return []
 
     date_param = request.args.get("date")
     try:
@@ -169,6 +185,7 @@ def occupancy_check():
         return jsonify({
             "date": day_str, "unexpected": [], "expected": [],
             "occupied_properties": 0, "failed_properties": 0,
+            "people": _people_roster(),
         })
 
     ref_cache = _get_live_ref_cache()
@@ -203,6 +220,7 @@ def occupancy_check():
                     "checkin":         stay["ci"],
                     "checkout":        stay["co"],
                     "assignees":       _task_assignees(t),
+                    "assignee_ids":    _task_assignee_ids(t),
                     "status":          _task_status(t),  # pending | in_progress | complete
                     "expected":        bool(reason),
                     "expected_reason": reason or "",
@@ -215,6 +233,7 @@ def occupancy_check():
         "expected":            [o for o in overlaps if o["expected"]],
         "occupied_properties": len(occupied),
         "failed_properties":   failed,
+        "people":              _people_roster(),
     })
 
 

@@ -1,21 +1,26 @@
 {% extends "base.html" %}
-{% block title %}Serviced While Occupied — North Lake Dispatch{% endblock %}
+{% block title %}Scheduled While In House — North Lake Dispatch{% endblock %}
 {% block content %}
 <div class="max-w-3xl mx-auto px-4 py-6">
 
   <!-- Header -->
   <div class="mb-4">
-    <h2 class="text-xl font-bold text-gray-800">Serviced While Occupied</h2>
+    <h2 class="text-xl font-bold text-gray-800">Scheduled While In House</h2>
     <p class="text-xs text-gray-400 mt-0.5">
       For the selected day, lists tasks scheduled where a guest or tenant is in the house.
     </p>
   </div>
 
-  <!-- Date + scan -->
+  <!-- Date + who + scan -->
   <div class="flex items-center gap-3 mb-4 flex-wrap">
     <label class="text-gray-500 font-medium text-sm">Day</label>
     <input type="date" id="theDate"
            class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-300">
+    <label class="text-gray-500 font-medium text-sm">Who</label>
+    <select id="personSel" onchange="renderFromScan()"
+            class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-300">
+      <option value="">Everyone</option>
+    </select>
     <button onclick="load()"
             class="px-4 py-1.5 bg-rose-500 text-white text-sm font-semibold rounded-lg hover:bg-rose-600 transition-colors">
       Check
@@ -117,6 +122,68 @@ function buildSection(title, color, items, cardFn, collapsed) {
   return wrap;
 }
 
+// Last scan payload — kept so the "Who" filter can re-render without re-scanning.
+let SCAN = null;
+
+// Fill the "Who" dropdown from the scanned roster (same allow-list used elsewhere),
+// preserving the current selection where possible.
+function _populatePeople(people) {
+  const sel = document.getElementById("personSel");
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Everyone</option>';
+  (people || []).forEach(p => {
+    const o = document.createElement("option");
+    o.value = String(p.id);
+    o.textContent = p.name;
+    sel.appendChild(o);
+  });
+  // Keep the prior pick if that person is still in the list.
+  sel.value = [...sel.options].some(o => o.value === prev) ? prev : "";
+}
+
+// Render the stored scan, filtered to the person chosen in the "Who" dropdown.
+function renderFromScan() {
+  if (!SCAN) return;
+  const data = SCAN;
+  const pid  = document.getElementById("personSel").value;   // "" = everyone
+  const mine = o => !pid || (o.assignee_ids || []).some(id => String(id) === pid);
+
+  const unexpected = (data.unexpected || []).filter(mine);
+  const expected   = (data.expected   || []).filter(mine);
+  const total      = unexpected.length + expected.length;
+
+  const whoName = pid
+    ? (document.getElementById("personSel").selectedOptions[0]?.textContent || "")
+    : "";
+  let sub = `${_fmtDate(data.date)} · ${data.occupied_properties || 0} occupied propert${(data.occupied_properties === 1) ? "y" : "ies"} · ${total} task${total === 1 ? "" : "s"}${whoName ? ` for ${whoName}` : ""} during a stay`;
+  if (data.failed_properties) {
+    sub += ` · ⚠ ${data.failed_properties} couldn’t load (retry)`;
+  }
+  document.getElementById("subtitle").textContent = sub;
+
+  const resultsEl = document.getElementById("results");
+  resultsEl.innerHTML = "";
+
+  if (!total) {
+    resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
+      No tasks scheduled while someone is in the house this day${whoName ? ` for ${whoName}` : ""}. 🎉</div>`;
+  } else {
+    const s1 = buildSection("🔴 Unexpected — task during a stay", "#ef4444", unexpected,
+      o => overlapCard(o, "#fef2f2", "#fecaca", "#b91c1c"));
+    const s2 = buildSection("⚪ Expected in-stay work", "#6b7280", expected,
+      o => overlapCard(o, "#f9fafb", "#e5e7eb", "#4b5563"), true);
+    if (s1) resultsEl.appendChild(s1);
+    if (!unexpected.length) {
+      const note = document.createElement("div");
+      note.className = "text-center text-emerald-600 text-sm py-6 italic";
+      note.textContent = "No unexpected overlaps — only routine in-stay work below.";
+      resultsEl.appendChild(note);
+    }
+    if (s2) resultsEl.appendChild(s2);
+  }
+  resultsEl.classList.remove("hidden");
+}
+
 async function load() {
   document.getElementById("loading").classList.remove("hidden");
   document.getElementById("errorBox").classList.add("hidden");
@@ -150,37 +217,9 @@ async function load() {
       return;
     }
 
-    const unexpected = data.unexpected || [];
-    const expected   = data.expected   || [];
-    const total      = unexpected.length + expected.length;
-
-    let sub = `${_fmtDate(data.date)} · ${data.occupied_properties || 0} occupied propert${(data.occupied_properties === 1) ? "y" : "ies"} · ${total} task${total === 1 ? "" : "s"} during a stay`;
-    if (data.failed_properties) {
-      sub += ` · ⚠ ${data.failed_properties} couldn’t load (retry)`;
-    }
-    document.getElementById("subtitle").textContent = sub;
-
-    const resultsEl = document.getElementById("results");
-    resultsEl.innerHTML = "";
-
-    if (!total) {
-      resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
-        No tasks scheduled while someone is in the house this day. 🎉</div>`;
-    } else {
-      const s1 = buildSection("🔴 Unexpected — task during a stay", "#ef4444", unexpected,
-        o => overlapCard(o, "#fef2f2", "#fecaca", "#b91c1c"));
-      const s2 = buildSection("⚪ Expected in-stay work", "#6b7280", expected,
-        o => overlapCard(o, "#f9fafb", "#e5e7eb", "#4b5563"), true);
-      if (s1) resultsEl.appendChild(s1);
-      if (!unexpected.length) {
-        const note = document.createElement("div");
-        note.className = "text-center text-emerald-600 text-sm py-6 italic";
-        note.textContent = "No unexpected overlaps — only routine in-stay work below.";
-        resultsEl.appendChild(note);
-      }
-      if (s2) resultsEl.appendChild(s2);
-    }
-    resultsEl.classList.remove("hidden");
+    SCAN = data;
+    _populatePeople(data.people);
+    renderFromScan();
   } catch (e) {
     document.getElementById("loading").classList.add("hidden");
     document.getElementById("errorBox").textContent = "Could not load: " + e.message;
@@ -188,10 +227,9 @@ async function load() {
   }
 }
 
-// Default to today and check immediately.
+// Default the date to today, but DON'T scan — wait for the Check button.
 (function init() {
   document.getElementById("theDate").value = _isoDate(new Date());
-  load();
 })();
 </script>
 {% endblock %}
