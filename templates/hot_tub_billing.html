@@ -50,7 +50,7 @@
   <!-- Build progress — so you can track this feature across deploys -->
   <details class="mb-5 border border-indigo-200 rounded-lg bg-indigo-50/40">
     <summary class="cursor-pointer px-4 py-2.5 text-sm font-semibold text-indigo-800 select-none">
-      🚧 Build progress (work in progress)
+      ℹ️ Notes &amp; recent updates (loading the page never re-scans — only “Regenerate” does)
     </summary>
     <div class="px-4 pb-4 text-xs text-gray-700 space-y-1.5">
       <p class="text-gray-500">A read-only counting tool — you still bill by hand in Streamline. Nothing here writes to Breezeway.</p>
@@ -238,10 +238,14 @@ function hasLease(pid) {
   return (data.by_property[String(pid)] || []).some(x => x.kind === "lease");
 }
 
-// Drop a tape chart into every house from the (already-loaded) reservations.
+// Drop a tape chart into every house. Reservations load here, AFTER the
+// worksheet is already on screen — the page never waits on this (possibly slow)
+// call. If it turns out a shown house is leased, we re-render once so its floor
+// minimum is waived in the totals.
 async function fillTapeCharts(month) {
   const pids = Object.keys(CHARTDATA);
   if (!pids.length) return;
+  const hadCache = !!RESDATA[month];
   const data = await ensureReservations(month);
   const meta = { days: data.days || 30, first: data.first || (month + "-01") };
   const byProp = (data && data.by_property) || {};
@@ -253,6 +257,13 @@ async function fillTapeCharts(month) {
       continue;
     }
     el.innerHTML = buildTapeChart(byProp[pid] || [], CHARTDATA[pid].marks, meta);
+  }
+  // Reservations just arrived (weren't cached when we rendered) and a shown house
+  // is leased → re-render once so the floor waiver hits the totals. hadCache is
+  // true on the re-render, so this can't loop.
+  if (!hadCache && data && data.ok !== false &&
+      pids.some(pid => (byProp[pid] || []).some(x => x.kind === "lease"))) {
+    rerender();
   }
 }
 
@@ -310,24 +321,30 @@ async function load(month) {
   setLoading(true, "Loading worksheet…");
   document.getElementById("content").innerHTML = "";
   document.getElementById("statusBar").innerHTML = "";
-  const url = "/admin/hot-tub-billing/data" + (month ? `?month=${month}` : "");
-  const r = await fetch(url);
-  const d = await r.json();
-  // Pull this month's local adjustments alongside the worksheet so the first
-  // render already reflects her comps / credits / resolutions.
-  OVERRIDES = { rows: {}, manual: [] };
-  saveState = "";
-  if (d && d.exists) {
-    try {
-      const o = await (await fetch("/admin/hot-tub-billing/overrides?month=" + encodeURIComponent(d.month))).json();
-      OVERRIDES = { rows: o.rows || {}, manual: o.manual || [] };
-    } catch (e) { /* no adjustments yet — start clean */ }
-    // Load reservations BEFORE first render so the floor calc can waive the
-    // minimum on leased houses (otherwise it'd briefly show a false minimum).
-    await ensureReservations(d.month);
+  try {
+    const url = "/admin/hot-tub-billing/data" + (month ? `?month=${month}` : "");
+    const r = await fetch(url);
+    const d = await r.json();
+    // Pull this month's local adjustments alongside the worksheet so the first
+    // render already reflects her comps / credits / resolutions.
+    OVERRIDES = { rows: {}, manual: [] };
+    saveState = "";
+    if (d && d.exists) {
+      try {
+        const o = await (await fetch("/admin/hot-tub-billing/overrides?month=" + encodeURIComponent(d.month))).json();
+        OVERRIDES = { rows: o.rows || {}, manual: o.manual || [] };
+      } catch (e) { /* no adjustments yet — start clean */ }
+    }
+    setLoading(false);
+    render(d);   // show the worksheet immediately; reservations load async in render
+  } catch (e) {
+    // Never leave the spinner stuck — surface the error so the page is usable.
+    setLoading(false);
+    document.getElementById("content").innerHTML =
+      `<div class="text-sm bg-rose-50 border border-rose-200 text-rose-800 rounded-md px-4 py-3">
+        Couldn't load the worksheet: ${esc(e && e.message ? e.message : e)}. Try reloading the page.
+        Your saved adjustments are safe — nothing was changed.</div>`;
   }
-  setLoading(false);
-  render(d);
 }
 
 function showGeneratePrompt(month) {
