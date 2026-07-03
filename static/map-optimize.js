@@ -148,13 +148,15 @@ async function optimizeRoute(useGoogleMatrix = false) {
     const wb = document.getElementById("warningBox");
     wb.className = "text-sm hidden p-2 rounded"; wb.innerHTML = "";
     const warns = [];
+    if (data.best_attempt) warns.push("⚠ <b>Best attempt shown.</b> A route satisfying every constraint couldn't be found, so this is the closest workable order the app could build. Check the flagged late stops below — you may want to drop a stop, widen the time window, or verify each stop's address resolved to a real location.");
     if (data.total_duration > 10 * 3600) warns.push("⚠ Route exceeds 10-hour shift.");
     if (data.late_priority_checkins?.length) warns.push(`⚠ Priority check-ins after 12PM: ${data.late_priority_checkins.join(", ")}`);
     if (data.late_checkins?.length) warns.push(`⚠ Late check-ins (after 4PM): ${data.late_checkins.join(", ")}`);
     if (_lunchWasMoved) warns.push("⚠ Lunch moved after last check-in — check-ins take priority over efficiency.");
     if (warns.length) {
       wb.classList.remove("hidden");
-      wb.classList.add((data.late_checkins?.length || data.late_priority_checkins?.length) ? "deadline-warning" : "shift-warning");
+      const emphasize = data.best_attempt || data.late_checkins?.length || data.late_priority_checkins?.length;
+      wb.classList.add(emphasize ? "deadline-warning" : "shift-warning");
       wb.innerHTML = warns.join("<br>");
     }
 

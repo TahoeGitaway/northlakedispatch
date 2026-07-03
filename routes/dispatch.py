@@ -616,6 +616,61 @@ def _solve_route(
     return ordered_nodes, arrival_times_sec
 
 
+def _greedy_route(duration_matrix, service_times_sec, end_node=0, front_flags=None):
+    """Guaranteed last-resort ordering: nearest-neighbor from the depot.
+
+    OR-Tools can legitimately return NO solution — a contradictory go-first
+    block, drive legs that blow past the Time-dimension horizon, or unresolved
+    coordinates producing NaN / astronomically large legs. When that happens we
+    STILL owe the user the app's best attempt; a dead-end error is never
+    acceptable. This heuristic cannot fail: it always produces a full visiting
+    order and cumulative arrival times using the SAME cost model as _solve_route
+    (each leg costs drive-time + the service time of the node you're leaving).
+
+    The go-first front block is honored as a soft preference (front stops before
+    rear stops) but never as a hard constraint, so it can't wedge the result.
+    """
+    size = len(duration_matrix)
+
+    def leg(a, b):
+        try:
+            v = float(duration_matrix[a][b])
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+        return 0.0 if math.isnan(v) else max(0.0, v)
+
+    def svc(n):
+        try:
+            v = float(service_times_sec[n])
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+        return 0.0 if math.isnan(v) else max(0.0, v)
+
+    stops = [n for n in range(1, size) if n != end_node]
+    if front_flags and any(front_flags[n] for n in stops):
+        groups = [[n for n in stops if front_flags[n]],
+                  [n for n in stops if not front_flags[n]]]
+    else:
+        groups = [stops]
+
+    ordered, arrivals = [0], [0.0]
+    cur, t = 0, 0.0
+    for group in groups:
+        remaining = set(group)
+        while remaining:
+            nxt = min(remaining, key=lambda n: leg(cur, n))
+            t  += leg(cur, nxt) + svc(cur)
+            ordered.append(nxt)
+            arrivals.append(t)
+            remaining.discard(nxt)
+            cur = nxt
+    if end_node != 0:
+        t += leg(cur, end_node) + svc(cur)
+        ordered.append(end_node)
+        arrivals.append(t)
+    return ordered, arrivals
+
+
 # ── Optimize ──────────────────────────────────────────────────────
 
 @dispatch_bp.route("/optimize", methods=["POST"])
@@ -680,6 +735,7 @@ def optimize():
         return jsonify({"error": "None of the submitted stops had valid coordinates (lat/lng). This usually means the property list is out of sync — try refreshing the page and re-adding your stops."}), 400
 
     preserve_order = bool(data.get("preserve_order", False))
+    used_greedy_fallback = False
 
     if not preserve_order:
         # Pre-sort so priority check-ins become low-numbered nodes (1, 2, 3…).
@@ -730,7 +786,12 @@ def optimize():
             end_node=end_node
         )
         if ordered_nodes is None:
-            return jsonify({"error": "The route optimizer couldn't find a valid solution. Try reducing the number of stops or widening the time window. (OR-Tools returned no solution after all three passes.)"}), 500
+            # OR-Tools gave up — fall back to the guaranteed best attempt rather
+            # than dead-ending. The user always sees a route.
+            ordered_nodes, arrival_times_sec = _greedy_route(
+                duration_matrix, service_times_sec, end_node=end_node
+            )
+            used_greedy_fallback = True
         used_deadline_constraints = used_soft_penalties = False
     else:
         stop_service = [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
@@ -795,8 +856,27 @@ def optimize():
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 end_node=end_node, front_flags=front_flags
             )
-            if ordered_nodes is None:
-                return jsonify({"error": "The route optimizer couldn't find a valid route on any of its three passes (hard constraints, soft penalties, and unconstrained). This usually means the stops can't be reached in the available time — try removing a stop, widening the time window, or checking that every stop's address resolved to a real location."}), 500
+
+        # Pass 4 — TRULY unconstrained: drop the go-first block too. A contradictory
+        # front block (e.g. a go-first stop that can't precede the others in the
+        # horizon) is the most common reason Pass 3 still fails.
+        if ordered_nodes is None:
+            ordered_nodes, arrival_times_sec = _solve_route(
+                duration_matrix, service_times_sec, checkin_flags, priority_flags,
+                end_node=end_node
+            )
+
+        # Pass 5 — guaranteed best attempt. OR-Tools has given up entirely (horizon
+        # blown by a bad coordinate, unroutable data). We do NOT dead-end with an
+        # error — the app always shows its best attempt. Greedy nearest-neighbor
+        # can't fail; any stops that end up late are flagged in the schedule below,
+        # which is exactly what the user needs to see.
+        if ordered_nodes is None:
+            ordered_nodes, arrival_times_sec = _greedy_route(
+                duration_matrix, service_times_sec,
+                end_node=end_node, front_flags=front_flags
+            )
+            used_greedy_fallback = True
 
     if not preserve_order:
         node_arrival_sec = {}
@@ -881,6 +961,7 @@ def optimize():
         "late_priority_checkins":    late_priority_checkins,
         "deadline_constraints_used": used_deadline_constraints,
         "soft_penalties_used":       used_soft_penalties,
+        "best_attempt":              used_greedy_fallback,
         "drive_only":                drive_only,
         "duration_matrix":           duration_matrix,
         "route_polyline":            route_polyline,
