@@ -456,15 +456,22 @@ function recompute(p) {
     if (e.performed) visits++;
     if (e.status === "billable") subtotal += e.price;
   }
-  const floor = p.floor || 0;
-  // A lease this month waives the owner floor minimum (tenant covers service).
-  const leased = hasLease(p.property_id);
-  const topup = leased ? 0 : Math.max(0, floor - visits);
-  const floorAmt = topup * 50;
   const manual = (OVERRIDES.manual || []).filter(m => String(m.property_id) === String(p.property_id));
-  let manualSum = 0;
-  for (const m of manual) manualSum += (m.kind === "credit" ? -(+m.amount || 0) : (+m.amount || 0));
-  return { eff, subtotal, visits, floor, topup, floorAmt, leased, manual, manualSum,
+  let manualSum = 0, manualServices = 0;
+  for (const m of manual) {
+    const amt = +m.amount || 0;
+    if (m.kind === "credit") { manualSum -= amt; }
+    else { manualSum += amt; manualServices++; }   // a logged service
+  }
+  const floor = p.floor || 0;
+  // Manual service lines you add COUNT toward the floor minimum — you're logging
+  // a real service, so the app must not also force a top-up on top of it. A lease
+  // waives the minimum entirely (tenant covers service).
+  const accounted = visits + manualServices;
+  const leased = hasLease(p.property_id);
+  const topup = leased ? 0 : Math.max(0, floor - accounted);
+  const floorAmt = topup * 50;
+  return { eff, subtotal, visits: accounted, floor, topup, floorAmt, leased, manual, manualSum,
            total: subtotal + floorAmt + manualSum };
 }
 

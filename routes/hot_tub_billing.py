@@ -345,24 +345,28 @@ def _adjusted_csv_text(payload: dict, overrides: dict, leased: set = None) -> st
                 "title": r.get("title", ""), "summary": r.get("summary", ""),
                 "adjustment_note": note,
             })
-        topup = 0 if (leased and pid in leased) else max(0, floor - visits)
+        # Manual lines. A logged SERVICE counts toward the floor minimum, so tally
+        # them before deciding whether a top-up is needed.
+        prop_manual = [m for m in manual if str(m.get("property_id")) == pid]
+        manual_services = sum(1 for m in prop_manual if m.get("kind") != "credit")
+        for m in prop_manual:
+            amt = int(m.get("amount", 0) or 0)
+            signed = -amt if m.get("kind") == "credit" else amt
+            subtotal += signed
+            w.writerow({"property": pname, "scheduled_date": m.get("date", ""),
+                        "status": "Manual credit" if m.get("kind") == "credit" else "Manual service",
+                        "service_type": m.get("service_type", ""), "charge": signed,
+                        "adjustment_note": m.get("note", "")})
+        accounted = visits + manual_services
+        topup = 0 if (leased and pid in leased) else max(0, floor - accounted)
         if topup:
             amt = topup * PRICE_REGULAR_CSV
             subtotal += amt
             w.writerow({"property": pname, "status": "Floor minimum", "service_type": "regular",
                         "charge": amt, "adjustment_note": f"+{topup} to meet {floor}/mo floor"})
-        elif floor and (leased and pid in leased) and visits < floor:
+        elif floor and (leased and pid in leased) and accounted < floor:
             w.writerow({"property": pname, "status": "Floor waived", "service_type": "",
                         "charge": 0, "adjustment_note": f"{floor}/mo minimum waived — lease active"})
-        for m in manual:
-            if str(m.get("property_id")) == pid:
-                amt = int(m.get("amount", 0) or 0)
-                signed = -amt if m.get("kind") == "credit" else amt
-                subtotal += signed
-                w.writerow({"property": pname, "scheduled_date": m.get("date", ""),
-                            "status": "Manual credit" if m.get("kind") == "credit" else "Manual service",
-                            "service_type": m.get("service_type", ""), "charge": signed,
-                            "adjustment_note": m.get("note", "")})
         w.writerow({"property": pname, "status": "SUBTOTAL", "charge": subtotal})
         grand += subtotal
     w.writerow({"property": "ALL PROPERTIES", "status": "GRAND TOTAL", "charge": grand})
@@ -435,16 +439,9 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
             visits += 1
             total += charge
             counts[stype] = counts.get(stype, 0) + 1
-        # Floor minimum → billed as Regular hot-tub services, UNLESS the house was
-        # leased this month (tenant covers service; the owner minimum is waived).
-        floor = prop.get("floor", 0) or 0
-        is_leased = bool(leased and pid in leased)
-        topup = 0 if is_leased else max(0, floor - visits)
-        if topup:
-            counts["regular"] += topup
-            total += topup * PRICE_REGULAR_CSV
-        # Manual lines.
-        credit_note = 0
+        # Manual lines first — a logged SERVICE counts toward the floor minimum
+        # (she's accounting for a real service, so we must not also force a top-up).
+        credit_note, manual_services = 0, 0
         for m in manual:
             if str(m.get("property_id")) != pid:
                 continue
@@ -452,12 +449,21 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
             if m.get("kind") == "credit":
                 total -= amt; credit_note += amt
             else:
-                total += amt
+                total += amt; manual_services += 1
                 st = m.get("service_type", "")
                 if st in counts:
                     counts[st] += 1
                 else:
                     extra_parts.append(f"One {st or 'Manual Service'}")
+
+        # Floor minimum → billed as Regular hot-tub services, UNLESS the house was
+        # leased this month (tenant covers service; the owner minimum is waived).
+        floor = prop.get("floor", 0) or 0
+        is_leased = bool(leased and pid in leased)
+        topup = 0 if is_leased else max(0, floor - (visits + manual_services))
+        if topup:
+            counts["regular"] += topup
+            total += topup * PRICE_REGULAR_CSV
 
         # Build the phrase. Regular + D&S share the "Hot Tub Service(s)" noun.
         parts = []
@@ -475,7 +481,7 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
         body = _join_and(parts)
         summary = (f"{body}, {mlabel}" if body else f"No billable services, {mlabel}")
         notes = []
-        if is_leased and floor and visits < floor:
+        if is_leased and floor and (visits + manual_services) < floor:
             notes.append("lease — owner floor waived")
         if comped:
             notes.append(f"{comped} comped")
