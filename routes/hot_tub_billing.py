@@ -44,7 +44,7 @@ import threading
 from datetime import date, datetime
 
 from flask import Blueprint, render_template, jsonify, send_file, request, abort, Response
-from flask_login import login_required
+from flask_login import login_required, current_user
 
 from routes.auth import admin_required
 from db import get_db, get_cursor
@@ -236,6 +236,79 @@ def _db_save_overrides(month: str, doc: dict) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# ── Archive (freeze a finished month) ────────────────────────────────────────
+
+def _db_archive(month: str, revenue: int, uid=None) -> None:
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO hot_tub_archived (month, revenue, archived_at, archived_by) "
+            "VALUES (%s,%s,%s,%s) ON CONFLICT (month) DO UPDATE SET "
+            "revenue=EXCLUDED.revenue, archived_at=EXCLUDED.archived_at, archived_by=EXCLUDED.archived_by",
+            (month, int(revenue), _now_iso(), uid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_get_archive(month: str):
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute("SELECT month, revenue, archived_at FROM hot_tub_archived WHERE month=%s", (month,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def _db_archived_months() -> list:
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute("SELECT month FROM hot_tub_archived")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [r["month"] for r in rows]
+
+
+def _db_unarchive(month: str) -> None:
+    conn = get_db()
+    try:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM hot_tub_archived WHERE month=%s", (month,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _month_revenue(payload: dict, overrides: dict) -> int:
+    """Grand owner total for a month AFTER her adjustments (comps → $0, do-not-bill
+    excluded, reclassifications, manual credits/services). No floor. Mirrors the
+    page + CSV math so the archived/top-of-page number always matches."""
+    rows_ov = (overrides or {}).get("rows", {}) or {}
+    manual = (overrides or {}).get("manual", []) or []
+    total = 0
+    for prop in payload.get("props", []):
+        pid = str(prop.get("property_id"))
+        for r in prop.get("rows", []):
+            o = rows_ov.get(str(r.get("task_id")))
+            if o and o.get("action") == "include":
+                total += int(o.get("price", 0) or 0)
+            elif o and o.get("action") in ("comp", "exclude"):
+                total += 0
+            elif r.get("disposition") == "billable" and r.get("completed"):
+                total += int(r.get("price", 0) or 0)
+        for m in manual:
+            if str(m.get("property_id")) == pid:
+                amt = int(m.get("amount", 0) or 0)
+                total += -amt if m.get("kind") == "credit" else amt
+    return total
 
 
 def _import_file_to_db_if_needed(month: str):
@@ -659,6 +732,7 @@ def hot_tub_billing_months():
         "pickable": pickable,
         "current_month": current,
         "default": default,
+        "archived": _db_archived_months(),
     })
 
 
@@ -683,6 +757,11 @@ def hot_tub_billing_data():
                         "reason": f"No worksheet for {month} yet — click Generate to scan it."})
     payload["exists"] = True
     payload["has_csv"] = True   # rebuilt from the stored payload on demand
+    arch = _db_get_archive(month)
+    if arch:
+        payload["archived"] = True
+        payload["archived_at"] = arch["archived_at"]
+        payload["archived_revenue"] = arch["revenue"]
     return jsonify(payload)
 
 
@@ -725,6 +804,8 @@ def hot_tub_billing_generate():
         abort(400, "month must be YYYY-MM.")
     if month > _current_month():
         abort(400, "Can't scan a future month.")
+    if _db_get_archive(month):
+        abort(409, f"{month} is archived (read-only). Reopen it first to re-scan.")
 
     with _JOBS_LOCK:
         job = _JOBS.get(month)
@@ -834,6 +915,9 @@ def hot_tub_billing_overrides_save():
     month = (request.args.get("month") or "").strip()
     if not _MONTH_FMT.fullmatch(month or ""):
         abort(400, "month must be YYYY-MM.")
+    if _db_get_archive(month):
+        return jsonify({"saved": False, "archived": True,
+                        "message": f"{month} is archived (read-only). Reopen it to edit."}), 409
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         abort(400, "Expected a JSON overrides object.")
@@ -843,3 +927,34 @@ def hot_tub_billing_overrides_save():
     except Exception as e:
         return jsonify({"saved": False, "message": f"Could not save adjustments: {e}"}), 500
     return jsonify({"saved": True, **doc})
+
+
+@hot_tub_billing_bp.route("/admin/hot-tub-billing/archive", methods=["POST"])
+@login_required
+@admin_required
+def hot_tub_billing_archive():
+    """Freeze a finished month: lock it read-only and record the final owner
+    total. The worksheet + adjustments stay in the DB (durable); this just marks
+    it done so she can move on and revisit it later."""
+    month = (request.args.get("month") or "").strip()
+    if not _MONTH_FMT.fullmatch(month or ""):
+        abort(400, "month must be YYYY-MM.")
+    payload = _import_file_to_db_if_needed(month)
+    if payload is None:
+        abort(404, f"No worksheet for {month} to archive.")
+    revenue = _month_revenue(payload, _load_overrides(month))
+    _db_archive(month, revenue, getattr(current_user, "id", None))
+    return jsonify({"archived": True, "month": month, "revenue": revenue,
+                    "archived_at": _now_iso()})
+
+
+@hot_tub_billing_bp.route("/admin/hot-tub-billing/unarchive", methods=["POST"])
+@login_required
+@admin_required
+def hot_tub_billing_unarchive():
+    """Reopen an archived month so it can be edited / re-scanned again."""
+    month = (request.args.get("month") or "").strip()
+    if not _MONTH_FMT.fullmatch(month or ""):
+        abort(400, "month must be YYYY-MM.")
+    _db_unarchive(month)
+    return jsonify({"reopened": True, "month": month})

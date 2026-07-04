@@ -364,6 +364,14 @@ def init_db():
         doc        TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""")
+    # A FROZEN/archived month: once she finishes billing a month she archives it,
+    # which locks it read-only and records the final owner total for reference.
+    cur.execute("""CREATE TABLE IF NOT EXISTS hot_tub_archived (
+        month       TEXT PRIMARY KEY,
+        revenue     INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT NOT NULL,
+        archived_by INTEGER
+    )""")
 
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")

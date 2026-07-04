@@ -20,11 +20,13 @@
       <button id="regenBtn" type="button" title="Re-scan this month from Breezeway"
         class="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1.5 rounded-md hover:bg-gray-100">↻ Regenerate</button>
       <a id="csvLink" href="#" class="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-2.5 py-1.5 rounded-md hover:bg-gray-100">Download CSV</a>
+      <button id="archiveBtn" type="button" title="Freeze this month once you're done billing it"
+        class="text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2.5 py-1.5 rounded-md hover:bg-indigo-100" style="display:none">📦 Archive month</button>
     </div>
   </div>
 
-  <!-- Rules reference (the locked billing rules) -->
-  <details class="mb-5 border border-gray-200 rounded-lg bg-white" open>
+  <!-- Rules reference (the locked billing rules) — collapsed by default -->
+  <details class="mb-5 border border-gray-200 rounded-lg bg-white">
     <summary class="cursor-pointer px-4 py-2.5 text-sm font-semibold text-gray-700 select-none">
       Billing rules (reference)
     </summary>
@@ -256,6 +258,7 @@ async function fillTapeCharts(month) {
 }
 
 const monthLabel = m => {
+  if (ARCHIVEDSET.has(m)) return m + " 📦 archived";
   const has = GEN.has(m);
   const cur = m === MONTHS.current_month;
   if (has) return m + (cur ? " ✓ (partial — month not over)" : " ✓");
@@ -266,6 +269,7 @@ async function loadMonths(keep) {
   const r = await fetch("/admin/hot-tub-billing/months");
   MONTHS = await r.json();
   GEN = new Set(MONTHS.generated || []);
+  ARCHIVEDSET = new Set(MONTHS.archived || []);
   const sel = document.getElementById("monthSel");
   const want = keep || sel.value || MONTHS.default;
   sel.innerHTML = (MONTHS.pickable || []).map(m =>
@@ -300,9 +304,32 @@ function setCsv(month, ok) {
 // Pick a month: show its worksheet if generated, else offer to generate it.
 async function select(month) {
   if (polling) { clearTimeout(polling); polling = null; }
-  document.getElementById("regenBtn").style.display = GEN.has(month) ? "" : "none";
-  if (GEN.has(month)) return load(month);
+  const gen = GEN.has(month), arch = ARCHIVEDSET.has(month);
+  // Archived months are read-only: no re-scan, no archive-again (reopen lives in
+  // the banner instead).
+  document.getElementById("regenBtn").style.display = (gen && !arch) ? "" : "none";
+  document.getElementById("archiveBtn").style.display = (gen && !arch) ? "" : "none";
+  if (gen) return load(month);
   showGeneratePrompt(month);
+}
+
+// Freeze a finished month (records the final owner total, locks it read-only).
+async function archive(month) {
+  if (!month || !GEN.has(month) || ARCHIVEDSET.has(month)) return;
+  if (!confirm(`Freeze ${month}?\n\nIt becomes read-only and its final owner total is recorded. `
+    + `You can reopen it anytime to make changes.`)) return;
+  const r = await fetch("/admin/hot-tub-billing/archive?month=" + encodeURIComponent(month), { method: "POST" });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.archived) { await loadMonths(month); document.getElementById("monthSel").value = month; load(month); }
+  else alert(j.message || "Couldn't archive the month.");
+}
+
+// Reopen an archived month for editing.
+async function reopen(month) {
+  if (!confirm(`Reopen ${month} for editing?\n\nYou can archive it again when you're done.`)) return;
+  const r = await fetch("/admin/hot-tub-billing/unarchive?month=" + encodeURIComponent(month), { method: "POST" });
+  if (r.ok) { await loadMonths(month); document.getElementById("monthSel").value = month; load(month); }
+  else alert("Couldn't reopen the month.");
 }
 
 async function load(month) {
@@ -415,6 +442,8 @@ let OVERRIDES = { rows: {}, manual: [] }; // this month's local adjustments
 let RESDATA = {};                         // month → reservations payload (client cache)
 let EDIT = { includeTid: null, manualPid: null };  // which inline editor is open
 let saveState = "";                       // "" | "saving" | "saved" | "error"
+let ARCHIVED = false;                     // is the CURRENT month frozen/read-only?
+let ARCHIVEDSET = new Set();              // months that are archived (for the picker)
 
 const ovFor = tid => OVERRIDES.rows[String(tid)] || null;
 
@@ -571,6 +600,7 @@ function effBadge(r, e) {
 }
 
 function rowActions(r, e) {
+  if (ARCHIVED) return "";   // frozen month — no edit buttons
   const tid = esc(String(r.task_id));
   if (EDIT.includeTid === String(r.task_id)) {
     // Default the dropdown to the type already detected, or bump it up if a flag
@@ -624,9 +654,10 @@ function render(d) {
   const computed = props.map(p => ({ p, rc: recompute(p) }));
 
   const partial = d.status !== "COMPLETE";
-  // Live service-type tally across ALL houses AFTER your edits (comps drop out,
-  // reclassifications move between types, manual services + floor top-ups add in).
-  // Never the stale scan counts.
+  ARCHIVED = !!d.archived;
+  // Live owner total + service-type tally across ALL houses AFTER your edits
+  // (comps drop out, reclassifications move between types, manual lines add in).
+  const revenue = computed.reduce((s, c) => s + c.rc.total, 0);
   const agg = { regular: 0, dump_scrub: 0, wwm: 0, cold_plunge: 0 };
   for (const { rc } of computed) {
     const c = houseCounts(rc).counts;
@@ -635,15 +666,29 @@ function render(d) {
   }
   const typeBits = [["regular", "Regular"], ["dump_scrub", "D&S"], ["wwm", "Bacterial"], ["cold_plunge", "Cold Plunge"]]
     .filter(([k]) => agg[k]).map(([k, l]) => `${l} ×${agg[k]}`).join(" · ") || "none";
+
+  // Top controls reflect the loaded month's archived state.
+  document.getElementById("archiveBtn").style.display = (!ARCHIVED && GEN.has(d.month)) ? "" : "none";
+  document.getElementById("regenBtn").style.display = (!ARCHIVED && GEN.has(d.month)) ? "" : "none";
+
+  const barCls = ARCHIVED ? "bg-slate-100 border-slate-300"
+    : (partial ? "bg-amber-50 border-amber-200" : "bg-emerald-50 border-emerald-200");
   sb.innerHTML = `
-    <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm ${partial ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'} border rounded-md px-4 py-3">
-      <span class="font-bold ${partial ? 'text-amber-800' : 'text-emerald-800'}">
-        ${partial ? '⚠️ PARTIAL — ' + (d.failures||[]).length + ' failure(s)' : '✅ ' + esc(d.month)}</span>
-      <span class="text-gray-600">${esc(typeBits)} <span class="text-gray-400 text-xs">(live — reflects your edits)</span></span>
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm ${barCls} border rounded-md px-4 py-3">
+      ${ARCHIVED
+        ? `<span class="font-bold text-slate-700">📦 ARCHIVED · ${esc(d.month)} · frozen ${esc((d.archived_at || "").slice(0, 10))}</span>`
+        : `<span class="font-bold ${partial ? 'text-amber-800' : 'text-emerald-800'}">${partial ? '⚠️ PARTIAL — ' + (d.failures||[]).length + ' failure(s)' : '✅ ' + esc(d.month)}</span>`}
+      <span class="text-lg font-bold ${ARCHIVED ? 'text-slate-800' : 'text-emerald-800'}">${money(revenue)} <span class="text-xs font-normal text-gray-500">owner total (live)</span></span>
+      <span class="text-gray-600">${esc(typeBits)}</span>
       <span class="text-gray-500">${d.properties_scanned}/${d.properties_tagged} properties · ${d.candidate_tasks} tasks examined</span>
       <span class="text-gray-400 text-xs">generated ${esc((d.generated_at||"").slice(0,16))}</span>
-      <span id="saveState" class="text-[11px] text-gray-400"></span>
-    </div>`;
+      ${ARCHIVED
+        ? `<button id="reopenBtn" type="button" class="text-xs bg-white border border-slate-300 text-slate-700 px-2.5 py-1 rounded-md hover:bg-slate-50">Reopen to edit</button>`
+        : `<span id="saveState" class="text-[11px] text-gray-400"></span>`}
+    </div>
+    ${ARCHIVED ? `<div class="mt-1.5 text-xs text-slate-500">This month is frozen and read-only — edits are disabled. Reopen it if you need to change anything.</div>` : ""}`;
+  const rb = document.getElementById("reopenBtn");
+  if (rb) rb.addEventListener("click", () => reopen(d.month));
 
   // Reset the per-render map of tape-chart data (property_id → marks), filled
   // below as we build each card and consumed by fillTapeCharts() once the
@@ -768,7 +813,7 @@ function render(d) {
           <tbody>${rows}${manualRows}${addForm}</tbody>
         </table>
         <div class="pt-2">
-          <button data-act="manual-open" data-pid="${esc(pid)}" class="text-[11px] text-indigo-600 hover:underline">+ add credit / service</button>
+          ${ARCHIVED ? "" : `<button data-act="manual-open" data-pid="${esc(pid)}" class="text-[11px] text-indigo-600 hover:underline">+ add credit / service</button>`}
         </div>
       </div>
     </div>`;
@@ -784,6 +829,7 @@ function render(d) {
 // #content container is never itself replaced (only its innerHTML), so this
 // listener, attached once, survives every re-render.
 function onContentClick(ev) {
+  if (ARCHIVED) return;   // frozen month — ignore any stray edit clicks
   const b = ev.target.closest("[data-act]");
   if (!b) return;
   const act = b.dataset.act, tid = b.dataset.tid, pid = b.dataset.pid;
@@ -824,6 +870,10 @@ function onContentClick(ev) {
   document.getElementById("regenBtn").addEventListener("click", () => {
     const m = sel.value;
     if (m) generate(m);
+  });
+  document.getElementById("archiveBtn").addEventListener("click", () => {
+    const m = sel.value;
+    if (m) archive(m);
   });
   select(sel.value || MONTHS.default || "");
 })();
