@@ -599,21 +599,16 @@ def build(token, properties, month_str, workers, max_props):
                     "task_tags": task_tag_names(t),   # context only
                 })
 
-            # Only completed, billable services count toward money & the floor.
+            # Only completed, billable services are billed. NO floor minimum —
+            # a house with zero services bills $0 (never charge for a service that
+            # didn't happen). The tag is used only to decide which houses to scan.
             billable = [r for r in rows if r["disposition"] == "billable" and r["completed"]]
             visits = len(billable)
             subtotal = sum(r["price"] for r in billable)
             for r in billable:
                 type_totals[r["service_type"]] += 1
 
-            floor = p.get("_floor", 0)
-            floor_topup = 0
-            floor_amt = 0
-            if visits < floor:
-                floor_topup = floor - visits
-                floor_amt = floor_topup * PRICE_REGULAR
-
-            prop_total = subtotal + floor_amt
+            prop_total = subtotal
             money_total += prop_total
 
             # Sort rows: billable first, then review, then excluded; by date.
@@ -623,12 +618,12 @@ def build(token, properties, month_str, workers, max_props):
             props_out.append({
                 "property": property_name(p),
                 "property_id": property_id(p),
-                "floor": floor,
+                "floor": 0,                       # floor rule removed — no minimum
                 "floor_tags": p.get("_floor_tags", []),
                 "visits_billable": visits,
                 "subtotal": subtotal,
-                "floor_topup": floor_topup,
-                "floor_amount": floor_amt,
+                "floor_topup": 0,
+                "floor_amount": 0,
                 "total": prop_total,
                 "rows": rows,
                 "needs_review": sum(1 for r in rows if r["disposition"] == "review"),

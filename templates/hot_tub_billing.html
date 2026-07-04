@@ -34,9 +34,9 @@
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600 w-44">Regular — $50</td><td class="py-1.5 text-gray-700">arrival / biweekly / weekly / monthly hot tub service</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Dump &amp; Scrub — $155</td><td class="py-1.5 text-gray-700">dump &amp; scrub / d&amp;s / d/s</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">WWM / Bacterial — $250</td><td class="py-1.5 text-gray-700">wwm / white water mold / bacterial</td></tr>
-          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Cold Plunge — $75</td><td class="py-1.5 text-gray-700">flat, any type (billed Regular even if the note says D&amp;S/WWM — small tub). Special house <b>Aerial Grace Lakeside Retreat</b> is always included (floor 2/mo) even without a hot-tub tag.</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Cold Plunge — $75</td><td class="py-1.5 text-gray-700">flat, any type (billed Regular even if the note says D&amp;S/WWM — small tub). Special house <b>Aerial Grace Lakeside Retreat</b> is always included even without a hot-tub tag.</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Partial</td><td class="py-1.5 text-gray-700">billed as Regular $50, but flagged for review</td></tr>
-          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Floors</td><td class="py-1.5 text-gray-700">“Hot Tub - TG Service” ≥2/mo · “Weekly Service” ≥4/mo · “Monthly Service” ≥1/mo (bill the floor even if fewer happened)</td></tr>
+          <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">No minimums</td><td class="py-1.5 text-gray-700">only actual services performed are billed — <b>no floor / minimum charge</b>. Houses with zero services show at $0.</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — tenant</td><td class="py-1.5 text-gray-700">lease / prepaid / post-lease D&amp;S — <i>but</i> a <b>lease&nbsp;arrival</b> service IS owner-billable</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — no charge</td><td class="py-1.5 text-gray-700">“*no charge”, “do not bill”, “do not service”</td></tr>
           <tr class="border-t border-gray-100"><td class="py-1.5 pr-4 font-medium text-gray-600">Excluded — not a service</td><td class="py-1.5 text-gray-700">leaks, repairs, covers, lifts, filters, locks, inspections, walk-thrus, daily/lease issues, etc.</td></tr>
@@ -451,16 +451,11 @@ function recompute(p) {
     if (m.kind === "credit") { manualSum -= amt; }
     else { manualSum += amt; manualServices++; }   // a logged service
   }
-  const floor = p.floor || 0;
-  // Manual service lines you add COUNT toward the floor minimum — you're logging
-  // a real service, so the app must not also force a top-up on top of it. A lease
-  // waives the minimum entirely (tenant covers service).
-  const accounted = visits + manualServices;
-  const leased = hasLease(p.property_id);
-  const topup = leased ? 0 : Math.max(0, floor - accounted);
-  const floorAmt = topup * 50;
-  return { eff, subtotal, visits: accounted, floor, topup, floorAmt, leased, manual, manualSum,
-           total: subtotal + floorAmt + manualSum };
+  // NO floor minimum — bill ONLY services actually performed + your manual
+  // adjustments. The app must never charge for a service that didn't happen.
+  return { eff, subtotal, visits: visits + manualServices, floor: 0, topup: 0, floorAmt: 0,
+           leased: hasLease(p.property_id), manual, manualSum,
+           total: subtotal + manualSum };
 }
 
 const signMoney = (kind, amt) => (kind === "credit" ? "−" : "+") + "$" + Number(amt || 0).toLocaleString();
@@ -500,7 +495,6 @@ function houseCounts(rc) {
     else if (counts[m.service_type] != null) counts[m.service_type]++;
     else extra.push("One " + (m.service_type || "Manual Service"));
   }
-  if (rc.topup) counts.regular += rc.topup;   // floor top-up bills as Regular
   return { counts, extra, comped, creditNote };
 }
 
@@ -623,7 +617,10 @@ function render(d) {
   }
   setCsv(d.month, d.has_csv !== false);
 
-  const props = (d.props || []).filter(p => p.rows && p.rows.length);
+  // Show EVERY scanned house — including ones with zero services this month (they
+  // render at $0 with "No billable services"). The page and the CSV now list the
+  // exact same houses, so nothing can be billed on one and hidden on the other.
+  const props = (d.props || []).filter(p => p && p.property);
   const computed = props.map(p => ({ p, rc: recompute(p) }));
 
   const partial = d.status !== "COMPLETE";
@@ -665,13 +662,8 @@ function render(d) {
 
   cn.innerHTML = legend + computed.map(({ p, rc }) => {
     const pid = String(p.property_id);
-    const floorNote = (rc.leased && rc.floor)
-      ? `<span class="text-emerald-700 text-xs ml-2">floor ${rc.floor}/mo waived — lease active this month</span>`
-      : (rc.topup
-        ? `<span class="text-amber-700 text-xs ml-2">⬆ floor ${rc.floor}: ${rc.visits} performed, +${rc.topup}×$50 minimum (${money(rc.floorAmt)})</span>`
-        : (rc.floor ? `<span class="text-gray-400 text-xs ml-2">floor ${rc.floor}/mo</span>` : ""));
-    const scanStrike = (rc.total !== p.total)
-      ? `<span class="text-xs font-normal text-gray-400 line-through ml-1">${money(p.total)}</span>` : "";
+    const floorNote = "";     // floor-minimum rule removed
+    const scanStrike = "";    // no "scan vs adjusted" strike — total is just your services + edits
 
     // Tape-chart service marks: every performed service (billable OR comped —
     // both physically happened), plotted on the day it was actually DONE

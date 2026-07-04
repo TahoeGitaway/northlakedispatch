@@ -296,11 +296,11 @@ def _build_csv_text(payload: dict) -> str:
     return buf.getvalue()
 
 
-def _adjusted_csv_text(payload: dict, overrides: dict, leased: set = None) -> str:
+def _adjusted_csv_text(payload: dict, overrides: dict) -> str:
     """Billing-ready CSV that REFLECTS her local adjustments (comps, resolutions,
-    do-not-bill, manual credits/services, floor minimums) — mirrors exactly what
-    the page shows and totals. Same effective logic as the frontend so the CSV
-    and the screen never disagree. Still app-side; Breezeway is untouched."""
+    do-not-bill, manual credits/services) — mirrors exactly what the page shows
+    and totals. No floor minimum: only actual services + her adjustments. Same
+    effective logic as the frontend so the CSV and the screen never disagree."""
     rows_ov = (overrides or {}).get("rows", {}) or {}
     manual = (overrides or {}).get("manual", []) or []
     fields = ["property", "scheduled_date", "completed_date", "status", "service_type",
@@ -312,7 +312,6 @@ def _adjusted_csv_text(payload: dict, overrides: dict, leased: set = None) -> st
     for prop in payload.get("props", []):
         pid = str(prop.get("property_id"))
         pname = prop.get("property", "")
-        floor = prop.get("floor", 0) or 0
         visits, subtotal = 0, 0
         for r in prop.get("rows", []):
             o = rows_ov.get(str(r.get("task_id")))
@@ -347,11 +346,8 @@ def _adjusted_csv_text(payload: dict, overrides: dict, leased: set = None) -> st
                 "title": r.get("title", ""), "summary": r.get("summary", ""),
                 "adjustment_note": note,
             })
-        # Manual lines. A logged SERVICE counts toward the floor minimum, so tally
-        # them before deciding whether a top-up is needed.
-        prop_manual = [m for m in manual if str(m.get("property_id")) == pid]
-        manual_services = sum(1 for m in prop_manual if m.get("kind") != "credit")
-        for m in prop_manual:
+        # Manual lines (no floor minimum — only actual services + your adjustments).
+        for m in [m for m in manual if str(m.get("property_id")) == pid]:
             amt = int(m.get("amount", 0) or 0)
             signed = -amt if m.get("kind") == "credit" else amt
             subtotal += signed
@@ -359,16 +355,6 @@ def _adjusted_csv_text(payload: dict, overrides: dict, leased: set = None) -> st
                         "status": "Manual credit" if m.get("kind") == "credit" else "Manual service",
                         "service_type": m.get("service_type", ""), "charge": signed,
                         "adjustment_note": m.get("note", "")})
-        accounted = visits + manual_services
-        topup = 0 if (leased and pid in leased) else max(0, floor - accounted)
-        if topup:
-            amt = topup * PRICE_REGULAR_CSV
-            subtotal += amt
-            w.writerow({"property": pname, "status": "Floor minimum", "service_type": "regular",
-                        "charge": amt, "adjustment_note": f"+{topup} to meet {floor}/mo floor"})
-        elif floor and (leased and pid in leased) and accounted < floor:
-            w.writerow({"property": pname, "status": "Floor waived", "service_type": "",
-                        "charge": 0, "adjustment_note": f"{floor}/mo minimum waived — lease active"})
         w.writerow({"property": pname, "status": "SUBTOTAL", "charge": subtotal})
         grand += subtotal
     w.writerow({"property": "ALL PROPERTIES", "status": "GRAND TOTAL", "charge": grand})
@@ -405,7 +391,7 @@ def _month_name(month: str) -> str:
         return month
 
 
-def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = None) -> str:
+def _summary_csv_text(payload: dict, overrides: dict, month: str) -> str:
     """One row per house: name, a plain-English tally of what was billed, and the
     total — reflecting her adjustments. E.g. 'One Regular Hot Tub Service and Two
     Dump & Scrub Services, June 2026'. WWM reads as 'Bacterial Treatment'; cold plunge as
@@ -441,8 +427,7 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
             visits += 1
             total += charge
             counts[stype] = counts.get(stype, 0) + 1
-        # Manual lines first — a logged SERVICE counts toward the floor minimum
-        # (she's accounting for a real service, so we must not also force a top-up).
+        # Manual lines (no floor minimum — only actual services + her adjustments).
         credit_note, manual_services = 0, 0
         for m in manual:
             if str(m.get("property_id")) != pid:
@@ -458,14 +443,7 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
                 else:
                     extra_parts.append(f"One {st or 'Manual Service'}")
 
-        # Floor minimum → billed as Regular hot-tub services, UNLESS the house was
-        # leased this month (tenant covers service; the owner minimum is waived).
-        floor = prop.get("floor", 0) or 0
-        is_leased = bool(leased and pid in leased)
-        topup = 0 if is_leased else max(0, floor - (visits + manual_services))
-        if topup:
-            counts["regular"] += topup
-            total += topup * PRICE_REGULAR_CSV
+        # NO floor minimum — bill only actual services + manual lines.
 
         # Build the phrase. Regular carries the full "Hot Tub Service(s)" noun;
         # Dump & Scrub gets its own "Service(s)".
@@ -483,8 +461,6 @@ def _summary_csv_text(payload: dict, overrides: dict, month: str, leased: set = 
         body = _join_and(parts)
         summary = (f"{body}, {mlabel}" if body else f"No billable services, {mlabel}")
         notes = []
-        if is_leased and floor and (visits + manual_services) < floor:
-            notes.append("lease — owner floor waived")
         if comped:
             notes.append(f"{comped} comped")
         if credit_note:
@@ -723,13 +699,12 @@ def hot_tub_billing_download():
     payload = _import_file_to_db_if_needed(month)
     if payload is None:
         abort(404, f"No worksheet for {month}. Generate the month first.")
-    leased = _leased_property_ids(month)   # None if reservations couldn't be fetched
     if request.args.get("raw"):
         text, suffix = _build_csv_text(payload), "_raw"
     elif request.args.get("detail"):
-        text, suffix = _adjusted_csv_text(payload, _load_overrides(month), leased), "_detail"
+        text, suffix = _adjusted_csv_text(payload, _load_overrides(month)), "_detail"
     else:
-        text, suffix = _summary_csv_text(payload, _load_overrides(month), month, leased), "_summary"
+        text, suffix = _summary_csv_text(payload, _load_overrides(month), month), "_summary"
     return Response(
         text, mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="hot_tub_billing_{month}{suffix}.csv"'},
