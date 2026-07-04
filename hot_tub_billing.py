@@ -86,19 +86,32 @@ TASK_URL     = f"{BASE}/public/inventory/v1/task"
 CLIENT_ID     = os.environ.get("BREEZEWAY_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("BREEZEWAY_CLIENT_SECRET", "")
 
-# Property tag → (floor per month). A house with several takes the HIGHEST floor.
-TAG_FLOORS = {
-    "hot tub - tg service": 2,
-    "weekly service":       4,
-    "monthly service":      1,
-}
+# WHICH HOUSES ARE SCANNED FOR HOT-TUB BILLING (selection by property tag only —
+# there is NO minimum/floor charge). A house qualifies if it carries a "Hot Tub"
+# property tag: either the plain "Hot Tub" tag OR any "Hot Tub - … Service"
+# variant (TG / PRS / Vendor / Weekly / TG Service Once Per Month, etc.). We match
+# by clause, not exact literal, so wording variants and trailing spaces still hit.
+def hot_tub_tag(tags):
+    """Return the property tag that qualifies this house for hot-tub billing —
+    prefer the specific 'Hot Tub - … Service' tag, else the plain 'Hot Tub' tag —
+    or '' if the house has neither. `tags` is a list of tag dicts or strings."""
+    plain = service = ""
+    for t in tags:
+        name = (t.get("name") or t.get("label") or "") if isinstance(t, dict) else t
+        n = str(name).strip()
+        low = n.lower()
+        if low == "hot tub":
+            plain = n
+        elif low.startswith("hot tub") and "service" in low:
+            service = n   # a service variant is more specific than plain "Hot Tub"
+    return service or plain
 
-# Special houses that must ALWAYS be scanned even when they carry no hot-tub floor
-# tag, with an explicit monthly floor. Keyed by Breezeway property id (string).
-# Aerial Grace bills COLD PLUNGE services (plus hot tub) — it has no TG tag, so
-# without this it would be skipped entirely and those services lost.
+
+# Special houses that must ALWAYS be scanned even without a hot-tub tag.
+# Keyed by Breezeway property id (string). Aerial Grace bills cold plunge (+ hot
+# tub) but has no hot-tub tag, so without this it would be skipped entirely.
 ALWAYS_INCLUDE = {
-    "1137736": {"floor": 2, "name": "Aerial Grace Lakeside Retreat"},
+    "1137736": {"name": "Aerial Grace Lakeside Retreat"},
 }
 
 PRICE_REGULAR     = 50
@@ -462,17 +475,9 @@ def fetch_property_tags(token, pid):
     return []
 
 
-def property_floor(token, pid):
-    """Highest monthly floor implied by this property's tags (0 if none)."""
-    floor = 0
-    matched = []
-    for t in fetch_property_tags(token, pid):
-        name = (t.get("name") or t.get("label") or "") if isinstance(t, dict) else t
-        name = str(name).lower().strip()
-        if name in TAG_FLOORS:
-            matched.append(name)
-            floor = max(floor, TAG_FLOORS[name])
-    return floor, matched
+def property_include_tag(token, pid):
+    """The hot-tub property tag that qualifies this house for billing, or ''."""
+    return hot_tub_tag(fetch_property_tags(token, pid))
 
 
 def collect_tagged_properties(token, properties, workers):
@@ -480,23 +485,18 @@ def collect_tagged_properties(token, properties, workers):
     REPORT.info(f"Classifying tags for {len(properties)} properties (workers={workers})…")
     tagged = []
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(property_floor, token, property_id(p)): p for p in properties}
+        futs = {ex.submit(property_include_tag, token, property_id(p)): p for p in properties}
         for fut in as_completed(futs):
             p = futs[fut]
             try:
-                floor, matched = fut.result()
+                tag = fut.result()
             except Exception as e:
                 REPORT.warn(f"tag classify failed for {property_name(p)}: {e}"); continue
-            # Force-include special houses (e.g. Aerial Grace / cold plunge) even
-            # if they carry no floor tag, honoring their explicit floor.
-            forced = ALWAYS_INCLUDE.get(str(property_id(p)))
-            if forced:
-                floor = max(floor, forced["floor"])
-                matched = matched + ["special-house (always included)"]
-                p["_special"] = True
-            if floor > 0:
-                p["_floor"] = floor
-                p["_floor_tags"] = matched
+            # Force-include special houses (e.g. Aerial Grace) even without a tag.
+            if not tag and str(property_id(p)) in ALWAYS_INCLUDE:
+                tag = "always-included (special house)"
+            if tag:
+                p["_include_tag"] = tag   # shown on each house entry so she knows WHY it's here
                 tagged.append(p)
     REPORT.properties_tagged = len(tagged)
     REPORT.info(f"{len(tagged)} properties carry a billing floor tag.")
@@ -618,8 +618,8 @@ def build(token, properties, month_str, workers, max_props):
             props_out.append({
                 "property": property_name(p),
                 "property_id": property_id(p),
+                "included_by": p.get("_include_tag", ""),  # WHY this house is on the scan
                 "floor": 0,                       # floor rule removed — no minimum
-                "floor_tags": p.get("_floor_tags", []),
                 "visits_billable": visits,
                 "subtotal": subtotal,
                 "floor_topup": 0,

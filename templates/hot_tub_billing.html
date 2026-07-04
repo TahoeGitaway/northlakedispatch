@@ -745,6 +745,7 @@ function render(d) {
           <a href="https://app.breezeway.io/property/${esc(pid)}/calendar" target="_blank" rel="noopener"
              class="text-indigo-500 hover:underline text-xs font-normal ml-1 whitespace-nowrap"
              title="Open ${esc(p.property)}'s calendar in Breezeway">📅 calendar ↗</a>
+          ${p.included_by ? `<span class="block text-[11px] font-normal text-gray-400 mt-0.5" title="The property tag that put this house on the hot-tub scan">included by: ${esc(p.included_by)}</span>` : ""}
           ${floorNote}</h3>
         <div class="flex-1 min-w-0 text-xs text-gray-500 italic text-center px-2"
              title="This is exactly what the billing CSV will say for this house — it updates live with your edits.">
