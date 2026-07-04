@@ -281,20 +281,52 @@ def init_db():
     )""")
     # Seed the initial roster ONCE (only when the table is completely empty, so
     # later removals aren't undone on every restart).
+    # Canonical maintenance-team allow-list — full Breezeway names + the two dispatch
+    # zone accounts. Seeded when empty; the upgrade block corrects earlier first-name
+    # rows on existing installs (roster auto-resolve can't disambiguate "Sean"/"Alec"
+    # because Breezeway also lists combined "Sean Kearney, Zack…" entries).
+    _CANDIDATE_FIRST_TO_FULL = {
+        "jeremy": "Jeremy Neifert", "sean": "Sean Kearney", "andy": "Andy Rosman",
+        "chris": "Chris Marin", "calder": "Calder McCarron", "jonah": "Jonah Buchanan-Caldwell",
+        "irving": "Irving Pantoja", "julie": "Julie Rohrback", "trevor": "Trevor Bales",
+        "drew": "Drew Schott", "alec": "Alec Carlson", "steve": "Steve Rauch",
+    }
+    _CANDIDATE_SEED = list(_CANDIDATE_FIRST_TO_FULL.values()) + ["89 Zone", "267 Zone"]
+    _now = datetime.utcnow().isoformat()
+
     cur.execute("SELECT COUNT(*) AS n FROM assignment_candidates")
     if (cur.fetchone() or {}).get("n", 0) == 0:
-        # First names auto-upgrade to the full Breezeway name on first load of the
-        # candidates panel (unique first name → its full name; duplicates get
-        # flagged to pick). Jeremy is set explicitly since there may be more than one.
-        _seed = ["Jeremy Neifert", "Sean", "Andy", "Chris", "Calder", "Jonah",
-                 "Irving", "Julie", "Trevor", "Drew", "Alec", "Steve"]
-        _now = datetime.utcnow().isoformat()
-        for _nm in _seed:
+        for _nm in _CANDIDATE_SEED:
             cur.execute(
                 "INSERT INTO assignment_candidates (name, name_key, created_at) "
                 "VALUES (%s, %s, %s) ON CONFLICT (name_key) DO NOTHING",
                 (_nm, _nm.lower().strip(), _now),
             )
+
+    # Upgrade any legacy bare first-name rows to the full name (idempotent; a no-op
+    # once done, and it never re-adds a name the user later removed).
+    for _first, _full in _CANDIDATE_FIRST_TO_FULL.items():
+        cur.execute("SELECT 1 FROM assignment_candidates WHERE name_key = %s", (_full.lower(),))
+        if cur.fetchone():
+            cur.execute("DELETE FROM assignment_candidates WHERE name_key = %s", (_first,))
+        else:
+            cur.execute("UPDATE assignment_candidates SET name = %s, name_key = %s WHERE name_key = %s",
+                        (_full, _full.lower(), _first))
+
+    # One-time: add the two zone accounts to existing installs, guarded by a flag so a
+    # later manual removal is respected (never re-added on subsequent boots).
+    cur.execute("""CREATE TABLE IF NOT EXISTS app_migration_flags (
+        flag TEXT PRIMARY KEY, applied_at TEXT NOT NULL)""")
+    cur.execute("SELECT 1 FROM app_migration_flags WHERE flag = %s", ("candidate_zones_2026_06",))
+    if not cur.fetchone():
+        for _z in ("89 Zone", "267 Zone"):
+            cur.execute(
+                "INSERT INTO assignment_candidates (name, name_key, created_at) "
+                "VALUES (%s, %s, %s) ON CONFLICT (name_key) DO NOTHING",
+                (_z, _z.lower(), _now),
+            )
+        cur.execute("INSERT INTO app_migration_flags (flag, applied_at) VALUES (%s, %s) "
+                    "ON CONFLICT (flag) DO NOTHING", ("candidate_zones_2026_06", _now))
 
     # Off-list-assignee monitor: department-name keywords to EXCLUDE from the scan
     # (cleaning + vendor work uses rosters other than the maintenance allow-list, so
@@ -347,6 +379,17 @@ def init_db():
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS rescheduled INTEGER DEFAULT 0")
+
+    # Normalize smart (curly) apostrophes in property names to straight ones so
+    # Breezeway names ("Bear's Lair", straight ') match the DB. One curly char
+    # (U+2019) imported from the source CSV silently broke every name lookup for
+    # that house. Idempotent — runs each boot; only touches rows still holding one.
+    cur.execute(
+        'UPDATE properties SET "Property Name" = '
+        'REPLACE(REPLACE("Property Name", chr(8217), chr(39)), chr(8216), chr(39)) '
+        "WHERE \"Property Name\" LIKE '%' || chr(8217) || '%' "
+        "OR \"Property Name\" LIKE '%' || chr(8216) || '%'"
+    )
 
     # Ensure default teams exist
     now_iso = datetime.utcnow().isoformat()

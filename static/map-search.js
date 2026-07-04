@@ -966,6 +966,7 @@ function _bwRenderUncertain(date, list) {
         addStop(p, !!p.arrival, !!p.priority_checkin);
       }
       _bwTasksByPropName[p.name] = p.tasks || [];
+      if (p.property_id) _bwPropIdByName[p.name] = p.property_id;
       _syncSidebarToSchedule();
       _bwPlaceMarkers();
       row.remove();
@@ -987,6 +988,24 @@ function _bwRenderUncertain(date, list) {
 let _bwByAssignee     = null;
 let _bwActiveDate     = null;
 let _bwTasksByPropName = {};  // {propertyName: [{task_name, assignees}]} — keyed for sync
+let _bwPropIdByName    = {};  // {propertyName: breezeway home_id} — for the 📅 calendar link
+
+// Build a "📅 calendar ↗" link to a property's Breezeway calendar, matching the
+// style used elsewhere in the app (occupancy check, hot tub billing). Returns null
+// when we don't have the Breezeway property id for this house.
+function _bwCalendarLink(name) {
+  const pid = _bwPropIdByName[name];
+  if (!pid) return null;
+  const a = document.createElement("a");
+  a.href      = `https://app.breezeway.io/property/${encodeURIComponent(pid)}/calendar`;
+  a.target    = "_blank";
+  a.rel       = "noopener";
+  a.className = "text-indigo-500 hover:underline text-[11px] font-normal ml-1 whitespace-nowrap";
+  a.title     = `Open ${name}'s calendar in Breezeway`;
+  a.textContent = "📅 ↗";
+  a.addEventListener("click", e => e.stopPropagation());  // don't trigger row/stop handlers
+  return a;
+}
 
 let _bwSidebarMinimized = true;  // starts minimized
 
@@ -1403,7 +1422,11 @@ function _bwShowTaskSidebar(date, matched) {
   _bwByAssignee = "bw";   // truthy — prevents _loadDailyRoutes from clobbering BW state
   _bwActiveDate = date;
   _bwTasksByPropName = {};
-  for (const p of matched) _bwTasksByPropName[p.name] = p.tasks || [];
+  _bwPropIdByName    = {};
+  for (const p of matched) {
+    _bwTasksByPropName[p.name] = p.tasks || [];
+    if (p.property_id) _bwPropIdByName[p.name] = p.property_id;
+  }
   _syncSidebarToSchedule();
   _expandSidebarIfMinimized();
 }
@@ -1510,8 +1533,13 @@ function _syncSidebarToSchedule() {
     body.className = "flex-1 min-w-0";
 
     const propName = document.createElement("div");
-    propName.className = "text-xs font-semibold truncate " + (s.arrival ? "text-green-700" : "text-gray-800");
-    propName.textContent = s.name;
+    propName.className = "text-xs font-semibold " + (s.arrival ? "text-green-700" : "text-gray-800");
+    const propNameText = document.createElement("span");
+    propNameText.className = "align-middle";
+    propNameText.textContent = s.name;
+    propName.appendChild(propNameText);
+    const cal = _bwCalendarLink(s.name);
+    if (cal) { cal.classList.add("align-middle"); propName.appendChild(cal); }
     body.appendChild(propName);
 
     for (const t of tasks) {

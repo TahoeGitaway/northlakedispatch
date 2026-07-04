@@ -60,7 +60,7 @@
 
   <!-- Assignment result (raw per-task feedback) -->
   <div id="assignResult" class="hidden rounded-xl px-5 py-4 text-sm mb-4"
-       style="background:#fff;border:1px solid #e5e7eb;"></div>
+       style="background:#fff;border:1px solid #e5e7eb;position:relative;"></div>
 
   <!-- Empty -->
   <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
@@ -210,6 +210,12 @@ async function removeCandidate(name) {
             class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
       <option value="">— pick a person —</option>
     </select>
+    <input id="addPersonInput" list="addPersonList" placeholder="+ add someone…"
+           title="Show one more person from the roster in the dropdown (this scan only)"
+           class="px-3 py-2 w-40 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 outline-none"
+           onchange="addShownPerson()"
+           onkeydown="if(event.key==='Enter'){event.preventDefault();addShownPerson();}">
+    <datalist id="addPersonList"></datalist>
     <button onclick="assignSelected()"
             class="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors">
       Assign selected
@@ -679,6 +685,7 @@ async function runScan(force) {
       return;
     }
     SCAN = data;
+    SHOWN_PEOPLE = null;   // fresh scan → dropdown resets to the favorites default
     if (data.dept_counts) console.log('Departments seen (after hiding cleaning):', data.dept_counts);
     if (activeTab === 'spec') renderSpecTab();
     else renderScan();
@@ -797,12 +804,21 @@ function _toast(msg, ok) {
 }
 
 // Raw per-task confirmation that each assignment did or did not go through.
+// Small ✕ so the feedback/raw-response box can be dismissed instead of lingering.
+function _dismissBtn() {
+  return `<button type="button" title="Dismiss"`
+    + ` onclick="document.getElementById('assignResult').classList.add('hidden');"`
+    + ` style="position:absolute;top:8px;right:10px;border:none;background:none;`
+    + `color:#9ca3af;cursor:pointer;font-size:1rem;line-height:1;padding:2px;">✕</button>`;
+}
+
 function _renderAssignResults(data, personName) {
   const box = document.getElementById('assignResult');
   const results = data.results || [];
   const ok = data.ok_count || 0, fail = data.fail_count || 0;
 
-  let html = `<div style="font-weight:700;font-size:0.9rem;margin-bottom:8px;color:${fail ? '#b45309' : '#15803d'};">`
+  let html = _dismissBtn()
+    + `<div style="font-weight:700;font-size:0.9rem;margin-bottom:8px;color:${fail ? '#b45309' : '#15803d'};">`
     + `Assign → ${esc(personName)} · ${ok} succeeded${fail ? ` · ${fail} FAILED` : ''}</div>`;
 
   html += '<div style="display:flex;flex-direction:column;gap:3px;">';
@@ -990,7 +1006,8 @@ function _renderDateChangeResults(data) {
   const box = document.getElementById('assignResult');
   const results = data.results || [];
   const ok = data.ok_count || 0, fail = data.fail_count || 0;
-  let html = `<div style="font-weight:700;font-size:0.9rem;margin-bottom:8px;color:${fail ? '#b45309' : '#15803d'};">`
+  let html = _dismissBtn()
+    + `<div style="font-weight:700;font-size:0.9rem;margin-bottom:8px;color:${fail ? '#b45309' : '#15803d'};">`
     + `Move ${esc(data.from_date || '')} → ${esc(data.new_date || '')} · ${ok} succeeded${fail ? ` · ${fail} FAILED` : ''}</div>`;
   html += '<div style="display:flex;flex-direction:column;gap:3px;">';
   results.forEach(r => {
@@ -1064,14 +1081,72 @@ function _renderWarnings() {
   if (warnings.length) { wb.innerHTML = warnings.join('<br>'); wb.classList.remove('hidden'); }
   else { wb.classList.add('hidden'); }
 }
+// The dropdown defaults to just these eight (matched on first name). The rest of the
+// allow-list roster isn't shown until you add them one at a time via "+ add someone".
+// Reset back to the eight on every fresh scan (SHOWN_PEOPLE nulled in runScan).
+const FAVORITE_FIRST_NAMES = ['calder','trevor','julie','drew','jonah','chris','irving','andy'];
+let SHOWN_PEOPLE = null;   // Set of person ids currently in the dropdown; null = use default
+
+function _firstName(name) { return (name || '').trim().split(/\s+/)[0].toLowerCase(); }
+
+// Ids for the eight favorites present in this scan's roster, in FAVORITE order.
+function _defaultShownIds(people) {
+  const ids = [];
+  FAVORITE_FIRST_NAMES.forEach(fn => {
+    people.forEach(p => { if (_firstName(p.name) === fn) ids.push(String(p.id)); });
+  });
+  return new Set(ids);
+}
+
 function _populatePeople() {
   const sel = document.getElementById('personSel');
+  const people = (SCAN && SCAN.people) || [];
+  if (SHOWN_PEOPLE === null) SHOWN_PEOPLE = _defaultShownIds(people);
+
+  const prev = sel.value;   // keep the current pick selected across a repopulate
   sel.innerHTML = '<option value="">— pick a person —</option>';
-  ((SCAN && SCAN.people) || []).forEach(p => {
+
+  // Favorites first (in the fixed order above), then anyone manually added, alphabetical.
+  const shown = people.filter(p => SHOWN_PEOPLE.has(String(p.id)));
+  const favRank = n => { const i = FAVORITE_FIRST_NAMES.indexOf(_firstName(n)); return i < 0 ? 999 : i; };
+  shown.sort((a, b) => {
+    const ra = favRank(a.name), rb = favRank(b.name);
+    if (ra !== rb) return ra - rb;
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  });
+  shown.forEach(p => {
     const o = document.createElement('option');
     o.value = p.id; o.textContent = p.name;
+    if (String(p.id) === prev) o.selected = true;
     sel.appendChild(o);
   });
+
+  _populateAddPeople(people);
+}
+
+// The "+ add someone" datalist: everyone in the roster NOT already shown.
+function _populateAddPeople(people) {
+  const dl = document.getElementById('addPersonList');
+  if (!dl) return;
+  dl.innerHTML = '';
+  people.filter(p => !SHOWN_PEOPLE.has(String(p.id)))
+        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+        .forEach(p => { const o = document.createElement('option'); o.value = p.name; dl.appendChild(o); });
+}
+
+// Add one person (by exact roster name) to the dropdown for this session.
+function addShownPerson() {
+  const inp = document.getElementById('addPersonInput');
+  const name = (inp.value || '').trim().toLowerCase();
+  if (!name) return;
+  const people = (SCAN && SCAN.people) || [];
+  const match = people.find(p => p.name.trim().toLowerCase() === name);
+  if (!match) { inp.value = ''; return; }
+  if (SHOWN_PEOPLE === null) SHOWN_PEOPLE = _defaultShownIds(people);
+  SHOWN_PEOPLE.add(String(match.id));
+  inp.value = '';
+  _populatePeople();
+  document.getElementById('personSel').value = match.id;   // select the one just added
 }
 
 // ── Tab switching ────────────────────────────────────────────────────
@@ -1123,6 +1198,9 @@ function _specBuckets() {
   ((SCAN && SCAN.people) || []).forEach(p => {
     if (p && p.name && !(p.name in byS)) byS[p.name] = [];
   });
+  // Zone pseudo-assignees are always pickable, even on a day nothing is assigned to
+  // one of them — otherwise "267 Zone" vanishes from the selector while "89 Zone" stays.
+  ['89 Zone', '267 Zone'].forEach(z => { if (!(z in byS)) byS[z] = []; });
   return byS;
 }
 
@@ -1253,7 +1331,8 @@ function buildSpecialist(name, tasks) {
   const gkeys = Object.keys(byGrp).sort((a, b) =>
     ((a === 'Ungrouped') - (b === 'Ungrouped')) || a.localeCompare(b));
 
-  gkeys.forEach(gk => {
+  // Render one property-group sub-section (header + task rows) into the card.
+  const appendGroup = gk => {
     const gtasks = byGrp[gk].sort((a, b) =>
       ((a.property || '').toLowerCase()).localeCompare((b.property || '').toLowerCase())
       || ((a.name || '').toLowerCase()).localeCompare((b.name || '').toLowerCase()));
@@ -1278,6 +1357,20 @@ function buildSpecialist(name, tasks) {
       grpCbs.forEach(cb => { cb.checked = e.target.checked; });
       _refreshCount();
     });
+  };
+
+  // Cluster the groups under 89 / 267 zone headers, same corridors as the By Group tab.
+  const _zoneBar = label => {
+    const zh = document.createElement('div');
+    zh.style.cssText = 'padding:5px 16px;background:#eef2ff;border-top:1px solid #e0e7ff;font-size:0.72rem;font-weight:800;color:#4338ca;';
+    zh.textContent = label;
+    wrap.appendChild(zh);
+  };
+  [['89','🚗 89 Zone'], ['267','🚗 267 Zone'], ['other','Other groups']].forEach(([z, label]) => {
+    const zoneKeys = gkeys.filter(gk => zoneOf(gk) === z);
+    if (!zoneKeys.length) return;
+    _zoneBar(label);
+    zoneKeys.forEach(appendGroup);
   });
 
   head.querySelector('.spec-cb').addEventListener('change', e => {

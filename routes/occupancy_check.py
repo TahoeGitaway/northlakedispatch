@@ -59,6 +59,21 @@ def _expected_reason(title: str):
     return None
 
 
+# ── "Who" filter: the default-checked crew ────────────────────────
+# First names pre-checked in the "Who" filter when the page loads — her usual
+# crew. Everyone in the roster is still shown; these just start ticked so she
+# can adjust from there. Edit this set freely; matched case-insensitively
+# against any token of a person's name.
+_SUGGESTED_FIRST_NAMES = {
+    "jonah", "andy", "calder", "chris", "drew", "irving", "julie", "trevor",
+}
+
+
+def _is_suggested(name: str) -> bool:
+    toks = (name or "").lower().replace(",", " ").split()
+    return any(t in _SUGGESTED_FIRST_NAMES for t in toks)
+
+
 def _task_title(t: dict) -> str:
     title = (t.get("name") or t.get("task_name") or t.get("task_type") or t.get("type") or "Task")
     if isinstance(title, dict):
@@ -134,7 +149,10 @@ def occupancy_check():
     def _people_roster():
         try:
             keys = _candidate_keys()
-            return [p for p in _fetch_people(token) if _is_candidate(p["name"], keys)]
+            roster = [p for p in _fetch_people(token) if _is_candidate(p["name"], keys)]
+            for p in roster:
+                p["suggested"] = _is_suggested(p["name"])  # pre-checked by default
+            return roster
         except Exception:
             return []
 
