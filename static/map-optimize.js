@@ -276,11 +276,14 @@ function _watchBwSync() {
       // Proxy/gateway timeout — not a real failure; the sync likely finished. Amber, not red.
       const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
       _showBwSyncBanner("warn", summary);
+      setTimeout(_goToSavedRoutes, 1500);   // sync's done — send them back to the all-routes list
     } else if (/^error/i.test(txt) && !/updated/i.test(txt)) {
+      // Hard failure — stay on this route page so they can read it and retry.
       _showBwSyncBanner("error", "Breezeway sync failed — " + txt.slice(0, 160));
     } else {
       const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
       _showBwSyncBanner(/failed/i.test(summary) ? "warn" : "ok", "Breezeway sync done — " + summary);
+      setTimeout(_goToSavedRoutes, 1500);   // sync's done — send them back to the all-routes list
     }
   });
   obs.observe(src, { childList: true, subtree: true, characterData: true });

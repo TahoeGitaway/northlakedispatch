@@ -375,11 +375,19 @@ function _taskRow(t, isCheckin) {
          title="Open ${esc(t.property)}'s calendar in Breezeway">${esc(t.property)}</a>`
     : esc(t.property);
   const propLine = propHtml + (isCheckin && t.group ? ` <span style="color:#9ca3af;">· ${esc(t.group)}</span>` : '');
+  // Task title links to the task itself in Breezeway. Same font/color as before, just a
+  // subtle underline (light by default, darkens on hover) so it reads as a gentle link.
+  const nameHtml = t.task_id
+    ? `<a href="https://app.breezeway.io/task/${esc(String(t.task_id))}" target="_blank" rel="noopener"
+         title="Open this task in Breezeway"
+         style="font-size:0.85rem;font-weight:600;color:#1f2937;text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;"
+         onmouseover="this.style.textDecorationColor='#6b7280'" onmouseout="this.style.textDecorationColor='#d1d5db'">${esc(t.name)}</a>`
+    : `<span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>`;
   row.innerHTML = `
     <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
     <div style="flex:1;min-width:0;">
       <div class="task-badges" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-        <span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>
+        ${nameHtml}
         ${arrivalBadge}${pciBadge}${occBadge}
       </div>
       <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${propLine}</div>
@@ -394,9 +402,10 @@ function buildGroup(group, isCheckin) {
 
   const head = document.createElement('div');
   head.style.cssText = `padding:10px 16px;border-bottom:1px solid ${isCheckin ? '#bbf7d0' : '#e5e7eb'};display:flex;align-items:center;justify-content:space-between;gap:12px;background:${isCheckin ? '#f0fdf4' : '#f8fafc'};`;
+  const groupHouses = new Set(group.tasks.map(t => t.property)).size;
   head.innerHTML = `
     <div style="font-weight:700;font-size:0.92rem;color:${isCheckin ? '#15803d' : '#1f2937'};">${esc(group.group)}
-      <span style="font-weight:500;color:#9ca3af;font-size:0.8rem;">· ${group.tasks.length} task${group.tasks.length!==1?'s':''}</span>
+      <span style="font-weight:500;color:#9ca3af;font-size:0.8rem;">· ${group.tasks.length} task${group.tasks.length!==1?'s':''} · ${groupHouses} house${groupHouses!==1?'s':''}</span>
     </div>
     <label style="font-size:0.75rem;color:#4f46e5;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:5px;">
       <input type="checkbox" class="group-cb"> Select all
@@ -710,6 +719,7 @@ async function runScan(force) {
     }
     SCAN = data;
     SHOWN_PEOPLE = null;   // fresh scan → dropdown resets to the favorites default
+    SPEC_INITIALIZED = false;   // fresh scan → By-Specialist re-selects the default crew
     if (data.dept_counts) console.log('Departments seen (after hiding cleaning):', data.dept_counts);
     if (activeTab === 'spec') renderSpecTab();
     else renderScan();
@@ -1209,6 +1219,25 @@ function switchTab(tab) {
 // specialists and presses "Show" — never auto-populated.
 let SPEC_SELECTED = new Set();
 
+// First names of the crew shown by DEFAULT in this tab (same set the "Scheduled
+// while in house" tool pre-checks). On each fresh scan, every single-person
+// specialist whose first name is one of these starts ticked and shown — she can
+// still adjust from there.
+const SPEC_DEFAULT_FIRST_NAMES = new Set(
+  ['andy', 'chris', 'calder', 'jonah', 'drew', 'irving', 'julie', 'trevor']);
+let SPEC_INITIALIZED = false;   // reset per scan; gates the one-time default select
+
+// Bucket names (from _specBuckets) that should start selected: solo specialists
+// whose first name is in the default crew. Combo/team buckets ("A, B") and the
+// zone pseudo-assignees are skipped.
+function _specDefaultSelection(byS) {
+  return Object.keys(byS).filter(n => {
+    if (n.includes(',')) return false;
+    const first = (n.trim().split(/\s+/)[0] || '').toLowerCase();
+    return SPEC_DEFAULT_FIRST_NAMES.has(first);
+  });
+}
+
 // Bucket EVERY task (check-ins folded in) by its current assignee, THEN fold in
 // every approved assignment candidate (the roster the assign dropdown uses) with an
 // empty bucket — so people you assign to (e.g. Jonah) are always pickable even on a
@@ -1242,6 +1271,13 @@ function renderSpecTab() {
     return;
   }
   empty.classList.add('hidden');
+  // First time this tab is shown after a scan, pre-select the default crew so their
+  // tasks are shown without any clicks. Only once per scan — once she adjusts the
+  // selection (or on a tab flip), her choice stands until the next scan.
+  if (!SPEC_INITIALIZED) {
+    SPEC_SELECTED = new Set(_specDefaultSelection(_specBuckets()));
+    SPEC_INITIALIZED = true;
+  }
   populateSpecSelector();
   renderSpecResults();   // re-render whatever's currently selected (persists across tab flips)
 }
