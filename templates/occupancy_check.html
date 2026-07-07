@@ -34,8 +34,6 @@
   <div id="peoplePanel" class="hidden mb-4 border border-gray-200 rounded-lg p-3 bg-white">
     <div class="flex items-center gap-3 mb-2">
       <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Show tasks for</span>
-      <button type="button" onclick="_setAllPeople(true)"  class="text-xs text-rose-600 hover:underline">All</button>
-      <button type="button" onclick="_setAllPeople(false)" class="text-xs text-rose-600 hover:underline">None</button>
     </div>
     <div id="peopleList" class="flex flex-wrap gap-x-5 gap-y-1.5 max-h-56 overflow-y-auto"></div>
     <div id="peopleEmpty" class="hidden text-xs text-gray-400 italic">
@@ -158,11 +156,6 @@ function _checkedIds() {
   return new Set([...document.querySelectorAll("#peopleList .who-cb:checked")].map(cb => cb.value));
 }
 
-function _setAllPeople(on) {
-  document.querySelectorAll("#peopleList .who-cb").forEach(cb => { cb.checked = on; });
-  renderFromScan();
-}
-
 function _syncWhoSummary() {
   const el = document.getElementById("whoSummary");
   const total = PEOPLE.length;
@@ -244,7 +237,7 @@ function renderFromScan() {
     resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
       No tasks scheduled while someone is in the house this day${allOn ? "" : " for the people you picked"}. 🎉</div>`;
   } else {
-    const s1 = buildSection("🔴 Unexpected — task during a stay", "#ef4444", unexpected,
+    const s1 = buildSection("🔴 Task during a guest stay", "#ef4444", unexpected,
       o => overlapCard(o, "#fef2f2", "#fecaca", "#b91c1c"));
     const s2 = buildSection("⚪ Expected in-stay work", "#6b7280", expected,
       o => overlapCard(o, "#f9fafb", "#e5e7eb", "#4b5563"), true);

@@ -349,14 +349,38 @@ function _taskRow(t, isCheckin) {
     ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">✓ CHECK-IN</span>` : '';
   const pciBadge = t.pci
     ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#7c3aed;color:#fff;">⚡ PCI · BY NOON</span>` : '';
+  // Occupancy — only on non-arrival tasks (the "non-arrival section"). Distinguishes
+  // WHAT is in the house that day so it's clear the work happens during a stay:
+  // guest, long-term tenant (lease), owner stay, or a block/hold — else Vacant.
+  let occBadge = '';
+  if (!t.arrival) {
+    const until = t.occupied_until ? t.occupied_until.slice(5).replace('-', '/') : '';
+    const pill  = (bg, fg, bd, label, tip) =>
+      `<span title="${tip}${until ? ' — checks out ' + until : ''}"`
+      + ` style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:${bg};color:${fg};border:1px solid ${bd};">`
+      + `${label}${until ? ' · until ' + until : ''}</span>`;
+    switch (t.occupancy_kind) {
+      case 'guest': occBadge = pill('#fef3c7', '#92400e', '#fde68a', '🛏️ GUEST IN HOUSE',  'A guest is staying in the house'); break;
+      case 'lease': occBadge = pill('#ffedd5', '#9a3412', '#fdba74', '🔑 TENANT IN HOUSE', 'A long-term / lease tenant is in the house'); break;
+      case 'owner': occBadge = pill('#dbeafe', '#1e40af', '#93c5fd', '👤 OWNER IN HOUSE',  'The owner is staying in the house'); break;
+      case 'block': occBadge = pill('#e2e8f0', '#475569', '#cbd5e1', '🚫 BLOCK / HOLD',    'The house is blocked / on hold'); break;
+      default:      occBadge = `<span title="No guest, tenant, owner, or block that day"`
+        + ` style="display:inline-block;font-size:0.62rem;font-weight:600;padding:1px 6px;border-radius:99px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;">Vacant</span>`;
+    }
+  }
   // In the check-in section, show the property's group so it's still clear where it belongs.
-  const propLine = esc(t.property) + (isCheckin && t.group ? ` <span style="color:#9ca3af;">· ${esc(t.group)}</span>` : '');
+  const propHtml = t.property_id
+    ? `<a href="https://app.breezeway.io/property/${esc(String(t.property_id))}/calendar" target="_blank" rel="noopener"
+         style="color:#4f46e5;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'"
+         title="Open ${esc(t.property)}'s calendar in Breezeway">${esc(t.property)}</a>`
+    : esc(t.property);
+  const propLine = propHtml + (isCheckin && t.group ? ` <span style="color:#9ca3af;">· ${esc(t.group)}</span>` : '');
   row.innerHTML = `
     <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
     <div style="flex:1;min-width:0;">
       <div class="task-badges" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
         <span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>
-        ${arrivalBadge}${pciBadge}
+        ${arrivalBadge}${pciBadge}${occBadge}
       </div>
       <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${propLine}</div>
       <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;">📅 ${esc(when)}</div>

@@ -74,6 +74,19 @@ def _is_suggested(name: str) -> bool:
     return any(t in _SUGGESTED_FIRST_NAMES for t in toks)
 
 
+# Assignee entities that Breezeway's /people roster doesn't return — the shared
+# Operations User account and the dispatch zone accounts — but that tasks DO get
+# assigned to. Injected into the "Who" roster by their fixed assignee id so they
+# show as checkboxes here and per-assignee filtering works. Scoped to this page
+# only; does NOT touch the batcher allow-list. Pre-checked by default so their
+# (often catch-all) in-stay tasks surface without extra clicks. Edit freely.
+_EXTRA_ASSIGNEES = [
+    {"id": 11382, "name": "Operations User"},
+    {"id": 267,   "name": "267 Zone"},
+    {"id": 89,    "name": "89 Zone"},
+]
+
+
 def _task_title(t: dict) -> str:
     title = (t.get("name") or t.get("task_name") or t.get("task_type") or t.get("type") or "Task")
     if isinstance(title, dict):
@@ -152,6 +165,12 @@ def occupancy_check():
             roster = [p for p in _fetch_people(token) if _is_candidate(p["name"], keys)]
             for p in roster:
                 p["suggested"] = _is_suggested(p["name"])  # pre-checked by default
+            # Add the zone / Operations User accounts that /people doesn't return.
+            have = {str(p["id"]) for p in roster}
+            for extra in _EXTRA_ASSIGNEES:
+                if str(extra["id"]) not in have:
+                    roster.append({"id": extra["id"], "name": extra["name"], "suggested": True})
+            roster.sort(key=lambda p: p["name"].lower())
             return roster
         except Exception:
             return []

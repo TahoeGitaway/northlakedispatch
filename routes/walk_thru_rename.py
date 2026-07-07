@@ -228,6 +228,7 @@ def walk_thru_scan():
         proposals.append({
             "task_id":        task_id,
             "property":       _get_property_name(pid),
+            "property_id":    pid,   # for the Breezeway calendar deep-link in the UI
             "current_title":  title,
             "task_date":      sched[:10],
             "arrival_date":   arrival.isoformat(),

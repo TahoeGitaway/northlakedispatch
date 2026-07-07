@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+{% block title %}Delete Bear Fence Tasks — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 py-6">
+
+  <!-- Section header + sub-nav -->
+  <div class="mb-5">
+    <h2 class="text-xl font-bold text-gray-800 mb-3">Walk Thru Tools</h2>
+    <div class="flex gap-1 border-b border-gray-200">
+      <a href="{{ url_for('walk_thru.walk_thru_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+        Walk Thru Rename
+      </a>
+      <a href="{{ url_for('bear_fence.bear_fence_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+        Bear Fence Date Change
+      </a>
+      <a href="{{ url_for('bear_fence_delete.bear_fence_delete_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-red-600 text-red-700">
+        Delete Bear Fence
+      </a>
+    </div>
+  </div>
+
+  <p class="text-xs text-gray-400 mb-4">
+    Pick a day. This pulls every <b>Disarm Bear Fence</b> task scheduled that day — who it's assigned to, at what time — with the rest of that house's tasks below it for context. Check the ones to delete, type the confirmation, and delete. <span class="text-red-500 font-medium">Deletion is permanent.</span> Only tasks named exactly “Disarm Bear Fence” can ever be deleted.
+  </p>
+
+  <!-- Day + scan controls -->
+  <div class="flex items-center gap-3 mb-5 flex-wrap">
+    <div class="flex items-center gap-2 text-sm">
+      <label class="text-gray-500 font-medium">Day</label>
+      <input type="date" id="dayDate"
+             class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+    </div>
+    <button onclick="runScan()"
+            class="px-4 py-1.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+      Find Bear Fence Tasks
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
+    <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin"></div>
+    <span>Scanning Breezeway for that day…</span>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
+       style="background:#fef2f2; border:1px solid #fecaca;"></div>
+
+  <!-- Empty state -->
+  <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
+       style="background:#f9fafb; border:1px solid #e5e7eb;">
+    No “Disarm Bear Fence” tasks found on that day.
+  </div>
+
+  <!-- Cards -->
+  <div id="cardsWrap" class="hidden">
+    <div class="flex items-center justify-between mb-3">
+      <label class="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
+        <input type="checkbox" id="selectAll" onchange="toggleAll(this.checked)"
+               class="rounded border-gray-300 text-red-600 focus:ring-red-500">
+        Select all
+      </label>
+      <span id="selectedCount" class="text-xs text-gray-400"></span>
+    </div>
+
+    <div id="cards" class="space-y-3 mb-5"></div>
+
+    <!-- Delete confirmation panel -->
+    <div class="rounded-xl p-4 mb-4" style="background:#fef2f2;border:1px solid #fecaca;">
+      <div class="text-sm font-bold text-red-700 mb-1">⚠ Permanent deletion — this cannot be undone</div>
+      <div id="deleteSummary" class="text-xs text-red-600 mb-3"></div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <label class="text-xs text-red-700 font-medium">Type <span class="font-mono font-bold">DELETE</span> to confirm</label>
+        <input type="text" id="confirmInput" autocomplete="off" oninput="updateCount()" placeholder="DELETE"
+               class="border border-red-300 rounded-lg px-3 py-1.5 text-sm font-mono text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-300">
+        <button id="deleteBtn" onclick="applyDelete()"
+                class="px-4 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg
+                       hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          Delete Selected
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete results -->
+  <div id="resultsBox" class="hidden mt-6 space-y-2"></div>
+
+</div>
+
+<script>
+let items = [];
+
+function _isoDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function _fmtDate(ds) {
+  if (!ds) return '';
+  const d = new Date(ds + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function _fmtTime(t) {
+  if (!t) return '<span class="text-gray-300">no time</span>';
+  const [h, m] = t.split(':').map(Number);
+  const ap = h >= 12 ? 'PM' : 'AM';
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m).padStart(2, '0')} ${ap}`;
+}
+
+function _assignees(a) {
+  return (a && a.length) ? esc(a.join(', ')) : '<span class="text-gray-300">Unassigned</span>';
+}
+
+function toggleAll(checked) {
+  document.querySelectorAll('.row-check').forEach(cb => cb.checked = checked);
+  updateCount();
+}
+
+function updateCount() {
+  const checked = document.querySelectorAll('.row-check:checked').length;
+  document.getElementById('selectedCount').textContent = `${checked} of ${items.length} selected`;
+  const confirmOk = document.getElementById('confirmInput').value.trim().toUpperCase() === 'DELETE';
+  document.getElementById('deleteBtn').disabled = checked === 0 || !confirmOk;
+  document.getElementById('deleteSummary').textContent = checked === 0
+    ? 'Select at least one task above.'
+    : `${checked} “Disarm Bear Fence” task${checked !== 1 ? 's' : ''} will be permanently deleted from Breezeway.`;
+}
+
+async function runScan() {
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('cardsWrap').classList.add('hidden');
+  document.getElementById('emptyBox').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('resultsBox').classList.add('hidden');
+  document.getElementById('resultsBox').innerHTML = '';
+  document.getElementById('confirmInput').value = '';
+
+  try {
+    const day  = document.getElementById('dayDate').value;
+    const resp = await fetch('/admin/bear-fence-delete/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day }),
+    });
+    const rawBody = await resp.text();
+    document.getElementById('loading').classList.add('hidden');
+
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch (_) {
+      const eb = document.getElementById('errorBox');
+      eb.innerHTML =
+        `<div style="font-weight:700;margin-bottom:3px;">This isn't broken — the scan just took longer than the server waits.</div>`
+        + `<div>It most likely finished in the background — <b>click “Find Bear Fence Tasks” again</b> and it should load instantly.</div>`;
+      eb.classList.remove('hidden');
+      return;
+    }
+
+    if (data.error) {
+      const eb = document.getElementById('errorBox');
+      eb.textContent = data.error;
+      eb.classList.remove('hidden');
+      return;
+    }
+
+    items = data.items || [];
+    if (items.length === 0) {
+      document.getElementById('emptyBox').classList.remove('hidden');
+      return;
+    }
+
+    const cards = document.getElementById('cards');
+    cards.innerHTML = '';
+    items.forEach((it, i) => {
+      const propLink = it.property_id
+        ? `<a href="https://app.breezeway.io/property/${esc(String(it.property_id))}/calendar" target="_blank" rel="noopener"
+             class="hover:text-indigo-600 hover:underline" title="Open ${esc(it.property)}'s calendar in Breezeway">${esc(it.property)}</a>`
+        : esc(it.property);
+
+      const others = (it.others && it.others.length)
+        ? it.others.map(o => `
+            <div class="flex items-baseline gap-2 py-1 border-t border-gray-100" style="font-size:0.78rem;">
+              <span class="text-gray-400 whitespace-nowrap" style="min-width:64px;">${_fmtTime(o.time)}</span>
+              <span class="text-gray-700 flex-1">${esc(o.name)}</span>
+              <span class="text-gray-500">${_assignees(o.assignees)}</span>
+              ${o.status ? `<span class="text-gray-300" style="font-size:0.7rem;">${esc(o.status)}</span>` : ''}
+            </div>`).join('')
+        : `<div class="text-gray-300 py-1" style="font-size:0.78rem;">No other tasks on this house that day.</div>`;
+
+      const div = document.createElement('div');
+      div.className = 'rounded-xl border border-gray-200 bg-white overflow-hidden';
+      div.innerHTML = `
+        <div class="flex items-start gap-3 p-4">
+          <input type="checkbox" class="row-check mt-1 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                 data-index="${i}" onchange="updateCount()">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span style="font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:99px;background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;white-space:nowrap;">Disarm Bear Fence</span>
+              <span class="font-semibold text-gray-800">${propLink}</span>
+            </div>
+            <div class="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
+              <span class="text-gray-500">🕑 <span class="font-medium text-gray-700">${_fmtTime(it.time)}</span></span>
+              <span class="text-gray-500">📅 <span class="font-medium text-gray-700">${_fmtDate(it.date)}</span></span>
+              <span class="text-gray-500">👤 ${_assignees(it.assignees)}</span>
+              ${it.status ? `<span class="text-gray-400" style="font-size:0.75rem;">${esc(it.status)}</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="px-4 pb-3 pt-2" style="background:#f9fafb;border-top:1px solid #f0f0f0;">
+          <div class="text-gray-400 font-semibold mb-1" style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.04em;">
+            Rest of this house's tasks that day
+          </div>
+          ${others}
+        </div>
+      `;
+      cards.appendChild(div);
+    });
+
+    document.getElementById('selectAll').checked = false;
+    updateCount();
+    document.getElementById('cardsWrap').classList.remove('hidden');
+
+  } catch (e) {
+    document.getElementById('loading').classList.add('hidden');
+    const eb = document.getElementById('errorBox');
+    eb.textContent = 'Network error: ' + e.message;
+    eb.classList.remove('hidden');
+  }
+}
+
+async function applyDelete() {
+  const checked = [...document.querySelectorAll('.row-check:checked')];
+  const chosen  = checked.map(cb => items[parseInt(cb.dataset.index)]);
+  if (!chosen.length) return;
+
+  const confirmVal = document.getElementById('confirmInput').value.trim().toUpperCase();
+  if (confirmVal !== 'DELETE') return;
+
+  const _fmtDatePlain = ds => {
+    if (!ds) return '(no date)';
+    return new Date(ds + 'T00:00:00').toLocaleDateString('en-US',
+      { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  };
+  const _fmtTimePlain = t => {
+    if (!t) return 'no time set';
+    const [h, m] = t.split(':').map(Number);
+    const ap = h >= 12 ? 'PM' : 'AM';
+    return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${ap}`;
+  };
+  const details = chosen.map(c => {
+    const who = (c.assignees && c.assignees.length) ? c.assignees.join(', ') : 'Unassigned';
+    return `• Task: "${c.name}"\n`
+         + `   Location: ${c.property}\n`
+         + `   Date: ${_fmtDatePlain(c.date)} at ${_fmtTimePlain(c.time)}\n`
+         + `   Assigned to: ${who}`;
+  }).join('\n\n');
+
+  const n = chosen.length;
+  const warning =
+    `⚠ YOU ARE ABOUT TO PERMANENTLY DELETE ${n} TASK${n !== 1 ? 'S' : ''}\n`
+    + `This cannot be undone.\n\n`
+    + `${details}\n\n`
+    + `Delete ${n === 1 ? 'this task' : 'these ' + n + ' tasks'}?`;
+  if (!confirm(warning)) {
+    return;
+  }
+
+  const btn = document.getElementById('deleteBtn');
+  btn.disabled = true;
+  btn.textContent = 'Deleting…';
+
+  try {
+    const resp = await fetch('/admin/bear-fence-delete/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: chosen, confirm: 'DELETE' }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      alert(data.error);
+      btn.textContent = 'Delete Selected';
+      updateCount();
+      return;
+    }
+
+    const deletedIds = new Set(
+      (data.results || []).filter(r => r.success).map(r => String(r.task_id))
+    );
+    document.querySelectorAll('.row-check').forEach(cb => {
+      const idx = parseInt(cb.dataset.index);
+      if (deletedIds.has(String(items[idx].task_id))) {
+        const card = cb.closest('.rounded-xl');
+        card.style.opacity = '0.4';
+        cb.checked = false;
+        cb.disabled = true;
+      }
+    });
+
+    const deleted = deletedIds.size;
+    const failed  = (data.results || []).length - deleted;
+    const box     = document.getElementById('resultsBox');
+    box.innerHTML = '';
+
+    const summary = document.createElement('div');
+    summary.style.cssText = `font-size:0.85rem;font-weight:700;color:${failed ? '#b91c1c' : '#15803d'};margin-bottom:8px;`;
+    summary.textContent = failed
+      ? `${deleted} deleted · ${failed} NOT deleted — see below`
+      : `${deleted} Disarm Bear Fence task${deleted !== 1 ? 's' : ''} deleted`;
+    box.appendChild(summary);
+
+    (data.results || []).forEach(r => {
+      const div = document.createElement('div');
+      div.style.cssText = `font-size:0.78rem;border-left:3px solid ${r.success ? '#16a34a' : '#ef4444'};`
+        + `background:${r.success ? '#f0fdf4' : '#fef2f2'};padding:6px 10px;border-radius:0 6px 6px 0;`
+        + `color:${r.success ? '#374151' : '#b91c1c'};`;
+      div.innerHTML = `${r.success ? '✓' : '✗'} <b>${esc(r.property)}</b> — “${esc(r.name)}”`
+        + `<div style="color:#6b7280;font-family:monospace;font-size:0.7rem;margin-top:1px;">${esc(r.detail)}</div>`;
+      box.appendChild(div);
+    });
+    box.classList.remove('hidden');
+
+    document.getElementById('confirmInput').value = '';
+    btn.textContent = 'Delete Selected';
+    updateCount();
+
+    if (failed) {
+      alert(`⚠ ${failed} task${failed !== 1 ? 's were' : ' was'} NOT deleted — see the notes below.`);
+    }
+
+  } catch (e) {
+    btn.textContent = 'Delete Selected';
+    updateCount();
+    alert('Error: ' + e.message);
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Default the day to today; do not auto-scan.
+document.getElementById('dayDate').value = _isoDate(new Date());
+</script>
+{% endblock %}

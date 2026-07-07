@@ -15,6 +15,10 @@
          class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
         Bear Fence Date Change
       </a>
+      <a href="{{ url_for('bear_fence_delete.bear_fence_delete_page') }}"
+         class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+        Delete Bear Fence
+      </a>
     </div>
   </div>
 
@@ -171,7 +175,11 @@ async function runScan() {
           <input type="checkbox" class="row-check rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                  data-index="${i}" checked onchange="updateCount()">
         </td>
-        <td class="px-4 py-3 font-medium text-gray-800">${esc(p.property)}</td>
+        <td class="px-4 py-3 font-medium text-gray-800">${p.property_id
+          ? `<a href="https://app.breezeway.io/property/${esc(String(p.property_id))}/calendar" target="_blank" rel="noopener"
+               class="text-gray-800 hover:text-indigo-600 hover:underline"
+               title="Open ${esc(p.property)}'s calendar in Breezeway">${esc(p.property)}</a>`
+          : esc(p.property)}</td>
         <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.task_date)}</td>
         <td class="px-4 py-3 text-gray-500">${esc(p.current_title)}</td>
         <td class="px-4 py-3 text-indigo-500 whitespace-nowrap font-medium">${_fmtDate(p.arrival_date)}</td>

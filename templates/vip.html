@@ -213,6 +213,7 @@ function buildCard(v){
           <span>🛫 CO ${esc(v.co)}</span>
           <span>${v.nts} nights</span>
           <span>👥 ${esc(v.guests)}</span>
+          <span class="vip-b2b" style="display:none;font-weight:800;color:#b45309;background:#fef3c7;border:1px solid #fcd34d;padding:0 7px;border-radius:99px;" title="A prior guest checks out the same day this VIP arrives — back-to-back turnaround">🔁 B2B TURNAROUND</span>
         </div>
         <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;margin-bottom:4px;">Notes</div>
         <div class="vip-comments" style="display:flex;flex-direction:column;gap:5px;"></div>
@@ -315,12 +316,30 @@ async function _loadWeek(box, v){
       const rv = resForDay(iso);
       const dayTasks = tasksByDay[iso] || [];
 
-      html += `<div style="flex:0 0 146px;border:1px solid ${isCi?'#2563eb':'#e5e7eb'};border-radius:8px;overflow:hidden;background:#fff;${isCi?'box-shadow:0 0 0 2px #bfdbfe;':''}">`;
-      html += `<div style="padding:4px 7px;background:${isCi?'#eff6ff':'#f9fafb'};border-bottom:1px solid #f1f5f9;">`
-        + `<div style="font-size:0.62rem;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">${esc(wd)}${isCi?' · arrival':''}</div>`
-        + `<div style="font-size:0.8rem;font-weight:700;color:#1f2937;">${esc(md)}</div></div>`;
+      // Back-to-back turnaround: one reservation checks OUT and a DIFFERENT one checks IN the same day.
+      const _out = resvs.find(r => r.checkout === iso);
+      const _in  = resvs.find(r => r.checkin  === iso);
+      const b2b  = (_out && _in && _out !== _in) ? {out:_out, inn:_in} : null;
 
-      if (rv){
+      const ring   = b2b ? '#f59e0b' : (isCi ? '#2563eb' : '#e5e7eb');
+      const ringSh = b2b ? 'box-shadow:0 0 0 2px #fde68a;' : (isCi ? 'box-shadow:0 0 0 2px #bfdbfe;' : '');
+      const hdrBg  = b2b ? '#fffbeb' : (isCi ? '#eff6ff' : '#f9fafb');
+
+      html += `<div style="flex:0 0 146px;border:1px solid ${ring};border-radius:8px;overflow:hidden;background:#fff;${ringSh}">`;
+      html += `<div style="padding:4px 7px;background:${hdrBg};border-bottom:1px solid #f1f5f9;">`
+        + `<div style="font-size:0.62rem;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">${esc(wd)}${isCi?' · arrival':''}</div>`
+        + `<div style="font-size:0.8rem;font-weight:700;color:#1f2937;">${esc(md)}</div>`
+        + (b2b ? `<div title="One reservation checks out and another checks in on this day — plan the turnaround" style="margin-top:3px;display:inline-flex;align-items:center;gap:3px;font-size:0.57rem;font-weight:800;color:#fff;background:#f59e0b;padding:1px 6px;border-radius:99px;letter-spacing:0.03em;">🔁 B2B TURNAROUND</div>` : '')
+        + `</div>`;
+
+      if (b2b){
+        const oc = TC[b2b.out.type]||'#6b7280', obg = TBG[b2b.out.type]||'#f3f4f6';
+        const ic = TC[b2b.inn.type]||'#6b7280', ibg = TBG[b2b.inn.type]||'#f3f4f6';
+        html += `<div title="${esc(b2b.out.guest||'')}" style="font-size:0.6rem;font-weight:800;color:${oc};background:${obg};padding:2px 7px;letter-spacing:0.03em;border-bottom:1px dashed #f59e0b;">`
+          + `${esc((b2b.out.type||'').toUpperCase())} ◂out</div>`;
+        html += `<div title="${esc(b2b.inn.guest||'')}" style="font-size:0.6rem;font-weight:800;color:${ic};background:${ibg};padding:2px 7px;letter-spacing:0.03em;">`
+          + `${esc((b2b.inn.type||'').toUpperCase())} ▸in</div>`;
+      } else if (rv){
         const c = TC[rv.type]||'#6b7280', bgc = TBG[rv.type]||'#f3f4f6';
         const arr = rv.checkin === iso, dep = rv.checkout === iso;
         html += `<div title="${esc(rv.guest||'')}" style="font-size:0.6rem;font-weight:800;color:${c};background:${bgc};padding:2px 7px;letter-spacing:0.03em;">`
@@ -348,6 +367,14 @@ async function _loadWeek(box, v){
     });
     html += `</div>`;
     box.innerHTML = html;
+
+    // Flag the card header if this VIP's arrival day is a back-to-back turnaround.
+    const arvOut = resvs.find(r => r.checkout === d.ci);
+    const arvIn  = resvs.find(r => r.checkin  === d.ci);
+    if (arvOut && arvIn && arvOut !== arvIn){
+      const hdr = box.parentElement && box.parentElement.querySelector('.vip-b2b');
+      if (hdr) hdr.style.display = 'inline-block';
+    }
   }catch(e){
     box.innerHTML = `<div style="font-size:0.74rem;color:#b91c1c;">Couldn't load — ${esc(e.message)}</div>`;
     box.dataset.loaded = '';

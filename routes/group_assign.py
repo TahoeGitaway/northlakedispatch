@@ -223,7 +223,7 @@ def _scan_inner():
     from routes.briefing import (_fetch_bw_endpoint, _ensure_property_cache,
                                  _get_live_property_cache, _get_live_ref_cache,
                                  _get_property_name, _fetch_breezeway_checkins,
-                                 _classify_reservation)
+                                 _classify_reservation, _fetch_bw_reservations)
     from routes.dispatch import _bw_task_title, _title_has_pci
 
     token = _get_token()
@@ -309,6 +309,36 @@ def _scan_inner():
     except Exception:
         pass
 
+    # Occupancy: what's in each house STRICTLY mid-stay on the selected day
+    # (checkin < D < checkout) — i.e. present that night, not arriving or departing
+    # that day. We capture the KIND so the UI can distinguish a guest, a long-term
+    # tenant (lease), an owner stay, and a block/hold — not just "occupied vs not".
+    # A span query (checked-in on/before D and out on/after D) keeps it to a few
+    # hundred records. If several span the day, keep the most "present" one.
+    _OCC_PRIORITY = {"guest": 0, "lease": 1, "owner": 2, "block": 3}
+    occupancy: dict = {}     # str(property_id) -> {"kind": ..., "until": checkout ISO}
+    try:
+        day_d = date.fromisoformat(date_str)
+        for r in _fetch_bw_reservations(token, {"checkin_date_le": date_str,
+                                                "checkout_date_ge": date_str}):
+            kind = _classify_reservation(r)
+            opid = r.get("property_id") or r.get("home_id")
+            if opid is None:
+                continue
+            ci = (r.get("checkin_date") or "")[:10]
+            co = (r.get("checkout_date") or "")[:10]
+            try:
+                if not (date.fromisoformat(ci) < day_d < date.fromisoformat(co)):
+                    continue
+            except (ValueError, TypeError):
+                continue
+            key  = str(opid)
+            prev = occupancy.get(key)
+            if prev is None or _OCC_PRIORITY.get(kind, 9) < _OCC_PRIORITY.get(prev["kind"], 9):
+                occupancy[key] = {"kind": kind, "until": co}
+    except Exception:
+        pass
+
     # Bucket by top-level group. STRICT date guard (only this exact date — the
     # per-property query returns undated/off-date recurring tasks otherwise).
     seen, buckets, checkins = set(), {}, []
@@ -339,6 +369,7 @@ def _scan_inner():
             "task_id":   tid,
             "name":      title,
             "property":  _get_property_name(home_id),
+            "property_id": home_id,   # for the Breezeway calendar deep-link in the UI
             "date":      t_date,
             "time":      (str(t.get("scheduled_time") or "")[:5]) or None,
             "arrival":   is_arrival,
@@ -349,6 +380,12 @@ def _scan_inner():
             "assignee_ids": [a.get("assignee_id") for a in (t.get("assignments") or [])
                              if a.get("assignee_id") is not None],
             "group":        group,
+            # Who/what is in the house that day (strictly mid-stay)? Shown as a badge
+            # on non-arrival tasks so it's clear the work happens during a stay.
+            # occupancy_kind: guest | lease | owner | block | None (nobody).
+            "occupied":       str(home_id) in occupancy,
+            "occupancy_kind": (occupancy.get(str(home_id)) or {}).get("kind"),
+            "occupied_until": (occupancy.get(str(home_id)) or {}).get("until"),
         }
         # Check-in houses get their OWN section (easy selection) — pulled out of the
         # group buckets so a task never appears, or is selected, twice.
