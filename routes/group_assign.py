@@ -250,9 +250,16 @@ def _scan_inner():
     _refresh_group_map(token)
 
     # Candidate ref ids — reference_property_id when present, else the bw id.
+    # A house with NO reference_property_id gets queried below by its internal bw
+    # id, which the task endpoint's reference_property_id filter won't match — so it
+    # returns zero tasks *silently*. Count those houses so the UI can warn instead of
+    # the day just looking lighter than it is.
     pid_candidates = {}
+    no_ref_id_pids = []
     for bw_pid in prop_cache:
         ref_id = ref_cache.get(bw_pid)
+        if not ref_id:
+            no_ref_id_pids.append(bw_pid)
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
     def _tasks_for_ref(ref_id):
@@ -417,6 +424,9 @@ def _scan_inner():
         "dept_counts": dept_counts,
         "failed_properties": failed_props,
         "scanned_properties": len(pid_candidates),
+        # Houses with no Breezeway reference_property_id — their tasks can't be
+        # fetched and silently won't appear. Surfaced as a warning in the UI.
+        "no_ref_id_properties": len(no_ref_id_pids),
         "arrival_counts":   arrival_counts,                 # {guest, owner, lease} — ALL arrivals that day
         "arrival_total":    sum(arrival_counts.values()),   # total check-in reservations that day
         "arriving_houses":  len(arrival_pids),              # distinct houses with an arrival (any type)

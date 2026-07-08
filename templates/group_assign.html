@@ -563,11 +563,17 @@ function _loadViews() {
 function _saveViews() { localStorage.setItem(VIEWS_KEY, JSON.stringify(VIEWS)); }
 function _genId() { return 'v' + Date.now() + Math.floor(Math.random() * 1000); }
 
+// How many tasks the active view filtered out of the last render, and its name —
+// so _renderWarnings can tell you a view (not a data problem) is hiding tasks.
+let VIEW_HIDDEN = 0, VIEW_NAME = null;
+
 // Filter a scan payload down to tasks assigned to the active view's people.
 function _applyView(data) {
+  VIEW_HIDDEN = 0; VIEW_NAME = null;
   if (!ACTIVE_VIEW) return data;
   const v = VIEWS.find(x => x.id === ACTIVE_VIEW);
   if (!v) return data;
+  VIEW_NAME = v.name;
   const idSet = new Set((v.ids || []).map(Number));
   // A view shows its people's tasks PLUS all unassigned tasks — you always need
   // to be able to delegate the unassigned ones, whatever view you're in.
@@ -575,10 +581,13 @@ function _applyView(data) {
     const ids = t.assignee_ids || [];
     return ids.length === 0 || ids.some(id => idSet.has(Number(id)));
   };
+  const before   = (data.checkins || []).length
+                 + (data.groups || []).reduce((s, g) => s + g.tasks.length, 0);
   const checkins = (data.checkins || []).filter(match);
   const groups   = (data.groups || []).map(g => ({ group: g.group, tasks: g.tasks.filter(match) }))
                                        .filter(g => g.tasks.length);
   const total = checkins.length + groups.reduce((s, g) => s + g.tasks.length, 0);
+  VIEW_HIDDEN = before - total;
   return Object.assign({}, data, { checkins, groups, total_tasks: total });
 }
 
@@ -1108,6 +1117,19 @@ function _renderWarnings() {
   if (SCAN.failed_properties) {
     warnings.push(`⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties couldn't be loaded from Breezeway`
       + ` (it throttled or errored), so some tasks may be missing. ` + _rescanBtn('Force a fresh rescan') + `.`);
+  }
+  // A house with no Breezeway reference id can't be queried — its tasks silently
+  // never appear. This is a data-side cause, distinct from a throttled load above.
+  if (SCAN.no_ref_id_properties) {
+    warnings.push(`⚠ <b>${SCAN.no_ref_id_properties}</b> of ${SCAN.scanned_properties} properties have no Breezeway reference id,`
+      + ` so their tasks can't be fetched and won't appear here — regardless of rescanning.`);
+  }
+  // Not a data problem: the active saved view is hiding tasks assigned to people
+  // outside it. Tell the user so a filtered view isn't mistaken for missing tasks.
+  if (VIEW_HIDDEN > 0) {
+    warnings.push(`👁 The active view <b>“${esc(VIEW_NAME || '')}”</b> is hiding <b>${VIEW_HIDDEN}</b> task${VIEW_HIDDEN!==1?'s':''}`
+      + ` assigned to people outside it. <button onclick="ACTIVE_VIEW=null;localStorage.removeItem(ACTIVE_KEY);renderScan();"`
+      + ` style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">Show all tasks</button>.`);
   }
   if (!(SCAN.people || []).length) {
     warnings.push(`⚠ No staff roster loaded from Breezeway — you won't be able to assign anyone. ` + _rescanBtn('Retry') + `.`);

@@ -528,6 +528,10 @@ async function loadRouteById(loadId) {
   }
   window.history.replaceState({}, "", window.location.pathname);
   await loadRouteById(loadId);
+  // Opening a saved route: pop the right sidebar open immediately so the
+  // "Changes vs Breezeway" check starts right away instead of waiting for a
+  // manual expand. _syncSidebarToSchedule (via the expand) fires the check.
+  if (typeof _expandSidebarIfMinimized === "function") _expandSidebarIfMinimized();
 })();
 
 document.getElementById("saveModal").addEventListener("click", function(e) {
