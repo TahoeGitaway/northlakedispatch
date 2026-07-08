@@ -10,7 +10,7 @@ from datetime import datetime
 
 import requests
 from flask import (Blueprint, render_template, request, jsonify,
-                   redirect, url_for, flash)
+                   redirect, url_for, flash, current_app)
 from flask_login import login_required, current_user
 from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
@@ -507,11 +507,24 @@ def archive_route(route_id):
 
 # ── OR-Tools solver ───────────────────────────────────────────────
 
+# OR-Tools RoutingModel.status() codes → human names, so a failed solve
+# reports WHAT the solver actually returned instead of a hardcoded guess.
+_ROUTING_STATUS_NAMES = {
+    0: "ROUTING_NOT_SOLVED",
+    1: "ROUTING_SUCCESS",
+    2: "ROUTING_FAIL",            # no feasible solution exists (over-constrained)
+    3: "ROUTING_FAIL_TIMEOUT",    # ran out of time before finding one
+    4: "ROUTING_INVALID",         # the model itself is malformed
+    5: "ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED",
+    6: "ROUTING_INFEASIBLE",
+}
+
+
 def _solve_route(
     duration_matrix, service_times_sec, checkin_flags, priority_flags,
     deadline_offset_sec=None, priority_deadline_offset_sec=None,
     hard_deadline=False, soft_deadline_penalty=False,
-    end_node=0, front_flags=None,
+    end_node=0, front_flags=None, pass_label="",
 ):
     size    = len(duration_matrix)
     if end_node == 0:
@@ -601,8 +614,19 @@ def _solve_route(
     params.time_limit.FromSeconds(secs)
 
     solution = routing.SolveWithParameters(params)
+    status_code = routing.status()
+    status_name = _ROUTING_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
     if not solution:
-        return None, None
+        # Log the REAL reason. horizon/n_stops/time-budget included so a
+        # timeout vs. genuine infeasibility is distinguishable from the logs.
+        current_app.logger.error(
+            f"optimize: pass '{pass_label or 'unlabeled'}' found no solution — "
+            f"solver status={status_name}, horizon={horizon}s, n_stops={n_stops}, "
+            f"time_limit={secs}s, hard_deadline={hard_deadline}, "
+            f"soft_penalty={soft_deadline_penalty}, "
+            f"front_block={bool(front_flags and any(front_flags[1:]))}"
+        )
+        return None, None, status_name
 
     index = routing.Start(0)
     ordered_nodes, arrival_times_sec = [], []
@@ -613,7 +637,7 @@ def _solve_route(
         if routing.IsEnd(index): break
         index = solution.Value(routing.NextVar(index))
 
-    return ordered_nodes, arrival_times_sec
+    return ordered_nodes, arrival_times_sec, status_name
 
 
 # ── Optimize ──────────────────────────────────────────────────────
@@ -710,6 +734,58 @@ def optimize():
     else:
         duration_matrix = _haversine_matrix(all_locations)
 
+    # ── Pre-flight data sanity ────────────────────────────────────────
+    # Catch the problems that make OR-Tools infeasible on EVERY pass and
+    # report the SPECIFIC offending stop, instead of the old generic guess.
+    #
+    # (a) Unresolved coordinates. A stop whose address failed to geocode
+    #     lands at ~0,0 (null island). float(0.0) passes the earlier lat/lng
+    #     validation, so it slips through — but the haversine leg to reach it
+    #     is ~400 h, which alone blows the solver horizon and kills all passes.
+    def _loc_label(i, loc):
+        return loc.get("name") or (f"end location" if i == end_node
+                                    else f"start location" if i == 0
+                                    else f"stop #{i}")
+    null_island = [
+        _loc_label(i, loc) for i, loc in enumerate(all_locations)
+        if abs(loc["lat"]) < 0.01 and abs(loc["lng"]) < 0.01
+    ]
+    if null_island:
+        names = ", ".join(null_island)
+        current_app.logger.error(
+            f"optimize: unresolved (0,0) coordinates on: {names}")
+        return jsonify({"error":
+            f"These locations didn't resolve to a real place — their "
+            f"coordinates are 0, 0, which means the address failed to "
+            f"geocode: {names}. Fix or remove them, then re-optimize."}), 400
+
+    # (b) Unreachable stop. Even the shortest way in exceeds the horizon that
+    #     _solve_route will use, so no route can ever include it. Report which
+    #     stop and how long its best leg is, in hours.
+    _svc_for_horizon = 0 if drive_only else sum(
+        max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops)
+    _horizon = max(86400, _svc_for_horizon * 2 + 7200)
+    if not preserve_order:
+        for j in range(1, len(all_locations)):
+            if j == end_node:
+                continue
+            incoming = [float(duration_matrix[i][j] or 0)
+                        for i in range(len(all_locations)) if i != j]
+            if incoming and min(incoming) > _horizon:
+                label = _loc_label(j, all_locations[j])
+                best_h = min(incoming) / 3600.0
+                current_app.logger.error(
+                    f"optimize: '{label}' is unreachable — shortest leg in is "
+                    f"{best_h:.1f}h, horizon is {_horizon/3600:.1f}h "
+                    f"(likely a bad coordinate at "
+                    f"{all_locations[j]['lat']},{all_locations[j]['lng']})")
+                return jsonify({"error":
+                    f"'{label}' can't be reached: the shortest drive to it is "
+                    f"{best_h:.0f} hours, which is impossible in a day. Its "
+                    f"coordinate ({all_locations[j]['lat']}, "
+                    f"{all_locations[j]['lng']}) is almost certainly wrong — "
+                    f"check that its address geocoded correctly."}), 400
+
     if preserve_order:
         # Skip OR-Tools — keep stops in the order provided and compute arrivals
         # by summing sequential drive legs: depot→1→2→…→N.
@@ -725,12 +801,17 @@ def optimize():
         service_times_sec = [0] * len(all_locations)
         checkin_flags     = [False] * len(all_locations)
         priority_flags    = [False] * len(all_locations)
-        ordered_nodes, arrival_times_sec = _solve_route(
+        ordered_nodes, arrival_times_sec, drive_status = _solve_route(
             duration_matrix, service_times_sec, checkin_flags, priority_flags,
-            end_node=end_node
+            end_node=end_node, pass_label="drive-only"
         )
         if ordered_nodes is None:
-            return jsonify({"error": "The route optimizer couldn't find a valid solution. Try reducing the number of stops or widening the time window. (OR-Tools returned no solution after all three passes.)"}), 500
+            return jsonify({"error":
+                f"The optimizer found no drive-only route. OR-Tools returned "
+                f"'{drive_status}' for {len(cleaned_stops)} stops. If that's "
+                f"ROUTING_FAIL_TIMEOUT the problem is just slow; anything else "
+                f"means the model rejected it. (Full detail is in the server "
+                f"log.)"}), 500
         used_deadline_constraints = used_soft_penalties = False
     else:
         stop_service = [max(0, int(s.get("serviceMinutes", 60))) * 60 for s in cleaned_stops]
@@ -763,40 +844,63 @@ def optimize():
 
         ordered_nodes, arrival_times_sec = None, None
         used_deadline_constraints = used_soft_penalties = False
+        # Record which passes ran and what the solver returned for each, so a
+        # total failure can report the truth ("pass 3 = ROUTING_FAIL") rather
+        # than guess at causes. Passes we skip are labelled "not attempted".
+        pass_status = {"1 hard": "not attempted",
+                       "2 soft": "not attempted",
+                       "3 unconstrained": "not attempted"}
 
         # Pass 1 — hard constraints. Only attempt when we haven't already blown
         # past the deadline (a hard bound of 0 would make everything infeasible).
         before_checkin_deadline  = start_minutes < deadline_minutes
         before_priority_deadline = start_minutes < priority_deadline_minutes
         if (has_checkins and before_checkin_deadline) or (has_priority and before_priority_deadline):
-            ordered_nodes, arrival_times_sec = _solve_route(
+            ordered_nodes, arrival_times_sec, pass_status["1 hard"] = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec if before_checkin_deadline else None,
                 priority_deadline_offset_sec=priority_deadline_sec if before_priority_deadline else None,
-                hard_deadline=True, end_node=end_node, front_flags=front_flags
+                hard_deadline=True, end_node=end_node, front_flags=front_flags,
+                pass_label="1 hard"
             )
             if ordered_nodes is not None:
                 used_deadline_constraints = True
 
         # Pass 2 — soft penalties.
         if ordered_nodes is None and (has_checkins or has_priority):
-            ordered_nodes, arrival_times_sec = _solve_route(
+            ordered_nodes, arrival_times_sec, pass_status["2 soft"] = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
                 deadline_offset_sec=checkin_deadline_sec,
                 priority_deadline_offset_sec=priority_deadline_sec,
-                soft_deadline_penalty=True, end_node=end_node, front_flags=front_flags
+                soft_deadline_penalty=True, end_node=end_node, front_flags=front_flags,
+                pass_label="2 soft"
             )
             if ordered_nodes is not None:
                 used_soft_penalties = True
 
         # Pass 3 — fallback (no deadlines, but still honor the go-first front block).
         if ordered_nodes is None:
-            ordered_nodes, arrival_times_sec = _solve_route(
+            ordered_nodes, arrival_times_sec, pass_status["3 unconstrained"] = _solve_route(
                 duration_matrix, service_times_sec, checkin_flags, priority_flags,
-                end_node=end_node, front_flags=front_flags
+                end_node=end_node, front_flags=front_flags,
+                pass_label="3 unconstrained"
             )
             if ordered_nodes is None:
-                return jsonify({"error": "The route optimizer couldn't find a valid route on any of its three passes (hard constraints, soft penalties, and unconstrained). This usually means the stops can't be reached in the available time — try removing a stop, widening the time window, or checking that every stop's address resolved to a real location."}), 500
+                # Report the ACTUAL per-pass solver statuses. Note pass 3 has no
+                # time windows at all, so "widen the time window" was always a
+                # lie when this fired — the real signal is the status codes.
+                detail = "; ".join(f"pass {k} → {v}" for k, v in pass_status.items())
+                current_app.logger.error(
+                    f"optimize: all passes failed for {len(cleaned_stops)} stops "
+                    f"(front_block={any(front_flags[1:])}, "
+                    f"has_checkins={has_checkins}, has_priority={has_priority}) — {detail}")
+                return jsonify({"error":
+                    f"No route on any pass. What the solver actually returned: "
+                    f"{detail}. ROUTING_FAIL_TIMEOUT = too slow (fewer stops / "
+                    f"simpler constraints). ROUTING_FAIL/INFEASIBLE = the model "
+                    f"is over-constrained even with NO deadlines — usually a "
+                    f"'go first' stop that can't be ordered, or a stop that "
+                    f"can't be reached. Full detail is in the server log."}), 500
 
     if not preserve_order:
         node_arrival_sec = {}
