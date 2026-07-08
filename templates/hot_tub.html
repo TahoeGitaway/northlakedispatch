@@ -125,6 +125,15 @@ function esc(s) {
                         .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// "📅 calendar ↗" link to a property's Breezeway calendar, matching the style used
+// elsewhere in the app. Returns '' when we don't have the Breezeway property id.
+function _calLink(name, pid) {
+  if (!pid) return '';
+  return `<a href="https://app.breezeway.io/property/${esc(pid)}/calendar" target="_blank" rel="noopener"
+             class="text-indigo-500 hover:underline text-xs font-normal ml-1 whitespace-nowrap"
+             title="Open ${esc(name)}'s calendar in Breezeway">📅 calendar ↗</a>`;
+}
+
 function _svcLine(s) {
   const parts = [_fmtDate(s.date)];
   const t = _fmtTime(s.time);
@@ -151,7 +160,7 @@ function renderTooClose(items) {
       'border-radius:10px;padding:14px 16px;border:1px solid #fde68a;background:#fffbeb;';
     card.innerHTML = `
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-        <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(c.property)}</div>
+        <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(c.property)}${_calLink(c.property, c.property_id)}</div>
         <div style="font-size:0.78rem;font-weight:700;color:#b45309;flex-shrink:0;">⚠ ${gapText}</div>
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid #fde68a;">
@@ -237,7 +246,7 @@ async function runScan() {
       card.innerHTML = `
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
           <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(r.property)}</div>
+            <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(r.property)}${_calLink(r.property, r.property_id)}</div>
             <div style="font-size:0.78rem;color:#6b7280;margin-top:3px;">
               Last: ${r.last_task ? esc(r.last_task) : '<em>none found</em>'}
             </div>

@@ -7,12 +7,19 @@
     <h2 class="text-xl font-bold text-gray-800">⭐ VIP Arrivals — Inspect Early</h2>
     <p class="text-sm text-gray-500 mt-1 leading-relaxed">
       Extra-special VIP reservations needing more than a card and a bottle of wine.
-      <strong class="text-blue-700">Blue</strong> homes have <strong>no recent bookings</strong> — get eyes on
-      them now, inspect thoroughly, and contact the owner ahead of time if needed. Don't wait until the last minute.
+      Tap <strong>Scan Breezeway</strong> to pull in every reservation tagged <strong>VIP</strong>
+      (checking in from a few days ago through the next 3 weeks). Scanning only ever <em>adds</em> —
+      it never removes a card you're already tracking. Guest count and total aren't in Breezeway,
+      so on scanned cards you can click to fill them in.
     </p>
-    <div class="mt-3 rounded-xl px-4 py-2.5 text-sm" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;">
-      🔑 Biggest check-in day is <strong>7/1</strong> — <strong>5</strong> high-value reservations arriving.
+    <div class="mt-3 flex items-center gap-3 flex-wrap">
+      <button id="scanBtn"
+        style="font-size:0.85rem;font-weight:700;color:#fff;background:#2563eb;border:none;border-radius:10px;padding:8px 16px;cursor:pointer;">
+        🔎 Scan Breezeway for VIP reservations</button>
+      <span id="scanStatus" class="text-sm text-gray-500"></span>
     </div>
+    <div id="busyBanner" class="mt-3 rounded-xl px-4 py-2.5 text-sm"
+         style="display:none;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;"></div>
   </div>
 
   <!-- Progress -->
@@ -25,37 +32,35 @@
 </div>
 
 <script>
-const VIP = [
-  {key:"vip-01", name:"Sachin Rajpal",     ci:"6/24", nts:31, co:"7/25", guests:"5 | 3",  room:"Fleur Du Lac 18",                  total:"$53,250.00", blue:true},
-  {key:"vip-02", name:"Kristina Klimaitis",ci:"6/24", nts:7,  co:"7/1",  guests:"8 | 5",  room:"Beyond The Blue Lakefront Escape", total:"$41,235.00"},
-  {key:"vip-03", name:"Jason Van Voorhis", ci:"6/24", nts:52, co:"8/15", guests:"2 | 1",  room:"Clearwater Lake View",             total:"$32,000.00", first:true},
-  {key:"vip-04", name:"Sherry Saxton",     ci:"6/25", nts:7,  co:"7/2",  guests:"4 | 2",  room:"Towering Pines Lakefront",         total:"$17,539.30"},
-  {key:"vip-05", name:"Dan Carvalho",      ci:"6/26", nts:42, co:"8/7",  guests:"2 | 0",  room:"Rockwood Lodge at Lahontan",       total:"$64,500.00", blue:true},
-  {key:"vip-06", name:"John Lupusor",      ci:"6/26", nts:31, co:"7/27", guests:"2 | 4",  room:"Fleur Du Lac 16",                  total:"$54,250.00", blue:true},
-  {key:"vip-07", name:"Maya Leabman",      ci:"6/26", nts:31, co:"7/27", guests:"3 | 1",  room:"Glenbrook at Martis Camp",         total:"$47,845.00", blue:true},
-  {key:"vip-08", name:"Linda Platt",       ci:"6/27", nts:8,  co:"7/5",  guests:"8 | 4",  room:"Sky Rocks",                        total:"$22,792.06"},
-  {key:"vip-09", name:"Traci Thomas",      ci:"6/28", nts:7,  co:"7/5",  guests:"6 | 4",  room:"Beach Haven Lakefront",            total:"$19,890.26"},
-  {key:"vip-10", name:"Josh Thornton",     ci:"6/29", nts:7,  co:"7/6",  guests:"2 | 3",  room:"Cathedral Pines Lakefront",        total:"$43,221.10"},
-  {key:"vip-11", name:"Rachael Fry",       ci:"6/29", nts:16, co:"7/15", guests:"8 | 2",  room:"Tahoe Point of View",              total:"$19,125.37"},
-  {key:"vip-12", name:"Brian Fyda",        ci:"7/1",  nts:11, co:"7/12", guests:"8 | 0",  room:"Aqua Vista Lakefront Estate",      total:"$71,700.75"},
-  {key:"vip-13", name:"Jennifer Barsotti", ci:"7/1",  nts:33, co:"8/3",  guests:"8 | 0",  room:"Fleur Du Lac 7",                   total:"$78,650.00", blue:true},
-  {key:"vip-14", name:"Yvonne Valiquette", ci:"7/1",  nts:7,  co:"7/8",  guests:"12 | 2", room:"Beyond The Blue Lakefront Escape", total:"$66,223.32"},
-  {key:"vip-15", name:"Carl Hansen",       ci:"7/1",  nts:7,  co:"7/8",  guests:"6 | 4",  room:"Glistening Shores Lakefront",      total:"$56,047.00", blue:true},
-  {key:"vip-16", name:"Sara Doughty",      ci:"7/1",  nts:31, co:"8/1",  guests:"3 | 0",  room:"Crown Peak at Olympic Valley",     total:"$23,300.00", first:true},
-  {key:"vip-17", name:"Rebecca Gruss",     ci:"7/2",  nts:8,  co:"7/10", guests:"6 | 0",  room:"Sapphire Shores Lakefront",        total:"$20,231.71"},
-  {key:"vip-18", name:"Andrew Hinkelman",  ci:"7/3",  nts:7,  co:"7/10", guests:"12 | 0", room:"Valhalla Lakefront on the West Shore", total:"$36,599.68"},
-  {key:"vip-19", name:"Tami Campbell",     ci:"7/6",  nts:5,  co:"7/11", guests:"8 | 3",  room:"Cathedral Pines Lakefront",        total:"$23,041.72"},
-  {key:"vip-20", name:"Jane Etcheverry",   ci:"7/8",  nts:7,  co:"7/15", guests:"10 | 4", room:"Beyond The Blue Lakefront Escape", total:"$57,672.05"},
-  {key:"vip-21", name:"Ashley Eastwood",   ci:"7/10", nts:7,  co:"7/17", guests:"10 | 0", room:"Valhalla Lakefront on the West Shore", total:"$32,774.23"},
-  {key:"vip-22", name:"Steven Brotherton", ci:"7/10", nts:31, co:"8/10", guests:"2 | 2",  room:"Little Chief at Martis Camp",      total:"$21,850.00"},
-  {key:"vip-23", name:"Robert Mandel",     ci:"7/11", nts:15, co:"7/26", guests:"2 | 2",  room:"Glistening Shores Lakefront",      total:"$95,000.00", blue:true},
-  {key:"vip-24", name:"Jorge Velasquez",   ci:"7/11", nts:7,  co:"7/18", guests:"12 | 0", room:"Cathedral Pines Lakefront",        total:"$30,129.30"},
-  {key:"vip-25", name:"Kathryn Mossawir",  ci:"7/11", nts:7,  co:"7/18", guests:"5 | 4",  room:"Aerial Grace Lakeside Retreat",    total:"$21,017.51"},
-  {key:"vip-26", name:"Craig Casca",       ci:"7/11", nts:62, co:"9/11", guests:"2 | 0",  room:"Lonestar Ranch",                   total:"$20,650.00"},
-  {key:"vip-27", name:"Kyle Bardet",       ci:"7/14", nts:8,  co:"7/22", guests:"5 | 4",  room:"Beach Haven Lakefront",            total:"$20,094.03"},
-];
+let VIP = [];   // loaded from /vip/list (persisted; Scan adds to it)
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// "📅 calendar ↗" link to a property's Breezeway calendar, matching the style used
+// elsewhere in the app. Returns '' when we don't have the Breezeway property id.
+function _calLink(name, pid){
+  if(!pid) return '';
+  return `<a href="https://app.breezeway.io/property/${esc(pid)}/calendar" target="_blank" rel="noopener"
+             class="text-indigo-500 hover:underline text-xs font-normal ml-1 whitespace-nowrap"
+             title="Open ${esc(name)}'s calendar in Breezeway">📅 calendar ↗</a>`;
+}
+
+// Resolve every VIP room to its Breezeway property id (one batch call), then drop a
+// calendar link into each card. Best-effort: no link if a house can't be matched.
+async function _loadPropertyLinks(){
+  const rooms = [...new Set(VIP.map(v => v.room))];
+  let pids = {};
+  try{
+    const r = await fetch('/vip/property-links', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({rooms})});
+    const d = await r.json();
+    pids = d.pids || {};
+  }catch(e){ return; }
+  document.querySelectorAll('.vip-cal').forEach(span => {
+    const pid = pids[span.dataset.room];
+    if(pid) span.innerHTML = _calLink(span.dataset.room, pid);
+  });
+}
 
 // Escape first (XSS-safe), then turn URLs into clickable links.
 function _linkify(s){
@@ -185,6 +190,77 @@ function _updateProgress(){
   document.getElementById('progress').textContent = `${done} of ${VIP.length} inspected`;
 }
 
+// Click-to-edit span for the two fields Breezeway doesn't provide (guests, total).
+function _editSpan(key, field, val, emptyLabel){
+  const has = val != null && String(val).trim() !== '';
+  const shown = has ? esc(val) : `<span style="color:#9ca3af;">${esc(emptyLabel)}</span>`;
+  return `<span class="vip-edit" data-key="${esc(key)}" data-field="${field}" data-val="${esc(val==null?'':val)}"`
+       + ` title="Click to edit" style="cursor:pointer;border-bottom:1px dashed #c7d2fe;">${shown}</span>`;
+}
+
+function _wireEdits(card){
+  card.querySelectorAll('.vip-edit').forEach(span => span.addEventListener('click', () => _startEdit(span)));
+  const rm = card.querySelector('.vip-remove');
+  if(rm) rm.addEventListener('click', () => _removeCard(rm.dataset.key));
+}
+
+function _startEdit(span){
+  if(span.querySelector('input')) return;
+  const key = span.dataset.key, field = span.dataset.field, cur = span.dataset.val || '';
+  const input = document.createElement('input');
+  input.value = cur;
+  input.placeholder = field === 'guests' ? 'e.g. 6 | 2' : 'e.g. $12,500.00';
+  input.style.cssText = 'font-size:0.78rem;border:1px solid #c7d2fe;border-radius:6px;padding:1px 5px;outline:none;width:'
+                      + (field === 'guests' ? '84px' : '112px') + ';';
+  span.innerHTML = ''; span.style.borderBottom = 'none'; span.appendChild(input);
+  input.focus(); input.select();
+  let done = false;
+  const commit = async (save) => {
+    if(done) return; done = true;
+    const val = input.value.trim();
+    const v = VIP.find(x => x.key === key);
+    if(save && val !== cur){
+      if(v) v[field] = val;
+      await _saveField(key, field, val);
+    }
+    const now = save ? ((v && v[field]) || val) : cur;
+    span.dataset.val = now;
+    span.style.borderBottom = '1px dashed #c7d2fe';
+    span.innerHTML = now && now.trim()
+        ? esc(now)
+        : `<span style="color:#9ca3af;">${field === 'guests' ? '+ guests' : '+ total'}</span>`;
+  };
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ e.preventDefault(); commit(true); }
+    else if(e.key === 'Escape'){ commit(false); }
+  });
+  input.addEventListener('blur', () => commit(true));
+}
+
+async function _saveField(key, field, val){
+  _setSaveStatus('Saving…');
+  try{
+    const body = {item_key:key}; body[field] = val;
+    const r = await fetch('/vip/edit', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)});
+    const d = await r.json();
+    _setSaveStatus(d.ok ? '✓ Saved' : 'Save failed');
+  }catch(e){ _setSaveStatus('Save failed — check connection'); }
+}
+
+async function _removeCard(key){
+  const v = VIP.find(x => x.key === key);
+  const nm = v ? (v.room || v.name) : 'this card';
+  if(!confirm(`Remove ${nm} from the VIP list?\n\nIt is NOT deleted — its notes are kept, and a Scan won't re-add it. It can be restored later if needed.`)) return;
+  try{
+    const r = await fetch('/vip/remove', {method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item_key:key})});
+    const d = await r.json();
+    if(d && d.ok){ VIP = VIP.filter(x => x.key !== key); _render(); }
+    else { alert((d && d.error) || 'Could not remove.'); }
+  }catch(e){ alert('Could not remove — check your connection.'); }
+}
+
 function buildCard(v){
   const st = STATE[v.key] || {done:false};
   const card = document.createElement('div');
@@ -205,14 +281,17 @@ function buildCard(v){
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="font-weight:700;font-size:0.95rem;color:${v.blue?'#1e40af':'#1f2937'};">${esc(v.room)}</span>
+          <span class="vip-cal" data-room="${esc(v.room)}"></span>
           ${badges}
+          <button class="vip-remove" data-key="${esc(v.key)}" title="Remove from VIP list"
+            style="margin-left:auto;flex-shrink:0;font-size:0.95rem;color:#cbd5e1;background:none;border:none;cursor:pointer;line-height:1;padding:0 2px;">✕</button>
         </div>
-        <div style="font-size:0.8rem;color:#374151;margin-top:2px;">${esc(v.name)} · <b>${esc(v.total)}</b></div>
+        <div style="font-size:0.8rem;color:#374151;margin-top:2px;">${esc(v.name)} · <b>${_editSpan(v.key,'total',v.total,'+ total')}</b></div>
         <div style="font-size:0.76rem;color:#6b7280;margin-top:2px;display:flex;gap:14px;flex-wrap:wrap;">
           <span>🛬 CI <b>${esc(v.ci)}</b></span>
           <span>🛫 CO ${esc(v.co)}</span>
           <span>${v.nts} nights</span>
-          <span>👥 ${esc(v.guests)}</span>
+          <span>👥 ${_editSpan(v.key,'guests',v.guests,'+ guests')}</span>
           <span class="vip-b2b" style="display:none;font-weight:800;color:#b45309;background:#fef3c7;border:1px solid #fcd34d;padding:0 7px;border-radius:99px;" title="A prior guest checks out the same day this VIP arrives — back-to-back turnaround">🔁 B2B TURNAROUND</span>
         </div>
         <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;margin-bottom:4px;">Notes</div>
@@ -253,6 +332,7 @@ function buildCard(v){
     if (open && !weekBox.dataset.loaded) _loadWeek(weekBox, v);
   });
 
+  _wireEdits(card);
   if (st.done) card.style.opacity = '0.6';
   return card;
 }
@@ -381,17 +461,74 @@ async function _loadWeek(box, v){
   }
 }
 
-async function init(){
-  try{
-    const [sr, cr] = await Promise.all([fetch('/vip/state'), fetch('/vip/comments')]);
-    const [sd, cd] = await Promise.all([sr.json(), cr.json()]);
-    STATE = sd.state || {};
-    COMMENTS = cd.comments || {};
-  }catch(e){ STATE = {}; COMMENTS = {}; }
+// Busiest upcoming VIP arrival day — the banner that used to be hardcoded to 7/1.
+function _updateBusyBanner(){
+  const banner = document.getElementById('busyBanner');
+  if(!banner) return;
+  const counts = {};
+  VIP.forEach(v => { if(v.ci) counts[v.ci] = (counts[v.ci]||0) + 1; });
+  let bestDay = null, bestN = 0;
+  for(const day in counts){ if(counts[day] > bestN){ bestN = counts[day]; bestDay = day; } }
+  if(bestDay && bestN > 1){
+    banner.innerHTML = `🔑 Biggest check-in day is <strong>${esc(bestDay)}</strong> — <strong>${bestN}</strong> VIP reservations arriving.`;
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function _render(){
   const list = document.getElementById('list');
   list.innerHTML = '';
-  VIP.forEach(v => list.appendChild(buildCard(v)));
+  if(!VIP.length){
+    list.innerHTML = `<div style="text-align:center;color:#9ca3af;font-size:0.85rem;padding:28px 0;">No VIP reservations yet — tap <strong>Scan Breezeway</strong> above to pull in VIP-tagged arrivals.</div>`;
+  } else {
+    VIP.forEach(v => list.appendChild(buildCard(v)));
+  }
   _updateProgress();
+  _updateBusyBanner();
+  _loadPropertyLinks();   // fill in 📅 calendar links once the cards exist
+}
+
+async function _loadList(){
+  try{
+    const r = await fetch('/vip/list');
+    const d = await r.json();
+    VIP = d.list || [];
+  }catch(e){ /* keep whatever we already have */ }
+}
+
+async function _scan(){
+  const btn = document.getElementById('scanBtn');
+  const status = document.getElementById('scanStatus');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Scanning Breezeway…'; status.textContent = '';
+  try{
+    const r = await fetch('/vip/scan', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d = await r.json();
+    if(d.error){ status.textContent = '⚠ ' + d.error; }
+    else{
+      await _loadList();
+      _render();
+      status.textContent = d.added > 0
+        ? `✓ Added ${d.added} new VIP reservation${d.added===1?'':'s'} (${d.scanned_vip} tagged in the window).`
+        : `✓ Up to date — no new VIP reservations (${d.scanned_vip} tagged in the window).`;
+    }
+  }catch(e){ status.textContent = '⚠ Scan failed — check your connection.'; }
+  btn.disabled = false; btn.textContent = label;
+}
+
+async function init(){
+  try{
+    const [lr, sr, cr] = await Promise.all([fetch('/vip/list'), fetch('/vip/state'), fetch('/vip/comments')]);
+    const [ld, sd, cd] = await Promise.all([lr.json(), sr.json(), cr.json()]);
+    VIP = ld.list || [];
+    STATE = sd.state || {};
+    COMMENTS = cd.comments || {};
+  }catch(e){ STATE = STATE || {}; COMMENTS = COMMENTS || {}; }
+  _render();
+  const btn = document.getElementById('scanBtn');
+  if(btn) btn.addEventListener('click', _scan);
 }
 init();
 </script>

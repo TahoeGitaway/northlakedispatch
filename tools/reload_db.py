@@ -16,8 +16,10 @@ import os
 from werkzeug.security import generate_password_hash
 from datetime import datetime
 
-DB_PATH  = "data/properties.db"
-CSV_PATH = "data/properties_geocoded.csv"
+# Anchored to the repo root so this works from tools/ regardless of cwd.
+_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH  = os.path.join(_ROOT, "data", "properties.db")
+CSV_PATH = os.path.join(_ROOT, "data", "properties_geocoded.csv")
 
 ADMIN_EMAIL    = "operations@tahoegetaways.com"
 ADMIN_NAME     = "Operations Admin"

@@ -1141,9 +1141,15 @@ def bw_import():
         _fetch_breezeway_checkins, _classify_reservation, _get_property_name
     )
     checkin_db_names = set()
+    checkin_pids     = set()   # authoritative Breezeway property_ids that have an arrival
     for r in _fetch_breezeway_checkins(date_str):
         if _classify_reservation(r) == "block":
             continue
+        # Collect the raw Breezeway property_id — the authoritative arrival signal,
+        # independent of any name matching (same id-join the group-assign tool uses).
+        pid = r.get("property_id") or r.get("home_id")
+        if pid is not None:
+            checkin_pids.add(str(pid))
         bw_name = _get_property_name(r.get("property_id"))
         row = _match_local_property(bw_name, db_props)
         if row:
@@ -1207,7 +1213,14 @@ def bw_import():
                 unmatched.append(bw_name)
                 continue
             tasks_here  = bw_name_tasks.get(bw_name, [])
-            has_checkin = row["Property Name"] in checkin_db_names
+            # Two independent signals, OR'd: the original property-NAME match PLUS an
+            # authoritative property-ID match (this house's task home_id appears among
+            # the day's arrival reservations). The id match can only ADD an arrival the
+            # name match missed — it never removes one — so a currently-correct route
+            # cannot regress. Fixes silent misses when a reservation name doesn't match.
+            home_pid    = bw_name_homeid.get(bw_name)
+            has_checkin = (row["Property Name"] in checkin_db_names) or \
+                          (home_pid is not None and home_pid in checkin_pids)
             # "PCI" in a (Walk Thru) title → priority check-in, arrive by noon — but
             # ONLY when the arrival is the SAME day this schedule is for (a same-day
             # check-in exists). A PCI prepping for a next-day arrival is just a task

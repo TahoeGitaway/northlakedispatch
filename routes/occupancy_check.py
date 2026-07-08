@@ -59,32 +59,16 @@ def _expected_reason(title: str):
     return None
 
 
-# ── "Who" filter: the default-checked crew ────────────────────────
-# First names pre-checked in the "Who" filter when the page loads — her usual
-# crew. Everyone in the roster is still shown; these just start ticked so she
-# can adjust from there. Edit this set freely; matched case-insensitively
-# against any token of a person's name.
-_SUGGESTED_FIRST_NAMES = {
-    "jonah", "andy", "calder", "chris", "drew", "irving", "julie", "trevor",
+# Real Breezeway display names for shared / non-personal accounts that tasks get
+# assigned to but that Breezeway's task payload sometimes returns without a
+# readable name. Used only to LABEL the assignee on a card — e.g. the shared
+# operations account shows as its ACTUAL BW name "11382 Operations", never a
+# made-up label. Edit freely.
+_KNOWN_ACCOUNT_NAMES = {
+    11382: "11382 Operations",
+    267:   "267 Zone",
+    89:    "89 Zone",
 }
-
-
-def _is_suggested(name: str) -> bool:
-    toks = (name or "").lower().replace(",", " ").split()
-    return any(t in _SUGGESTED_FIRST_NAMES for t in toks)
-
-
-# Assignee entities that Breezeway's /people roster doesn't return — the shared
-# Operations User account and the dispatch zone accounts — but that tasks DO get
-# assigned to. Injected into the "Who" roster by their fixed assignee id so they
-# show as checkboxes here and per-assignee filtering works. Scoped to this page
-# only; does NOT touch the batcher allow-list. Pre-checked by default so their
-# (often catch-all) in-stay tasks surface without extra clicks. Edit freely.
-_EXTRA_ASSIGNEES = [
-    {"id": 11382, "name": "Operations User"},
-    {"id": 267,   "name": "267 Zone"},
-    {"id": 89,    "name": "89 Zone"},
-]
 
 
 def _task_title(t: dict) -> str:
@@ -115,15 +99,17 @@ def _task_assignees(t: dict) -> list:
             continue
         n = (a.get("full_name") or a.get("name") or
              f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
+        if not n:
+            # Shared accounts (Operations, zones) sometimes come back with just an
+            # id — label them with their real BW name instead of "unassigned".
+            aid = a.get("assignee_id") or a.get("id")
+            try:
+                n = _KNOWN_ACCOUNT_NAMES.get(int(aid), "")
+            except (TypeError, ValueError):
+                n = ""
         if n:
             out.append(n)
     return out
-
-
-def _task_assignee_ids(t: dict) -> list:
-    # Same shape group_assign uses, so the person filter matches by roster id.
-    return [a.get("assignee_id") for a in (t.get("assignments") or [])
-            if isinstance(a, dict) and a.get("assignee_id") is not None]
 
 
 def _robust_property_tasks(token, ref_id, date_str):
@@ -155,25 +141,6 @@ def occupancy_check():
         _get_breezeway_token, _fetch_bw_reservations, _classify_reservation,
         _get_property_name, _get_live_ref_cache, _guest_name, _ensure_property_cache,
     )
-    # Reuse the app's canonical "whose tasks" roster — the assignment allow-list —
-    # so the person dropdown here shows the exact same people as everywhere else.
-    from routes.group_assign import _fetch_people, _candidate_keys, _is_candidate
-
-    def _people_roster():
-        try:
-            keys = _candidate_keys()
-            roster = [p for p in _fetch_people(token) if _is_candidate(p["name"], keys)]
-            for p in roster:
-                p["suggested"] = _is_suggested(p["name"])  # pre-checked by default
-            # Add the zone / Operations User accounts that /people doesn't return.
-            have = {str(p["id"]) for p in roster}
-            for extra in _EXTRA_ASSIGNEES:
-                if str(extra["id"]) not in have:
-                    roster.append({"id": extra["id"], "name": extra["name"], "suggested": True})
-            roster.sort(key=lambda p: p["name"].lower())
-            return roster
-        except Exception:
-            return []
 
     date_param = request.args.get("date")
     try:
@@ -222,7 +189,6 @@ def occupancy_check():
         return jsonify({
             "date": day_str, "unexpected": [], "expected": [],
             "occupied_properties": 0, "failed_properties": 0,
-            "people": _people_roster(),
         })
 
     ref_cache = _get_live_ref_cache()
@@ -261,7 +227,6 @@ def occupancy_check():
                     "checkin":         stay["ci"],
                     "checkout":        stay["co"],
                     "assignees":       _task_assignees(t),
-                    "assignee_ids":    _task_assignee_ids(t),
                     "status":          _task_status(t),  # pending | in_progress | complete
                     "expected":        bool(reason),
                     "expected_reason": reason or "",
@@ -274,7 +239,6 @@ def occupancy_check():
         "expected":            [o for o in overlaps if o["expected"]],
         "occupied_properties": len(occupied),
         "failed_properties":   failed,
-        "people":              _people_roster(),
     })
 
 

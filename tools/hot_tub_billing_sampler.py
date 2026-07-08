@@ -743,7 +743,9 @@ def main():
                     help="Print one hot-tub task's full JSON and detected fields, then exit.")
     ap.add_argument("--days", type=int, default=120, help="Window length in days (default 120).")
     ap.add_argument("--end", default="", help="End date YYYY-MM-DD (default today).")
-    ap.add_argument("--outdir", default=".", help="Output directory (default current).")
+    ap.add_argument("--outdir",
+                    default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports"),
+                    help="Output directory (default <repo>/reports).")
     ap.add_argument("--workers", type=int, default=12, help="Parallel property fetches (default 12).")
     ap.add_argument("--max-properties", type=int, default=0,
                     help="TESTING ONLY: scan only the first N tagged properties.")

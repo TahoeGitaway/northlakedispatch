@@ -270,6 +270,40 @@ def init_db():
         created_at  TEXT NOT NULL
     )""")
 
+    # The VIP reservation LIST itself (the cards). Previously hardcoded in the
+    # template; now persisted so the "Scan" button can add VIP-tagged reservations
+    # and they save. Rows are only ever ADDED by the scan — never edited or removed
+    # by it — so a card removed by hand (active=0) stays gone and won't reappear.
+    #   item_key       — stable per-card key; ALSO the join key for vip_tracker /
+    #                    vip_comments, so it must never change once a card exists.
+    #   dk_pid/dk_room — dedupe keys ("<id>|<checkin_iso>", "<norm room>|<checkin_iso>");
+    #                    the scan skips a reservation if EITHER already exists.
+    #   guests/total   — Breezeway exposes neither, so scanned cards start blank and
+    #                    are filled by hand (source of truth is her Streamline report).
+    cur.execute("""CREATE TABLE IF NOT EXISTS vip_reservations (
+        id             SERIAL PRIMARY KEY,
+        item_key       TEXT NOT NULL UNIQUE,
+        reservation_id TEXT,
+        property_id    TEXT,
+        dk_pid         TEXT,
+        dk_room        TEXT,
+        room           TEXT NOT NULL DEFAULT '',
+        guest          TEXT NOT NULL DEFAULT '',
+        ci             TEXT NOT NULL DEFAULT '',
+        co             TEXT NOT NULL DEFAULT '',
+        checkin_iso    TEXT NOT NULL DEFAULT '',
+        nights         INTEGER NOT NULL DEFAULT 0,
+        guests         TEXT NOT NULL DEFAULT '',
+        total          TEXT NOT NULL DEFAULT '',
+        blue           INTEGER NOT NULL DEFAULT 0,
+        first_booking  INTEGER NOT NULL DEFAULT 0,
+        source         TEXT NOT NULL DEFAULT 'scan',
+        active         INTEGER NOT NULL DEFAULT 1,
+        added_by       INTEGER REFERENCES users(id),
+        created_at     TEXT,
+        updated_at     TEXT
+    )""")
+
     # Group-batcher assignment allow-list: the ONLY people the batcher may assign
     # tasks to. Editable from the group-assign page (people leave / get hired).
     cur.execute("""CREATE TABLE IF NOT EXISTS assignment_candidates (

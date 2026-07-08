@@ -14,10 +14,10 @@ subprocess and letting the page poll for completion — the engine stays the one
 place the rules live.
 
 Generate / refresh a month's worksheet from the CLI (still works, same files):
-    .\.venv\Scripts\python.exe hot_tub_billing.py --month 2026-05
+    .\.venv\Scripts\python.exe tools\hot_tub_billing.py --month 2026-05
 
-That writes  hot_tub_billing_<month>.json / .csv / .md  (and updates
-hot_tub_billing_latest.json). This page reads those files.
+That writes reports/hot_tub_billing_<month>.json / .csv / .md  (and updates
+reports/hot_tub_billing_latest.json). This page reads those files.
 
 Admin-only (it's owner billing data).
 
@@ -59,6 +59,8 @@ from routes.briefing import (
 hot_tub_billing_bp = Blueprint("hot_tub_billing", __name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Generated report artifacts live in <root>/reports (gitignored), not the repo root.
+REPORTS_DIR = os.path.join(_ROOT, "reports")
 _MONTH_RE = re.compile(r"hot_tub_billing_(\d{4}-\d{2})\.json$")
 _MONTH_FMT = re.compile(r"\d{4}-\d{2}")
 
@@ -147,15 +149,15 @@ def _leased_property_ids(month: str) -> set:
 
 
 def _json_path(month: str) -> str:
-    return os.path.join(_ROOT, f"hot_tub_billing_{month}.json")
+    return os.path.join(REPORTS_DIR, f"hot_tub_billing_{month}.json")
 
 
 def _csv_path(month: str) -> str:
-    return os.path.join(_ROOT, f"hot_tub_billing_{month}.csv")
+    return os.path.join(REPORTS_DIR, f"hot_tub_billing_{month}.csv")
 
 
 def _log_path(month: str) -> str:
-    return os.path.join(_ROOT, f"hot_tub_billing_{month}.log")
+    return os.path.join(REPORTS_DIR, f"hot_tub_billing_{month}.log")
 
 
 def _now_iso() -> str:
@@ -550,7 +552,7 @@ def _overrides_path(month: str) -> str:
     ONLY place her edits live — it is never sent to Breezeway, so the scan stays
     strictly read-only. Kept separate from the worksheet JSON so a re-scan never
     clobbers her decisions (they're keyed by task_id)."""
-    return os.path.join(_ROOT, f"hot_tub_billing_{month}_overrides.json")
+    return os.path.join(REPORTS_DIR, f"hot_tub_billing_{month}_overrides.json")
 
 
 _EMPTY_OVERRIDES = {"rows": {}, "manual": []}
@@ -653,7 +655,7 @@ def _available_months() -> list:
         months.update(_db_worksheet_months())
     except Exception:
         pass
-    for p in glob.glob(os.path.join(_ROOT, "hot_tub_billing_*.json")):
+    for p in glob.glob(os.path.join(REPORTS_DIR, "hot_tub_billing_*.json")):
         m = _MONTH_RE.search(os.path.basename(p))
         if m:
             months.add(m.group(1))
@@ -815,10 +817,11 @@ def hot_tub_billing_generate():
 
         log_path = _log_path(month)
         try:
+            os.makedirs(REPORTS_DIR, exist_ok=True)
             logf = open(log_path, "w", encoding="utf-8")
             proc = subprocess.Popen(
-                [_engine_python(), os.path.join(_ROOT, "hot_tub_billing.py"),
-                 "--month", month, "--outdir", _ROOT],
+                [_engine_python(), os.path.join(_ROOT, "tools", "hot_tub_billing.py"),
+                 "--month", month, "--outdir", REPORTS_DIR],
                 cwd=_ROOT, stdout=logf, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )

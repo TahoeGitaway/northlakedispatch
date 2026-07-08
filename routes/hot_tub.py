@@ -344,6 +344,7 @@ def hot_tub_scan():
                 continue
             too_close.append({
                 "property": prop_name,
+                "property_id": pid,
                 "gap_days": gap,
                 "first": {
                     "title":    prev_svc["title"],
@@ -363,6 +364,7 @@ def hot_tub_scan():
 
         results.append({
             "property":        prop_name,
+            "property_id":     pid,
             "last_task":       last_task_title,
             "last_date":       last_date.isoformat() if last_date else None,
             "days_since":      days_since,

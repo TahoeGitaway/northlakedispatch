@@ -290,6 +290,13 @@ function arrivalsBreakdown(checkins){
   checkins.forEach(t => { const g = t.group || 'Ungrouped'; (byG[g] = byG[g] || new Set()).add(t.property); });
   const fmt = z => Object.keys(byG).filter(g => zoneOf(g) === z).sort()
     .map(g => `${esc(g)} <b>${byG[g].size}</b>`).join(' &nbsp;·&nbsp; ') || '—';
+  // Distinct houses-with-tasks in a whole zone (rebuild the set so a house that
+  // somehow lands under two groups isn't double-counted in the zone total).
+  const zoneHouses = z => {
+    const s = new Set();
+    Object.keys(byG).filter(g => zoneOf(g) === z).forEach(g => byG[g].forEach(p => s.add(p)));
+    return s.size;
+  };
 
   // Houses that have an arrival task in THIS batch (subset of arriving houses).
   const housesWithTasks = new Set(checkins.map(t => t.property)).size;
@@ -310,9 +317,9 @@ function arrivalsBreakdown(checkins){
       `<div style="font-weight:700;color:#15803d;margin-bottom:2px;">🔑 ${total} arrival${total!==1?'s':''} today &nbsp;·&nbsp; ${typeBits}</div>`
     + `<div style="margin-bottom:6px;color:#6b7280;font-size:0.73rem;">`
       + `${housesWithTasks} of these house${housesWithTasks!==1?'s':''} ${housesWithTasks!==1?'have':'has'} task${housesWithTasks!==1?'s':''} in this batch — by zone:</div>`
-    + `<div style="margin-bottom:3px;color:#374151;"><b style="color:#4338ca;">89 Zone:</b> ${fmt('89')}</div>`
-    + `<div style="margin-bottom:3px;color:#374151;"><b style="color:#4338ca;">267 Zone:</b> ${fmt('267')}</div>`
-    + (Object.keys(byG).some(g => zoneOf(g) === 'other') ? `<div style="color:#374151;"><b style="color:#6b7280;">Other:</b> ${fmt('other')}</div>` : '');
+    + `<div style="margin-bottom:3px;color:#374151;"><b style="color:#4338ca;">89 Zone</b> <span style="color:#6b7280;">(${zoneHouses('89')} house${zoneHouses('89')!==1?'s':''})</span><b style="color:#4338ca;">:</b> ${fmt('89')}</div>`
+    + `<div style="margin-bottom:3px;color:#374151;"><b style="color:#4338ca;">267 Zone</b> <span style="color:#6b7280;">(${zoneHouses('267')} house${zoneHouses('267')!==1?'s':''})</span><b style="color:#4338ca;">:</b> ${fmt('267')}</div>`
+    + (Object.keys(byG).some(g => zoneOf(g) === 'other') ? `<div style="color:#374151;"><b style="color:#6b7280;">Other (${zoneHouses('other')} house${zoneHouses('other')!==1?'s':''}):</b> ${fmt('other')}</div>` : '');
   return div;
 }
 
@@ -563,13 +570,14 @@ function _loadViews() {
 function _saveViews() { localStorage.setItem(VIEWS_KEY, JSON.stringify(VIEWS)); }
 function _genId() { return 'v' + Date.now() + Math.floor(Math.random() * 1000); }
 
-// How many tasks the active view filtered out of the last render, and its name —
-// so _renderWarnings can tell you a view (not a data problem) is hiding tasks.
-let VIEW_HIDDEN = 0, VIEW_NAME = null;
+// How many tasks the active view filtered out of the last render, its name, and a
+// per-person tally of WHO holds the hidden tasks — so _renderWarnings can tell you a
+// view (not a data problem) is hiding tasks and name exactly whose names they're in.
+let VIEW_HIDDEN = 0, VIEW_NAME = null, VIEW_HIDDEN_BY = {};
 
 // Filter a scan payload down to tasks assigned to the active view's people.
 function _applyView(data) {
-  VIEW_HIDDEN = 0; VIEW_NAME = null;
+  VIEW_HIDDEN = 0; VIEW_NAME = null; VIEW_HIDDEN_BY = {};
   if (!ACTIVE_VIEW) return data;
   const v = VIEWS.find(x => x.id === ACTIVE_VIEW);
   if (!v) return data;
@@ -588,6 +596,15 @@ function _applyView(data) {
                                        .filter(g => g.tasks.length);
   const total = checkins.length + groups.reduce((s, g) => s + g.tasks.length, 0);
   VIEW_HIDDEN = before - total;
+  // Tally WHO holds the filtered-out tasks so the warning can name them. Hidden
+  // tasks always have an assignee (unassigned tasks always match), but fall back
+  // to "Unassigned" defensively rather than dropping a task from the tally.
+  const allTasks = (data.checkins || []).concat(...(data.groups || []).map(g => g.tasks || []));
+  allTasks.forEach(t => {
+    if (match(t)) return;
+    const who = (t.assignees && t.assignees.length) ? t.assignees.join(', ') : 'Unassigned';
+    VIEW_HIDDEN_BY[who] = (VIEW_HIDDEN_BY[who] || 0) + 1;
+  });
   return Object.assign({}, data, { checkins, groups, total_tasks: total });
 }
 
@@ -1127,8 +1144,14 @@ function _renderWarnings() {
   // Not a data problem: the active saved view is hiding tasks assigned to people
   // outside it. Tell the user so a filtered view isn't mistaken for missing tasks.
   if (VIEW_HIDDEN > 0) {
+    // Name exactly whose tasks are hidden (with per-person counts), so a filtered
+    // view is never a mystery about "other people's names".
+    const by    = VIEW_HIDDEN_BY || {};
+    const names = Object.keys(by).sort((a, b) => (by[b] - by[a]) || a.localeCompare(b));
+    const whoBits = names.map(n => `<b>${esc(n)}</b> (${by[n]})`).join(', ');
     warnings.push(`👁 The active view <b>“${esc(VIEW_NAME || '')}”</b> is hiding <b>${VIEW_HIDDEN}</b> task${VIEW_HIDDEN!==1?'s':''}`
-      + ` assigned to people outside it. <button onclick="ACTIVE_VIEW=null;localStorage.removeItem(ACTIVE_KEY);renderScan();"`
+      + (whoBits ? ` held by: ${whoBits}.` : ` assigned to people outside it.`)
+      + ` <button onclick="ACTIVE_VIEW=null;localStorage.removeItem(ACTIVE_KEY);renderScan();"`
       + ` style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">Show all tasks</button>.`);
   }
   if (!(SCAN.people || []).length) {

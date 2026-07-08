@@ -9,8 +9,8 @@ single source of truth. This page simply PRESENTS the tables that program writes
     productivity_past_365_days_prior.json     ← an optional prior cycle (run with --prior)
 
 Refresh / generate the data by running, from the project folder:
-    .\.venv\Scripts\python.exe productivity_past_365_days.py                 # current cycle
-    .\.venv\Scripts\python.exe productivity_past_365_days.py --end <YYYY-MM-DD last year> --prior
+    .\.venv\Scripts\python.exe tools\productivity_past_365_days.py                 # current cycle
+    .\.venv\Scripts\python.exe tools\productivity_past_365_days.py --end <YYYY-MM-DD last year> --prior
 
 Admin-only (it's employee productivity data).
 
@@ -31,15 +31,17 @@ from routes.auth import admin_required
 productivity_bp = Blueprint("productivity", __name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Generated report artifacts live in <root>/reports (gitignored), not the repo root.
+REPORTS_DIR = os.path.join(_ROOT, "reports")
 
 _FILES = {
     "current": {
-        "json": os.path.join(_ROOT, "productivity_past_365_days.json"),
-        "csv":  os.path.join(_ROOT, "productivity_past_365_days.csv"),
+        "json": os.path.join(REPORTS_DIR, "productivity_past_365_days.json"),
+        "csv":  os.path.join(REPORTS_DIR, "productivity_past_365_days.csv"),
     },
     "prior": {
-        "json": os.path.join(_ROOT, "productivity_past_365_days_prior.json"),
-        "csv":  os.path.join(_ROOT, "productivity_past_365_days_prior.csv"),
+        "json": os.path.join(REPORTS_DIR, "productivity_past_365_days_prior.json"),
+        "csv":  os.path.join(REPORTS_DIR, "productivity_past_365_days_prior.csv"),
     },
 }
 
@@ -81,6 +83,6 @@ def productivity_download():
         abort(400, "which must be 'current' or 'prior'.")
     csv_path = _FILES[which]["csv"]
     if not os.path.exists(csv_path):
-        abort(404, f"No {which} CSV has been generated yet. Run productivity_past_365_days.py first.")
+        abort(404, f"No {which} CSV has been generated yet. Run tools/productivity_past_365_days.py first.")
     return send_file(csv_path, as_attachment=True,
                      download_name=os.path.basename(csv_path), mimetype="text/csv")

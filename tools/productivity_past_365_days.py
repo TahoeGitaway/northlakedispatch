@@ -898,7 +898,9 @@ def main():
                          "the current ones, so the page can compare the two cycles. Pair with --end.")
     ap.add_argument("--delay", type=float, default=0.25,
                     help="Polite pause between property calls, seconds (default 0.25).")
-    ap.add_argument("--outdir", default=".", help="Directory for the report files (default current dir).")
+    ap.add_argument("--outdir",
+                    default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports"),
+                    help="Directory for the report files (default <repo>/reports).")
     ap.add_argument("--max-properties", type=int, default=0,
                     help="TESTING ONLY: scan only the first N properties (forces a PARTIAL report).")
     args = ap.parse_args()

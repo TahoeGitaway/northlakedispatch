@@ -783,7 +783,9 @@ def _default_month():
 def main():
     ap = argparse.ArgumentParser(description="Hot Tub Billing monthly worksheet — read-only.")
     ap.add_argument("--month", default="", help="Billing month YYYY-MM (default: last full month).")
-    ap.add_argument("--outdir", default=".", help="Output directory.")
+    ap.add_argument("--outdir",
+                    default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports"),
+                    help="Output directory (default <repo>/reports).")
     ap.add_argument("--workers", type=int, default=12, help="Parallel property fetches.")
     ap.add_argument("--max-properties", type=int, default=0, help="TESTING ONLY: first N tagged properties.")
     args = ap.parse_args()

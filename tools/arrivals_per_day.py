@@ -595,7 +595,9 @@ def main():
                     help="End date YYYY-MM-DD of the window (default today). Window = [end-days, end].")
     ap.add_argument("--prior", action="store_true",
                     help="Write to the PRIOR-cycle file set (arrivals_per_day_prior.*). Pair with --end.")
-    ap.add_argument("--outdir", default=".", help="Directory for the report files (default current dir).")
+    ap.add_argument("--outdir",
+                    default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports"),
+                    help="Directory for the report files (default <repo>/reports).")
     args = ap.parse_args()
 
     if args.end:

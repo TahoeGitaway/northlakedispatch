@@ -27,7 +27,9 @@ import json
 import os
 import sys
 
-SQLITE_PATH  = "data/properties.db"
+# Anchored to the repo root so this works from tools/ regardless of cwd.
+_ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SQLITE_PATH  = os.path.join(_ROOT, "data", "properties.db")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 if not DATABASE_URL:

@@ -73,6 +73,257 @@ def _guest_name(r):
     return str(g)
 
 
+def _res_guest(r):
+    """Lead-guest name off a Breezeway reservation. The `guests` array holds
+    contact records (first/last name); fall back to the generic extractor."""
+    gs = r.get("guests")
+    if isinstance(gs, list) and gs:
+        g = gs[0] or {}
+        nm = f"{(g.get('first_name') or '').strip()} {(g.get('last_name') or '').strip()}".strip()
+        if nm:
+            return nm
+    return _guest_name(r)
+
+
+def _norm_room(s):
+    return " ".join((s or "").lower().split())
+
+
+def _ci_iso(ci):
+    """'M/D' (in _VIP_YEAR) -> 'YYYY-MM-DD'; '' on bad input."""
+    try:
+        mm, dd = str(ci).split("/")[:2]
+        return _date(_VIP_YEAR, int(mm), int(dd)).isoformat()
+    except Exception:
+        return ""
+
+
+def _iso_to_md(iso):
+    """'YYYY-MM-DD' -> 'M/D' (the card's display form)."""
+    try:
+        d = _date.fromisoformat((iso or "")[:10])
+        return f"{d.month}/{d.day}"
+    except Exception:
+        return iso or ""
+
+
+# The original 27 hand-curated cards. Migrated into vip_reservations ONCE under
+# these exact vip-NN keys so their inspected-state (vip_tracker) and notes
+# (vip_comments) — both keyed by item_key — stay attached.
+# (key, guest, ci, nights, co, guests, room, total, blue, first)
+_SEED = [
+    ("vip-01", "Sachin Rajpal",      "6/24", 31, "7/25", "5 | 3",  "Fleur Du Lac 18",                        "$53,250.00", True,  False),
+    ("vip-02", "Kristina Klimaitis",  "6/24", 7,  "7/1",  "8 | 5",  "Beyond The Blue Lakefront Escape",       "$41,235.00", False, False),
+    ("vip-03", "Jason Van Voorhis",   "6/24", 52, "8/15", "2 | 1",  "Clearwater Lake View",                   "$32,000.00", False, True),
+    ("vip-04", "Sherry Saxton",       "6/25", 7,  "7/2",  "4 | 2",  "Towering Pines Lakefront",               "$17,539.30", False, False),
+    ("vip-05", "Dan Carvalho",        "6/26", 42, "8/7",  "2 | 0",  "Rockwood Lodge at Lahontan",             "$64,500.00", True,  False),
+    ("vip-06", "John Lupusor",        "6/26", 31, "7/27", "2 | 4",  "Fleur Du Lac 16",                        "$54,250.00", True,  False),
+    ("vip-07", "Maya Leabman",        "6/26", 31, "7/27", "3 | 1",  "Glenbrook at Martis Camp",               "$47,845.00", True,  False),
+    ("vip-08", "Linda Platt",         "6/27", 8,  "7/5",  "8 | 4",  "Sky Rocks",                              "$22,792.06", False, False),
+    ("vip-09", "Traci Thomas",        "6/28", 7,  "7/5",  "6 | 4",  "Beach Haven Lakefront",                  "$19,890.26", False, False),
+    ("vip-10", "Josh Thornton",       "6/29", 7,  "7/6",  "2 | 3",  "Cathedral Pines Lakefront",              "$43,221.10", False, False),
+    ("vip-11", "Rachael Fry",         "6/29", 16, "7/15", "8 | 2",  "Tahoe Point of View",                    "$19,125.37", False, False),
+    ("vip-12", "Brian Fyda",          "7/1",  11, "7/12", "8 | 0",  "Aqua Vista Lakefront Estate",            "$71,700.75", False, False),
+    ("vip-13", "Jennifer Barsotti",   "7/1",  33, "8/3",  "8 | 0",  "Fleur Du Lac 7",                         "$78,650.00", True,  False),
+    ("vip-14", "Yvonne Valiquette",   "7/1",  7,  "7/8",  "12 | 2", "Beyond The Blue Lakefront Escape",       "$66,223.32", False, False),
+    ("vip-15", "Carl Hansen",         "7/1",  7,  "7/8",  "6 | 4",  "Glistening Shores Lakefront",            "$56,047.00", True,  False),
+    ("vip-16", "Sara Doughty",        "7/1",  31, "8/1",  "3 | 0",  "Crown Peak at Olympic Valley",           "$23,300.00", False, True),
+    ("vip-17", "Rebecca Gruss",       "7/2",  8,  "7/10", "6 | 0",  "Sapphire Shores Lakefront",              "$20,231.71", False, False),
+    ("vip-18", "Andrew Hinkelman",    "7/3",  7,  "7/10", "12 | 0", "Valhalla Lakefront on the West Shore",   "$36,599.68", False, False),
+    ("vip-19", "Tami Campbell",       "7/6",  5,  "7/11", "8 | 3",  "Cathedral Pines Lakefront",              "$23,041.72", False, False),
+    ("vip-20", "Jane Etcheverry",     "7/8",  7,  "7/15", "10 | 4", "Beyond The Blue Lakefront Escape",       "$57,672.05", False, False),
+    ("vip-21", "Ashley Eastwood",     "7/10", 7,  "7/17", "10 | 0", "Valhalla Lakefront on the West Shore",   "$32,774.23", False, False),
+    ("vip-22", "Steven Brotherton",   "7/10", 31, "8/10", "2 | 2",  "Little Chief at Martis Camp",            "$21,850.00", False, False),
+    ("vip-23", "Robert Mandel",       "7/11", 15, "7/26", "2 | 2",  "Glistening Shores Lakefront",            "$95,000.00", True,  False),
+    ("vip-24", "Jorge Velasquez",     "7/11", 7,  "7/18", "12 | 0", "Cathedral Pines Lakefront",              "$30,129.30", False, False),
+    ("vip-25", "Kathryn Mossawir",    "7/11", 7,  "7/18", "5 | 4",  "Aerial Grace Lakeside Retreat",          "$21,017.51", False, False),
+    ("vip-26", "Craig Casca",         "7/11", 62, "9/11", "2 | 0",  "Lonestar Ranch",                         "$20,650.00", False, False),
+    ("vip-27", "Kyle Bardet",         "7/14", 8,  "7/22", "5 | 4",  "Beach Haven Lakefront",                  "$20,094.03", False, False),
+]
+
+
+def _ensure_seeded():
+    """Insert the original 27 cards ONCE (only when the table is empty), so later
+    hand-removals aren't undone on every restart. Resolves each seed's Breezeway
+    property_id from the cached property list (no per-reservation API calls) so
+    the scan can dedupe scanned reservations against these seeds."""
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("SELECT COUNT(*) AS n FROM vip_reservations")
+    if (cur.fetchone() or {}).get("n", 0) > 0:
+        cur.close(); conn.close(); return
+    prop_cache = {}
+    try:
+        from routes.briefing import _get_live_property_cache
+        prop_cache = _get_live_property_cache() or {}
+    except Exception:
+        prop_cache = {}
+    now = datetime.utcnow().isoformat()
+    for key, name, ci, nts, co, guests, room, total, blue, first in _SEED:
+        pid = _match_room_to_pid(room, prop_cache) if prop_cache else None
+        iso = _ci_iso(ci)
+        dk_pid  = f"{pid}|{iso}" if pid else ""
+        dk_room = f"{_norm_room(room)}|{iso}"
+        cur.execute(
+            """INSERT INTO vip_reservations
+               (item_key, reservation_id, property_id, dk_pid, dk_room, room, guest,
+                ci, co, checkin_iso, nights, guests, total, blue, first_booking,
+                source, active, created_at, updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'seed',1,%s,%s)
+               ON CONFLICT (item_key) DO NOTHING""",
+            (key, None, str(pid) if pid else None, dk_pid, dk_room, room, name,
+             ci, co, iso, nts, guests, total, 1 if blue else 0, 1 if first else 0,
+             now, now))
+    conn.commit()
+    cur.close(); conn.close()
+
+
+@vip_bp.route("/vip/list")
+@login_required
+def vip_list():
+    """The saved list of VIP cards (active only), earliest check-in first."""
+    _ensure_seeded()
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("""SELECT item_key, room, guest, ci, co, checkin_iso, nights,
+                          guests, total, blue, first_booking, source
+                   FROM vip_reservations WHERE active = 1
+                   ORDER BY checkin_iso, item_key""")
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    out = [{
+        "key":    r["item_key"], "room":  r["room"],  "name":   r["guest"],
+        "ci":     r["ci"],       "co":    r["co"],    "nts":    r["nights"],
+        "guests": r["guests"],   "total": r["total"],
+        "blue":   bool(r["blue"]), "first": bool(r["first_booking"]),
+        "source": r["source"],
+    } for r in rows]
+    return jsonify({"list": out})
+
+
+@vip_bp.route("/vip/scan", methods=["POST"])
+@login_required
+def vip_scan():
+    """Scan Breezeway for VIP-tagged reservations checking in from 3 days ago
+    through 21 days out and ADD any not already on the list. Insert-only: it
+    never edits or removes an existing card, and a card removed by hand stays
+    removed (its row is kept, so its dedupe keys still block re-adding)."""
+    from routes.briefing import (_get_breezeway_token, _ensure_property_cache,
+                                 _get_live_property_cache, _fetch_bw_reservations,
+                                 _extract_str)
+    _ensure_seeded()
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."}), 503
+
+    today = _date.today()
+    lo = (today - _td(days=3)).isoformat()
+    hi = (today + _td(days=21)).isoformat()
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()
+
+    results = _fetch_bw_reservations(token, {"checkin_date_ge": lo, "checkin_date_le": hi})
+
+    conn = get_db()
+    cur = get_cursor(conn)
+    # Dedupe against ALL rows (active OR removed) so a hand-removed card never returns.
+    cur.execute("SELECT dk_pid, dk_room, reservation_id FROM vip_reservations")
+    ex = cur.fetchall()
+    have_pid  = {r["dk_pid"]  for r in ex if r["dk_pid"]}
+    have_room = {r["dk_room"] for r in ex if r["dk_room"]}
+    have_res  = {r["reservation_id"] for r in ex if r["reservation_id"]}
+
+    now = datetime.utcnow().isoformat()
+    uid = getattr(current_user, "id", None)
+    added, scanned_vip = 0, 0
+    seen = set()
+    for r in (results or []):
+        if not any("vip" in _extract_str(t) for t in (r.get("tags") or [])):
+            continue
+        scanned_vip += 1
+        rid = str(r.get("id") or "")
+        pid = str(r.get("property_id") or r.get("home_id") or "")
+        iso = (r.get("checkin_date") or "")[:10]
+        if not iso:
+            continue
+        room = (prop_cache.get(int(pid)) if pid.isdigit() else None) \
+               or prop_cache.get(pid) or (f"Property {pid}" if pid else "Unknown")
+        dk_pid  = f"{pid}|{iso}" if pid else ""
+        dk_room = f"{_norm_room(room)}|{iso}"
+        if (rid and rid in have_res) or (dk_pid and dk_pid in have_pid) or (dk_room in have_room):
+            continue
+        if (dk_pid and dk_pid in seen) or dk_room in seen:
+            continue          # two reservations, same house+day, in one scan
+        seen.add(dk_pid); seen.add(dk_room)
+        co = (r.get("checkout_date") or "")[:10]
+        try:
+            nts = (_date.fromisoformat(co) - _date.fromisoformat(iso)).days
+        except Exception:
+            nts = 0
+        item_key = f"res-{rid}" if rid else f"scan-{dk_room}"
+        cur.execute(
+            """INSERT INTO vip_reservations
+               (item_key, reservation_id, property_id, dk_pid, dk_room, room, guest,
+                ci, co, checkin_iso, nights, guests, total, blue, first_booking,
+                source, active, added_by, created_at, updated_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'','',0,0,'scan',1,%s,%s,%s)
+               ON CONFLICT (item_key) DO NOTHING""",
+            (item_key, rid or None, pid or None, dk_pid, dk_room, room, _res_guest(r),
+             _iso_to_md(iso), _iso_to_md(co), iso, nts, uid, now, now))
+        added += cur.rowcount
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"ok": True, "added": added, "scanned_vip": scanned_vip,
+                    "window": {"from": lo, "to": hi}})
+
+
+@vip_bp.route("/vip/edit", methods=["POST"])
+@login_required
+def vip_edit():
+    """Edit the hand-entered fields (guest count, total) — Breezeway has neither."""
+    body = request.get_json(silent=True) or {}
+    key = (body.get("item_key") or "").strip()
+    if not key:
+        return jsonify({"error": "item_key required"}), 400
+    fields, params = [], []
+    if "guests" in body:
+        fields.append("guests = %s"); params.append(str(body.get("guests") or "").strip())
+    if "total" in body:
+        fields.append("total = %s"); params.append(str(body.get("total") or "").strip())
+    if not fields:
+        return jsonify({"error": "nothing to update"}), 400
+    fields.append("updated_at = %s"); params.append(datetime.utcnow().isoformat())
+    params.append(key)
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute(f"UPDATE vip_reservations SET {', '.join(fields)} WHERE item_key = %s", params)
+    changed = cur.rowcount
+    conn.commit(); cur.close(); conn.close()
+    if not changed:
+        return jsonify({"error": "card not found"}), 404
+    return jsonify({"ok": True})
+
+
+@vip_bp.route("/vip/remove", methods=["POST"])
+@login_required
+def vip_remove():
+    """Soft-remove a card (active=0). Reversible; the row is KEPT so the scan
+    won't re-add the reservation, and its notes/inspected-state are preserved."""
+    body = request.get_json(silent=True) or {}
+    key = (body.get("item_key") or "").strip()
+    if not key:
+        return jsonify({"error": "item_key required"}), 400
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("UPDATE vip_reservations SET active = 0, updated_at = %s WHERE item_key = %s",
+                (datetime.utcnow().isoformat(), key))
+    changed = cur.rowcount
+    conn.commit(); cur.close(); conn.close()
+    if not changed:
+        return jsonify({"error": "card not found"}), 404
+    return jsonify({"ok": True})
+
+
 @vip_bp.route("/vip/house-tasks")
 @login_required
 def vip_house_tasks():
@@ -163,6 +414,36 @@ def vip_house_tasks():
 @login_required
 def vip_page():
     return render_template("vip.html")
+
+
+@vip_bp.route("/vip/property-links", methods=["POST"])
+@login_required
+def vip_property_links():
+    """Resolve VIP room names → Breezeway property ids for the 📅 calendar links.
+    Reuses the same strict room→pid matcher as the week-before view, so a house that
+    can't be confidently matched simply gets no link (never a wrong-house link)."""
+    from routes.briefing import (_get_breezeway_token, _ensure_property_cache,
+                                 _get_live_property_cache)
+
+    body  = request.get_json(silent=True) or {}
+    rooms = body.get("rooms") or []
+    if not isinstance(rooms, list):
+        return jsonify({"pids": {}})
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"pids": {}})
+    _ensure_property_cache()
+    prop_cache = _get_live_property_cache()
+
+    pids = {}
+    for room in rooms:
+        if not isinstance(room, str) or room in pids:
+            continue
+        pid = _match_room_to_pid(room, prop_cache)
+        if pid:
+            pids[room] = str(pid)
+    return jsonify({"pids": pids})
 
 
 @vip_bp.route("/vip/state")

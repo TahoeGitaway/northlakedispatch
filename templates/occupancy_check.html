@@ -11,34 +11,16 @@
     </p>
   </div>
 
-  <!-- Date + who + scan -->
+  <!-- Date + scan -->
   <div class="flex items-center gap-3 mb-4 flex-wrap">
     <label class="text-gray-500 font-medium text-sm">Day</label>
     <input type="date" id="theDate"
            class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-300">
-    <label class="text-gray-500 font-medium text-sm">Who</label>
-    <button type="button" id="whoBtn"
-            onclick="document.getElementById('peoplePanel').classList.toggle('hidden')"
-            class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-rose-300">
-      <span id="whoSummary">Everyone</span> <span class="text-gray-400">▾</span>
-    </button>
     <button onclick="load()"
             class="px-4 py-1.5 bg-rose-500 text-white text-sm font-semibold rounded-lg hover:bg-rose-600 transition-colors">
       Check
     </button>
     <span id="subtitle" class="text-xs text-gray-400"></span>
-  </div>
-
-  <!-- "Who" filter — check off the people you're looking at. Same roster the
-       Assign-by-Group batcher assigns to; everyone is checked by default. -->
-  <div id="peoplePanel" class="hidden mb-4 border border-gray-200 rounded-lg p-3 bg-white">
-    <div class="flex items-center gap-3 mb-2">
-      <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Show tasks for</span>
-    </div>
-    <div id="peopleList" class="flex flex-wrap gap-x-5 gap-y-1.5 max-h-56 overflow-y-auto"></div>
-    <div id="peopleEmpty" class="hidden text-xs text-gray-400 italic">
-      Couldn't load the staff roster right now — showing all tasks.
-    </div>
   </div>
 
   <p class="text-xs text-gray-400 mb-5">
@@ -138,93 +120,19 @@ function buildSection(title, color, items, cardFn, collapsed) {
   return wrap;
 }
 
-// Last scan payload — kept so the "Who" filter can re-render without re-scanning.
+// Last scan payload.
 let SCAN = null;
 
-// ── "Who" checkbox filter — the same roster the batcher assigns to ─────
-// PEOPLE holds the scanned allow-list roster (the suggested group). The
-// checkboxes let you narrow results to whoever you're actually looking at;
-// everyone starts checked.
-let PEOPLE = [];
-
-function _esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-function _checkedIds() {
-  return new Set([...document.querySelectorAll("#peopleList .who-cb:checked")].map(cb => cb.value));
-}
-
-function _syncWhoSummary() {
-  const el = document.getElementById("whoSummary");
-  const total = PEOPLE.length;
-  if (!total) { el.textContent = "Everyone"; return; }
-  const checked = _checkedIds();
-  if (checked.size === total)  el.textContent = "Everyone";
-  else if (checked.size === 0) el.textContent = "Unassigned only";
-  else if (checked.size === 1) {
-    const p = PEOPLE.find(x => String(x.id) === [...checked][0]);
-    el.textContent = p ? p.name : "1 person";
-  } else el.textContent = `${checked.size} people`;
-}
-
-// Build the checkbox roster. Everyone starts checked; a re-scan keeps your picks.
-function _populatePeople(people) {
-  PEOPLE = people || [];
-  const list  = document.getElementById("peopleList");
-  const empty = document.getElementById("peopleEmpty");
-  const hadPrev = list.querySelectorAll(".who-cb").length > 0;
-  const prev = _checkedIds();
-  list.innerHTML = "";
-
-  if (!PEOPLE.length) {
-    empty.classList.remove("hidden");
-    _syncWhoSummary();
-    return;
-  }
-  empty.classList.add("hidden");
-  // First load: pre-check the suggested crew (p.suggested). If nobody is flagged
-  // suggested (older backend / no match), fall back to all-checked so the view
-  // isn't accidentally empty.
-  const anySuggested = PEOPLE.some(p => p.suggested);
-  PEOPLE.forEach(p => {
-    const id = String(p.id);
-    const on = hadPrev ? prev.has(id) : (anySuggested ? !!p.suggested : true);
-    const lab = document.createElement("label");
-    lab.className = "flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer whitespace-nowrap";
-    lab.innerHTML = `<input type="checkbox" class="who-cb" value="${id}" ${on ? "checked" : ""}`
-      + ` style="width:15px;height:15px;cursor:pointer;" onchange="renderFromScan()"> ${_esc(p.name)}`;
-    list.appendChild(lab);
-  });
-  _syncWhoSummary();
-}
-
-// Render the stored scan, filtered to the checked people. A task with no
-// assignee always shows (an unclaimed task during a stay is still a surprise) —
-// mirroring how the Assign-by-Group views always include unassigned work.
+// Render the stored scan.
 function renderFromScan() {
   if (!SCAN) return;
-  const data    = SCAN;
-  const checked = _checkedIds();
-  const total   = PEOPLE.length;
-  const allOn   = total === 0 || checked.size === total;
-  _syncWhoSummary();
+  const data = SCAN;
 
-  const mine = o => {
-    if (allOn) return true;
-    const ids = o.assignee_ids || [];
-    if (!ids.length) return true;                    // unassigned always surfaces
-    return ids.some(id => checked.has(String(id)));
-  };
-
-  const unexpected = (data.unexpected || []).filter(mine);
-  const expected   = (data.expected   || []).filter(mine);
+  const unexpected = data.unexpected || [];
+  const expected   = data.expected   || [];
   const total_t    = unexpected.length + expected.length;
 
-  const whoLabel = allOn ? "" :
-    (checked.size === 0 ? " · unassigned only" : ` · filtered to ${checked.size} of ${total} people`);
-  let sub = `${_fmtDate(data.date)} · ${data.occupied_properties || 0} occupied propert${(data.occupied_properties === 1) ? "y" : "ies"} · ${total_t} task${total_t === 1 ? "" : "s"} during a stay${whoLabel}`;
+  let sub = `${_fmtDate(data.date)} · ${data.occupied_properties || 0} occupied propert${(data.occupied_properties === 1) ? "y" : "ies"} · ${total_t} task${total_t === 1 ? "" : "s"} during a stay`;
   if (data.failed_properties) {
     sub += ` · ⚠ ${data.failed_properties} couldn’t load (retry)`;
   }
@@ -235,7 +143,7 @@ function renderFromScan() {
 
   if (!total_t) {
     resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
-      No tasks scheduled while someone is in the house this day${allOn ? "" : " for the people you picked"}. 🎉</div>`;
+      No tasks scheduled while someone is in the house this day. 🎉</div>`;
   } else {
     const s1 = buildSection("🔴 Task during a guest stay", "#ef4444", unexpected,
       o => overlapCard(o, "#fef2f2", "#fecaca", "#b91c1c"));
@@ -287,7 +195,6 @@ async function load() {
     }
 
     SCAN = data;
-    _populatePeople(data.people);
     renderFromScan();
   } catch (e) {
     document.getElementById("loading").classList.add("hidden");
