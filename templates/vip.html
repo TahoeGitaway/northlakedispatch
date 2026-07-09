@@ -16,6 +16,9 @@
       <button id="scanBtn"
         style="font-size:0.85rem;font-weight:700;color:#fff;background:#2563eb;border:none;border-radius:10px;padding:8px 16px;cursor:pointer;">
         🔎 Scan Breezeway for VIP reservations</button>
+      <button id="exportBtn" title="Download every card's notes as a file — your copy before departed cards are removed"
+        style="font-size:0.85rem;font-weight:600;color:#374151;background:#fff;border:1px solid #d1d5db;border-radius:10px;padding:8px 14px;cursor:pointer;">
+        ⬇ Export notes</button>
       <span id="scanStatus" class="text-sm text-gray-500"></span>
     </div>
     <div id="busyBanner" class="mt-3 rounded-xl px-4 py-2.5 text-sm"
@@ -77,6 +80,7 @@ const ME = {{ current_user.id | tojson }};   // current user id — gates edit/d
 let STATE = {};      // item_key -> {done}
 let COMMENTS = {};   // item_key -> [{id, author, author_id, body, created_at}]
 let EDITING = null;  // comment id currently being edited (one at a time)
+let TODAY = '';      // server's Pacific date (YYYY-MM-DD) — upcoming vs arrived cutoff
 
 function _setSaveStatus(t){ document.getElementById('saveStatus').textContent = t; }
 
@@ -261,8 +265,9 @@ async function _removeCard(key){
   }catch(e){ alert('Could not remove — check your connection.'); }
 }
 
-function buildCard(v){
+function buildCard(v, collapsed){
   const st = STATE[v.key] || {done:false};
+  const nNotes = (COMMENTS[v.key] || []).length;
   const card = document.createElement('div');
   const bg = v.blue ? '#eff6ff' : '#fff';
   const bd = v.blue ? '#93c5fd' : '#e5e7eb';
@@ -283,26 +288,32 @@ function buildCard(v){
           <span style="font-weight:700;font-size:0.95rem;color:${v.blue?'#1e40af':'#1f2937'};">${esc(v.room)}</span>
           <span class="vip-cal" data-room="${esc(v.room)}"></span>
           ${badges}
+          ${collapsed ? `<button class="vip-collapse" title="Expand" style="margin-left:auto;flex-shrink:0;font-size:0.8rem;color:#6b7280;background:none;border:none;cursor:pointer;line-height:1;padding:0 4px;">▸</button>` : ''}
           <button class="vip-remove" data-key="${esc(v.key)}" title="Remove from VIP list"
-            style="margin-left:auto;flex-shrink:0;font-size:0.95rem;color:#cbd5e1;background:none;border:none;cursor:pointer;line-height:1;padding:0 2px;">✕</button>
+            style="${collapsed?'':'margin-left:auto;'}flex-shrink:0;font-size:0.95rem;color:#cbd5e1;background:none;border:none;cursor:pointer;line-height:1;padding:0 2px;">✕</button>
         </div>
-        <div style="font-size:0.8rem;color:#374151;margin-top:2px;">${esc(v.name)} · <b>${_editSpan(v.key,'total',v.total,'+ total')}</b></div>
-        <div style="font-size:0.76rem;color:#6b7280;margin-top:2px;display:flex;gap:14px;flex-wrap:wrap;">
-          <span>🛬 CI <b>${esc(v.ci)}</b></span>
-          <span>🛫 CO ${esc(v.co)}</span>
-          <span>${v.nts} nights</span>
-          <span>👥 ${_editSpan(v.key,'guests',v.guests,'+ guests')}</span>
-          <span class="vip-b2b" style="display:none;font-weight:800;color:#b45309;background:#fef3c7;border:1px solid #fcd34d;padding:0 7px;border-radius:99px;" title="A prior guest checks out the same day this VIP arrives — back-to-back turnaround">🔁 B2B TURNAROUND</span>
+        <div class="vip-summary" style="${collapsed?'':'display:none;'}font-size:0.76rem;color:#6b7280;margin-top:3px;cursor:pointer;">
+          ${esc(v.name)} · 🛬 ${esc(v.ci)} → 🛫 ${esc(v.co)}${nNotes?` · 📝 ${nNotes} note${nNotes>1?'s':''}`:''}<span style="color:#a5b4fc;font-weight:600;"> · tap to expand</span>
         </div>
-        <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;margin-bottom:4px;">Notes</div>
-        <div class="vip-comments" style="display:flex;flex-direction:column;gap:5px;"></div>
-        <div style="display:flex;gap:6px;margin-top:6px;">
-          <input class="vip-comment-input" placeholder="Add a note — saved with your name…"
-            style="flex:1;min-width:0;border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:0.8rem;outline:none;">
-          <button class="vip-comment-post" style="flex-shrink:0;font-size:0.78rem;font-weight:600;color:#fff;background:#4f46e5;border:none;border-radius:8px;padding:6px 12px;cursor:pointer;">Add</button>
+        <div class="vip-body" style="${collapsed?'display:none;':''}">
+          <div style="font-size:0.8rem;color:#374151;margin-top:2px;">${esc(v.name)} · <b>${_editSpan(v.key,'total',v.total,'+ total')}</b></div>
+          <div style="font-size:0.76rem;color:#6b7280;margin-top:2px;display:flex;gap:14px;flex-wrap:wrap;">
+            <span>🛬 CI <b>${esc(v.ci)}</b></span>
+            <span>🛫 CO ${esc(v.co)}</span>
+            <span>${v.nts} nights</span>
+            <span>👥 ${_editSpan(v.key,'guests',v.guests,'+ guests')}</span>
+            <span class="vip-b2b" style="display:none;font-weight:800;color:#b45309;background:#fef3c7;border:1px solid #fcd34d;padding:0 7px;border-radius:99px;" title="A prior guest checks out the same day this VIP arrives — back-to-back turnaround">🔁 B2B TURNAROUND</span>
+          </div>
+          <div style="font-size:0.78rem;font-weight:700;color:#374151;margin-top:9px;margin-bottom:4px;">Notes</div>
+          <div class="vip-comments" style="display:flex;flex-direction:column;gap:5px;"></div>
+          <div style="display:flex;gap:6px;margin-top:6px;">
+            <input class="vip-comment-input" placeholder="Add a note — saved with your name…"
+              style="flex:1;min-width:0;border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:0.8rem;outline:none;">
+            <button class="vip-comment-post" style="flex-shrink:0;font-size:0.78rem;font-weight:600;color:#fff;background:#4f46e5;border:none;border-radius:8px;padding:6px 12px;cursor:pointer;">Add</button>
+          </div>
+          <button class="vip-week-btn" style="margin-top:8px;font-size:0.74rem;font-weight:600;color:#4338ca;background:none;border:none;cursor:pointer;padding:0;">📅 Tasks the week before →</button>
+          <div class="vip-week" style="display:none;margin-top:6px;"></div>
         </div>
-        <button class="vip-week-btn" style="margin-top:8px;font-size:0.74rem;font-weight:600;color:#4338ca;background:none;border:none;cursor:pointer;padding:0;">📅 Tasks the week before →</button>
-        <div class="vip-week" style="display:none;margin-top:6px;"></div>
       </div>
     </div>`;
 
@@ -331,6 +342,20 @@ function buildCard(v){
     weekBtn.textContent = open ? '📅 Tasks the week before ▾' : '📅 Tasks the week before →';
     if (open && !weekBox.dataset.loaded) _loadWeek(weekBox, v);
   });
+
+  // Collapse toggle — arrived cards start collapsed; tap the chevron or the
+  // summary line to reveal the full card (notes, tasks) and tap again to hide.
+  const bodyEl    = card.querySelector('.vip-body');
+  const summaryEl = card.querySelector('.vip-summary');
+  const chevBtn   = card.querySelector('.vip-collapse');
+  const _toggle = () => {
+    const hidden = bodyEl.style.display === 'none';
+    bodyEl.style.display = hidden ? '' : 'none';
+    if (summaryEl) summaryEl.style.display = hidden ? 'none' : '';
+    if (chevBtn)   chevBtn.textContent = hidden ? '▾' : '▸';
+  };
+  if (chevBtn)   chevBtn.addEventListener('click', _toggle);
+  if (summaryEl) summaryEl.addEventListener('click', _toggle);
 
   _wireEdits(card);
   if (st.done) card.style.opacity = '0.6';
@@ -461,12 +486,21 @@ async function _loadWeek(box, v){
   }
 }
 
-// Busiest upcoming VIP arrival day — the banner that used to be hardcoded to 7/1.
+// Date buckets (Pacific). upcoming: check-in today or later. departed: checkout
+// already before today (guest gone). arrived: in between (guest in house).
+function _isUpcoming(v){
+  return !TODAY || !v.checkin_iso || v.checkin_iso >= TODAY;
+}
+function _isDeparted(v){
+  return !!(TODAY && v.checkout_iso && v.checkout_iso < TODAY);
+}
+
+// Busiest UPCOMING VIP arrival day — the banner that used to be hardcoded to 7/1.
 function _updateBusyBanner(){
   const banner = document.getElementById('busyBanner');
   if(!banner) return;
   const counts = {};
-  VIP.forEach(v => { if(v.ci) counts[v.ci] = (counts[v.ci]||0) + 1; });
+  VIP.filter(_isUpcoming).forEach(v => { if(v.ci) counts[v.ci] = (counts[v.ci]||0) + 1; });
   let bestDay = null, bestN = 0;
   for(const day in counts){ if(counts[day] > bestN){ bestN = counts[day]; bestDay = day; } }
   if(bestDay && bestN > 1){
@@ -482,12 +516,76 @@ function _render(){
   list.innerHTML = '';
   if(!VIP.length){
     list.innerHTML = `<div style="text-align:center;color:#9ca3af;font-size:0.85rem;padding:28px 0;">No VIP reservations yet — tap <strong>Scan Breezeway</strong> above to pull in VIP-tagged arrivals.</div>`;
-  } else {
-    VIP.forEach(v => list.appendChild(buildCard(v)));
+    _updateProgress(); _updateBusyBanner(); return;
   }
+  // VIP arrives sorted by check-in asc from the server. Three groups:
+  // upcoming (expanded, next arrival on top), in-house (collapsed), and
+  // checked-out (collapsed, kept until the user exports + clears them).
+  const upcoming = VIP.filter(v => _isUpcoming(v));
+  const departed = VIP.filter(v => _isDeparted(v));
+  const arrived  = VIP.filter(v => !_isUpcoming(v) && !_isDeparted(v));
+
+  upcoming.forEach(v => list.appendChild(buildCard(v, false)));
+
+  if(arrived.length){
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'margin:20px 2px 4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;';
+    hdr.textContent = `Arrived · in house (${arrived.length}) — tap a card to see its notes`;
+    list.appendChild(hdr);
+    arrived.forEach(v => list.appendChild(buildCard(v, true)));
+  }
+
+  if(departed.length){
+    const bar = document.createElement('div');
+    bar.style.cssText = 'margin:22px 2px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'font-size:0.72rem;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;';
+    hdr.textContent = `Checked out (${departed.length}) — kept until you clear them`;
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = `⬇ Export & clear these ${departed.length}`;
+    clearBtn.title = 'Downloads a file with all notes, then permanently removes these checked-out cards';
+    clearBtn.style.cssText = 'font-size:0.74rem;font-weight:700;color:#fff;background:#b91c1c;border:none;border-radius:8px;padding:5px 12px;cursor:pointer;';
+    clearBtn.addEventListener('click', _exportAndClear);
+    bar.appendChild(hdr); bar.appendChild(clearBtn);
+    list.appendChild(bar);
+    departed.forEach(v => list.appendChild(buildCard(v, true)));
+  }
+
   _updateProgress();
   _updateBusyBanner();
   _loadPropertyLinks();   // fill in 📅 calendar links once the cards exist
+}
+
+// Download every card's notes as a file, then (only on success) permanently
+// delete the checked-out cards. The download happens first so a copy is always
+// saved before anything is removed.
+async function _exportAndClear(){
+  const departed = VIP.filter(_isDeparted);
+  if(!departed.length) return;
+  if(!confirm(`This downloads a file with ALL current notes, then permanently deletes the ${departed.length} checked-out card${departed.length>1?'s':''} and their notes.\n\nContinue?`)) return;
+  try{
+    const r = await fetch('/vip/export');
+    if(!r.ok) throw new Error('export failed');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `vip-notes-${TODAY||'export'}.txt`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){
+    alert('Could not download the notes file — nothing was deleted. Check your connection and try again.');
+    return;
+  }
+  try{
+    const r = await fetch('/vip/clear-departed', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d = await r.json();
+    if(d && d.ok){
+      await _loadList(); _render();
+      _setSaveStatus(`✓ Exported, then cleared ${d.removed} checked-out card${d.removed===1?'':'s'}`);
+    } else {
+      alert((d && d.error) || 'Notes were downloaded, but the cards could not be cleared.');
+    }
+  }catch(e){ alert('Notes were downloaded, but the cards could not be cleared — check your connection.'); }
 }
 
 async function _loadList(){
@@ -495,6 +593,7 @@ async function _loadList(){
     const r = await fetch('/vip/list');
     const d = await r.json();
     VIP = d.list || [];
+    if(d.today) TODAY = d.today;
   }catch(e){ /* keep whatever we already have */ }
 }
 
@@ -523,12 +622,15 @@ async function init(){
     const [lr, sr, cr] = await Promise.all([fetch('/vip/list'), fetch('/vip/state'), fetch('/vip/comments')]);
     const [ld, sd, cd] = await Promise.all([lr.json(), sr.json(), cr.json()]);
     VIP = ld.list || [];
+    TODAY = ld.today || '';
     STATE = sd.state || {};
     COMMENTS = cd.comments || {};
   }catch(e){ STATE = STATE || {}; COMMENTS = COMMENTS || {}; }
   _render();
   const btn = document.getElementById('scanBtn');
   if(btn) btn.addEventListener('click', _scan);
+  const xbtn = document.getElementById('exportBtn');
+  if(xbtn) xbtn.addEventListener('click', () => { window.location = '/vip/export'; });
 }
 init();
 </script>

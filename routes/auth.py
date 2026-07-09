@@ -78,31 +78,15 @@ def logout():
 @auth_bp.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "POST":
-        email = (request.form.get("email") or "").strip().lower()
-        conn  = get_db()
-        cur   = get_cursor(conn)
-        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-        row = cur.fetchone()
-
-        if row:
-            token   = secrets.token_urlsafe(32)
-            expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
-            cur.execute(
-                "UPDATE users SET reset_token = %s, reset_token_expires = %s WHERE id = %s",
-                (token, expires, row["id"])
-            )
-            conn.commit()
-            cur.close(); conn.close()
-            reset_url = f"{APP_BASE_URL}/reset-password/{token}"
-            flash(
-                f"Reset link (expires in 1 hour): {reset_url}  —  "
-                f"Copy this link and open it in your browser, or ask your admin to send it to you.",
-                "info"
-            )
-            return redirect(url_for("auth.forgot_password"))
-
-        cur.close(); conn.close()
-        flash("No account found with that email address.", "error")
+        # The app sends no email. Password resets are done by an operations admin
+        # directly (Admin → Users → Reset password), which sets a new password
+        # without any emailed link. We show the same message regardless of whether
+        # the account exists, so this page never reveals who has an account.
+        flash(
+            "Password resets are handled by your administrator. Contact the "
+            "operations team and they'll set a new password for you.",
+            "info",
+        )
         return redirect(url_for("auth.forgot_password"))
 
     return render_template("forgot_password.html")

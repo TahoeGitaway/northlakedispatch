@@ -13,8 +13,9 @@ Endpoints:
 """
 
 from datetime import datetime, date as _date, timedelta as _td
+from zoneinfo import ZoneInfo
 
-from flask import Blueprint, render_template, request, jsonify
+from flask import Blueprint, render_template, request, jsonify, Response
 from flask_login import login_required, current_user
 
 from db import get_db, get_cursor
@@ -23,6 +24,15 @@ vip_bp = Blueprint("vip", __name__)
 
 # These reservations are all 2026 (the tracker's window).
 _VIP_YEAR = 2026
+
+# The business runs on Pacific time; collapse ("check-in passed") and the
+# after-checkout purge both key off the Pacific calendar day so a card isn't
+# collapsed or deleted early just because a server clock is in UTC.
+_PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+def _today_pacific():
+    return datetime.now(_PACIFIC).date()
 
 
 def _match_room_to_pid(room, prop_cache):
@@ -107,6 +117,33 @@ def _iso_to_md(iso):
         return iso or ""
 
 
+def _checkout_iso_of(checkin_iso, nights):
+    """Checkout date = check-in + nights. '' if it can't be computed."""
+    try:
+        return (_date.fromisoformat((checkin_iso or "")[:10]) + _td(days=int(nights or 0))).isoformat()
+    except Exception:
+        return ""
+
+
+def _purge_departed(cur):
+    """Permanently delete cards whose checkout is strictly before today (Pacific),
+    along with their notes (vip_comments) and inspected-state (vip_tracker).
+
+    Per Madeline's explicit choice: once a reservation is fully over, its tile is
+    removed for good — this is irreversible, and there is no email backup, so the
+    Export button is the way to keep a copy first. FAIL-SAFE: a row whose checkout
+    date can't be computed is NEVER deleted. Returns the purged item_keys."""
+    today = _today_pacific().isoformat()
+    cur.execute("SELECT item_key, checkin_iso, nights FROM vip_reservations")
+    gone = [r["item_key"] for r in cur.fetchall()
+            if (_checkout_iso_of(r["checkin_iso"], r["nights"]) or today) < today]
+    for k in gone:
+        cur.execute("DELETE FROM vip_comments     WHERE item_key = %s", (k,))
+        cur.execute("DELETE FROM vip_tracker      WHERE item_key = %s", (k,))
+        cur.execute("DELETE FROM vip_reservations WHERE item_key = %s", (k,))
+    return gone
+
+
 # The original 27 hand-curated cards. Migrated into vip_reservations ONCE under
 # these exact vip-NN keys so their inspected-state (vip_tracker) and notes
 # (vip_comments) — both keyed by item_key — stay attached.
@@ -181,7 +218,11 @@ def _ensure_seeded():
 @vip_bp.route("/vip/list")
 @login_required
 def vip_list():
-    """The saved list of VIP cards (active only), earliest check-in first."""
+    """The saved list of VIP cards (active only), earliest check-in first.
+    Nothing is deleted here — departed cards stay so the page can show them in a
+    'Checked out' section until the user exports + clears them. `today` and each
+    card's checkin/checkout ISO dates drive the upcoming / in-house / departed
+    grouping and collapse."""
     _ensure_seeded()
     conn = get_db()
     cur = get_cursor(conn)
@@ -197,8 +238,69 @@ def vip_list():
         "guests": r["guests"],   "total": r["total"],
         "blue":   bool(r["blue"]), "first": bool(r["first_booking"]),
         "source": r["source"],
+        "checkin_iso":  r["checkin_iso"],
+        "checkout_iso": _checkout_iso_of(r["checkin_iso"], r["nights"]),
     } for r in rows]
-    return jsonify({"list": out})
+    return jsonify({"list": out, "today": _today_pacific().isoformat()})
+
+
+@vip_bp.route("/vip/clear-departed", methods=["POST"])
+@login_required
+def vip_clear_departed():
+    """Permanently delete every checked-out card (checkout before today) and its
+    notes. Called by the 'Export & clear' button AFTER the notes file has been
+    downloaded, so a copy is always saved first."""
+    conn = get_db()
+    cur = get_cursor(conn)
+    gone = _purge_departed(cur)
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"ok": True, "removed": len(gone)})
+
+
+@vip_bp.route("/vip/export")
+@login_required
+def vip_export():
+    """Download every current VIP card and its notes as a plain-text file — a
+    dependency-free way to keep a copy of your work before departed cards are
+    auto-removed. Needs no email/SendGrid; the browser just downloads it."""
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("""SELECT item_key, room, guest, ci, co FROM vip_reservations
+                   WHERE active = 1 ORDER BY checkin_iso, item_key""")
+    cards = cur.fetchall()
+    cur.execute("SELECT item_key, author, body, created_at FROM vip_comments "
+                "ORDER BY created_at ASC")
+    comments = cur.fetchall()
+    cur.execute("SELECT item_key, notes FROM vip_tracker WHERE COALESCE(notes,'') <> ''")
+    legacy = cur.fetchall()
+    cur.close(); conn.close()
+
+    notes_by = {}
+    for r in legacy:
+        notes_by.setdefault(r["item_key"], []).append(("Earlier note", "", r["notes"]))
+    for c in comments:
+        notes_by.setdefault(c["item_key"], []).append(
+            (c["author"] or "?", (c["created_at"] or "")[:16].replace("T", " "), c["body"] or ""))
+
+    today = _today_pacific().isoformat()
+    lines = [f"VIP Arrivals — notes export ({today})", "=" * 60, ""]
+    for c in cards:
+        lines.append(f"{c['room']} — {c['guest']}   (CI {c['ci']} -> CO {c['co']})")
+        ns = notes_by.get(c["item_key"], [])
+        if not ns:
+            lines.append("    (no notes)")
+        for author, when, body in ns:
+            stamp = f" · {when}" if when else ""
+            lines.append(f"    [{author}{stamp}]")
+            for bl in (str(body).splitlines() or [""]):
+                lines.append(f"      {bl}")
+        lines.append("")
+
+    text = "\n".join(lines)
+    fname = f"vip-notes-{today}.txt"
+    return Response(text, mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @vip_bp.route("/vip/scan", methods=["POST"])
@@ -216,7 +318,8 @@ def vip_scan():
     if not token:
         return jsonify({"error": "Breezeway not configured."}), 503
 
-    today = _date.today()
+    today = _today_pacific()
+    today_iso = today.isoformat()
     lo = (today - _td(days=3)).isoformat()
     hi = (today + _td(days=21)).isoformat()
     _ensure_property_cache()
@@ -254,8 +357,10 @@ def vip_scan():
             continue
         if (dk_pid and dk_pid in seen) or dk_room in seen:
             continue          # two reservations, same house+day, in one scan
-        seen.add(dk_pid); seen.add(dk_room)
         co = (r.get("checkout_date") or "")[:10]
+        if co and co < today_iso:
+            continue          # already departed — don't add (it would just be purged)
+        seen.add(dk_pid); seen.add(dk_room)
         try:
             nts = (_date.fromisoformat(co) - _date.fromisoformat(iso)).days
         except Exception:

@@ -144,13 +144,19 @@
         if (!alerts.length) return;
         const banner = document.getElementById("priAlertBanner");
         banner.innerHTML = "";
+        const allKeys = alerts.map(a => a.item_key);
         const header = document.createElement("div");
         header.className = "flex items-center justify-between";
         header.innerHTML = `
           <span class="text-sm font-semibold text-red-800">
             ⚠️ PRI Action Required (${alerts.length} propert${alerts.length === 1 ? "y" : "ies"} in the next 3 days)
           </span>
-          <a href="/admin/pri-check" class="text-xs text-red-600 font-medium hover:underline">View all →</a>`;
+          <span class="flex items-center gap-3 flex-shrink-0">
+            <a href="/admin/pri-check" class="text-xs text-red-600 font-medium hover:underline">View all →</a>
+            <button onclick='snoozeAllPriAlerts(${JSON.stringify(allKeys)})'
+                    class="text-red-500 hover:text-red-700 font-bold text-base leading-none px-1"
+                    title="Snooze — hide this banner for the rest of today (it returns tomorrow until the PRIs are actually handled)">✕</button>
+          </span>`;
         banner.appendChild(header);
         alerts.forEach(a => {
           const row = document.createElement("div");
@@ -160,32 +166,31 @@
           const msg = a.alert_type === "needs_owner_next"
             ? `<strong>${a.property_name}</strong> — guest out ${co}, owner/block in ${nci} · <em>Add "Owner Next" tag in Breezeway</em>`
             : `<strong>${a.property_name}</strong> — guest out ${co}, no upcoming booking · <em>Create vacancy PRI manually</em>`;
-          row.innerHTML = `<span>${msg}</span>
-            <button onclick="dismissPriAlert('${a.item_key}', this.closest('div'))"
-                    class="flex-shrink-0 text-red-500 hover:text-red-700 font-bold text-base leading-none px-1"
-                    title="Snooze — hide this for the rest of today (it returns tomorrow until the PRI is actually handled)">✕</button>`;
+          row.innerHTML = `<span>${msg}</span>`;
           banner.appendChild(row);
         });
         banner.classList.remove("hidden");
       } catch {}
     })();
 
-    // The banner ✕ SNOOZES this alert until local midnight tonight — server-side,
-    // so it stays hidden across page navigations, reloads, and devices for the
-    // rest of the day. It is NOT a permanent dismissal: the alert returns tomorrow
-    // until the PRI is truly handled (mark it "✓ Done" on the PRI Check page for
-    // that). We remove the row optimistically so the banner clears instantly.
-    function dismissPriAlert(key, rowEl) {
-      rowEl.remove();
-      const banner = document.getElementById("priAlertBanner");
-      if (!banner.querySelector("[onclick]")) banner.classList.add("hidden");
+    // The banner ✕ SNOOZES every current alert until local midnight tonight —
+    // server-side, so the whole banner stays hidden across page navigations,
+    // reloads, and devices for the rest of the day. It is NOT a permanent
+    // dismissal: the alerts return tomorrow until the PRIs are truly handled
+    // (mark each "✓ Done" on the PRI Check page for that). We hide the banner
+    // optimistically so it clears instantly.
+    function snoozeAllPriAlerts(keys) {
+      document.getElementById("priAlertBanner").classList.add("hidden");
       const midnight = new Date();
       midnight.setHours(24, 0, 0, 0);  // next local midnight
-      fetch("/api/pri-alert/snooze", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ key, snooze_until: midnight.toISOString() }),
-      }).catch(() => {});
+      const until = midnight.toISOString();
+      (keys || []).forEach(key => {
+        fetch("/api/pri-alert/snooze", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ key, snooze_until: until }),
+        }).catch(() => {});
+      });
     }
     </script>
     {% endif %}
