@@ -1702,6 +1702,106 @@ def bw_task_probe():
     return jsonify(out)
 
 
+@dispatch_bp.route("/api/bw-task-history-probe")
+@login_required
+def bw_task_history_probe():
+    """Admin READ-ONLY diagnostic: discover what task-history / assignment-audit data
+    Breezeway's public API actually exposes, so we can honestly decide whether
+    "who added / who removed this from the list" (and WHEN) is feasible. Makes only
+    GET requests — writes nothing.
+
+    Usage: ?task_id=123   or   no args (auto-finds an assigned task; optional ?date=).
+
+    Read three things from the result:
+      1. task_detail.creation_related_fields — does the task itself carry created_by /
+         created_at, and is that CREATION (not who put it on this person's list)?
+      2. task_detail.assignments — does an assignment entry carry a date / assigner, i.e.
+         WHO added it to the list and WHEN (the thing we actually want)?
+      3. history_endpoints — does any /history|/audit|/activity|/events|/log endpoint
+         return 200 with real events? If all 404/403, "who removed it" is NOT feasible
+         via the public API and we won't promise it.
+    """
+    from routes.briefing import (_get_breezeway_token, _fetch_bw_endpoint,
+                                  _ensure_property_cache, _get_live_property_cache,
+                                  _get_live_ref_cache)
+    if not getattr(current_user, "is_admin", False):
+        return jsonify({"error": "admin only"}), 403
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+
+    out = {}
+    task_id = (request.args.get("task_id") or "").strip()
+
+    # Auto-find an assigned task if none given (same approach as /api/bw-task-probe) so
+    # nobody has to hunt for a task id just to run the probe.
+    if not task_id:
+        from concurrent.futures import ThreadPoolExecutor
+        from datetime import date as _date
+        _ensure_property_cache()
+        prop_cache = _get_live_property_cache()
+        ref_cache  = _get_live_ref_cache()
+        date_str   = (request.args.get("date") or _date.today().isoformat())[:10]
+        ref_ids    = [ref_cache.get(p) or str(p) for p in prop_cache]
+
+        def _tasks(ref_id):
+            r, _, status = _fetch_bw_endpoint(token, "/public/inventory/v1/task",
+                                              {"reference_property_id": ref_id,
+                                               "scheduled_date": f"{date_str},{date_str}"})
+            return (r or []) if status == 200 else []
+
+        found = None
+        with ThreadPoolExecutor(max_workers=25) as ex:
+            for tasks in ex.map(_tasks, ref_ids):
+                for t in (tasks or []):
+                    if t.get("assignments"):
+                        found = t
+                        break
+                if found:
+                    break
+        if not found:
+            return jsonify({"error": f"No assigned task found on {date_str}. "
+                                     "Pass ?task_id=<id>, or ?date=<a busy day>."})
+        out["auto_found"] = {"date": date_str, "task_id": found.get("id")}
+        task_id = str(found.get("id"))
+
+    # 1) Full task detail — surface any creation/assignment metadata already present.
+    detail, st = _bw_get_raw(token, f"/public/inventory/v1/task/{task_id}")
+    creation_fields, assignment_fields = {}, None
+    if isinstance(detail, dict):
+        for k in ("created_at", "created", "date_added", "added_at", "created_by",
+                  "creator", "added_by", "updated_at", "updated_by",
+                  "assigned_at", "assigned_by"):
+            if k in detail:
+                creation_fields[k] = detail.get(k)
+        assignment_fields = detail.get("assignments")
+    out["task_detail"] = {
+        "status":                  st,
+        "keys":                    list(detail.keys()) if isinstance(detail, dict) else None,
+        "creation_related_fields": creation_fields,
+        "assignments":             assignment_fields,
+    }
+
+    # 2) Candidate history/audit endpoints — report status + a small body sample for each,
+    #    so we can see definitively whether Breezeway exposes assignment history at all.
+    out["history_endpoints"] = {}
+    for path in (f"/public/inventory/v1/task/{task_id}/history",
+                 f"/public/inventory/v1/task/{task_id}/audit",
+                 f"/public/inventory/v1/task/{task_id}/activity",
+                 f"/public/inventory/v1/task/{task_id}/events",
+                 f"/public/inventory/v1/task/{task_id}/log"):
+        body, status = _bw_get_raw(token, path)
+        if isinstance(body, list):
+            sample = body[:3]
+        elif isinstance(body, dict):
+            sample = {k: body.get(k) for k in list(body.keys())[:8]}
+        else:
+            sample = body
+        out["history_endpoints"][path] = {"status": status, "sample": sample}
+
+    return jsonify(out)
+
+
 @dispatch_bp.route("/api/bw-assign-test")
 @login_required
 def bw_assign_test():
