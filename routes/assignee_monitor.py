@@ -2,19 +2,27 @@
 routes/assignee_monitor.py — Off-list assignee monitor.
 
 A passive safety scan: for ONE selected day, sweep every Breezeway task and flag
-any task assigned to someone who is NOT on the group-batcher allow-list — no matter
+any task assigned to someone the user has NOT ticked as "known" — no matter
 who/what made the assignment (the Task API itself, another tool, a person). This
-catches the original "Derek bug", where Breezeway assigned a task to someone who
+catches the original "off-list bug", where Breezeway assigned a task to someone who
 can never validly be assigned, even though it didn't come through our batcher.
 
-Scope: cleaning/housekeeping and vendor departments are EXCLUDED (they use rosters
-other than the maintenance allow-list). The excluded set is an editable keyword
-list, seeded with cleaning/housekeeping; add vendor departments from the page using
-the department breakdown it shows.
+Model (rebuilt 2026-07-10): the page shows the full Breezeway roster as checkboxes.
+Ticking a person marks them "known/expected" so their tasks never flag; anything
+assigned to an UNticked person flags. Matching is EXACT on the Breezeway person id
+(task assignment `assignee_id` vs. the ticked-person id set) — no name/fuzzy logic.
+The ticked set lives in `assignee_monitor_ignored_people` and is fully independent
+of the batcher's assignment_candidates allow-list (which guards task writes).
+
+Scope: cleaning/housekeeping and vendor departments are still EXCLUDED at the
+department level (they use rosters other than maintenance). That excluded keyword
+set is unchanged — editable from the page's department breakdown.
 
 Endpoints (admin only):
   GET  /admin/assignee-monitor                  — page
   POST /admin/assignee-monitor/scan             — scan one day (JSON)
+  GET  /admin/assignee-monitor/people           — full roster + ticked state
+  POST /admin/assignee-monitor/people/set        — tick/untick one person
   GET  /admin/assignee-monitor/ignored-depts    — current ignore keywords
   POST /admin/assignee-monitor/ignored-depts/add
   POST /admin/assignee-monitor/ignored-depts/remove
@@ -45,6 +53,63 @@ def _ignored_keywords() -> list:
         return [r["keyword"] for r in cur.fetchall()]
     finally:
         cur.close(); conn.rollback(); conn.close()
+
+
+def _ignored_people_map() -> dict:
+    """{person_id(int): name} of people ticked as 'known' — their tasks never flag."""
+    from db import get_db, get_cursor
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("SELECT person_id, name FROM assignee_monitor_ignored_people")
+        return {int(r["person_id"]): r["name"] for r in cur.fetchall()}
+    finally:
+        cur.close(); conn.rollback(); conn.close()
+
+
+# Full-roster cache, kept SEPARATE from the batcher's people cache so we never
+# leak hard-blocked names into the batcher's filtered roster (or vice-versa).
+_people_all_cache: dict = {"ts": 0.0, "data": []}
+
+
+def _fetch_all_people(token: str) -> list:
+    """Full active Breezeway roster [{id, name}], INCLUDING anyone the batcher
+    hard-blocks — the whole point of this monitor is to show them so their tasks
+    flag while unticked. Mirrors group_assign._fetch_people but without the
+    block filter, and uses its own cache."""
+    import requests
+    from routes.group_assign import BW_BASE, _results
+    if _people_all_cache["data"] and time.time() - _people_all_cache["ts"] < 3600:
+        return _people_all_cache["data"]
+    people, page, ok = [], 1, False
+    while page <= 10:
+        try:
+            r = requests.get(f"{BW_BASE}/public/inventory/v1/people",
+                             headers={"Authorization": f"JWT {token}"},
+                             params={"status": "active", "limit": 200, "page": page},
+                             timeout=20)
+        except Exception:
+            break
+        if not r.ok:
+            break
+        ok = True
+        items = _results(r.json())
+        for p in items:
+            if not isinstance(p, dict):
+                continue
+            pid  = p.get("id")
+            name = (p.get("name") or
+                    f"{p.get('first_name','').strip()} {p.get('last_name','').strip()}".strip() or
+                    p.get("email") or str(pid))
+            if pid is not None:
+                people.append({"id": pid, "name": name})
+        if len(items) < 200:
+            break
+        page += 1
+    people.sort(key=lambda x: x["name"].lower())
+    if ok:   # never cache a transient failure as an empty roster
+        _people_all_cache["ts"] = time.time()
+        _people_all_cache["data"] = people
+    return people
 
 
 def _dept_of(task: dict) -> str:
@@ -118,7 +183,6 @@ def assignee_monitor_page():
 def assignee_monitor_scan():
     from routes.briefing import _get_breezeway_token, _get_property_name
     from routes.dispatch import _bw_task_title
-    from routes.group_assign import _assignee_names, _is_candidate, _candidate_keys
 
     token = _get_breezeway_token()
     if not token:
@@ -131,8 +195,8 @@ def assignee_monitor_scan():
     if all_tasks is None:
         return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
 
-    ignored   = [k.lower() for k in _ignored_keywords()]
-    cand_keys = _candidate_keys()
+    ignored     = [k.lower() for k in _ignored_keywords()]
+    ignored_ids = set(_ignored_people_map())   # person ids ticked as "known"
 
     violations  = []
     dept_counts = {}        # department -> {checked, excluded} so she can tune the ignore list
@@ -155,8 +219,22 @@ def assignee_monitor_scan():
         bucket["checked"] += 1
         checked += 1
 
-        names   = _assignee_names(t)
-        offlist = [n for n in names if not _is_candidate(n, cand_keys)]
+        # Each assignment carries assignee_id (the Breezeway person id) + a name.
+        # A person is "known" only if their EXACT id is ticked. A missing id can't
+        # be matched to the ignore list, so it flags — surfacing it rather than
+        # silently passing an unidentifiable assignee.
+        assigns = []
+        for a in (t.get("assignments") or []):
+            nm = (a.get("name") or
+                  f"{a.get('first_name','').strip()} {a.get('last_name','').strip()}".strip())
+            try:
+                pid = int(a.get("assignee_id"))
+            except (TypeError, ValueError):
+                pid = None   # unidentifiable assignee → can't be "known" → flags
+            assigns.append((pid, nm))
+        names   = [nm for _, nm in assigns if nm]
+        offlist = [(nm or f"person #{pid}") for pid, nm in assigns
+                   if pid not in ignored_ids]
         if not offlist:
             continue
         home_id = t.get("home_id") or t.get("property_id")
@@ -179,9 +257,67 @@ def assignee_monitor_scan():
         "total_tasks":    len(seen),
         "dept_counts":    dept_counts,
         "ignored":        _ignored_keywords(),
+        "known_count":    len(ignored_ids),
         "failed_properties":  failed,
         "scanned_properties": scanned,
     })
+
+
+# ── Known-people ("tick to ignore") management ────────────────────
+
+@assignee_monitor_bp.route("/admin/assignee-monitor/people", methods=["GET"])
+@login_required
+@admin_required
+def assignee_monitor_people():
+    """Full roster with a per-person `ignored` flag (True = ticked as known)."""
+    from routes.briefing import _get_breezeway_token
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."}), 500
+
+    roster    = _fetch_all_people(token)
+    ticked    = _ignored_people_map()          # {id: name}
+    known_ids = set(ticked)
+
+    people = [{"id": p["id"], "name": p["name"], "ignored": p["id"] in known_ids}
+              for p in roster]
+    # Surface ticked people who have left the active roster, so they can still be
+    # unticked instead of lingering invisibly in the DB (and silently ignored).
+    roster_ids = {p["id"] for p in roster}
+    for pid in known_ids - roster_ids:
+        people.append({"id": pid, "name": ticked.get(pid) or f"person #{pid}",
+                       "ignored": True, "inactive": True})
+    people.sort(key=lambda x: (x["name"] or "").lower())
+    return jsonify({"people": people, "known_count": len(known_ids)})
+
+
+@assignee_monitor_bp.route("/admin/assignee-monitor/people/set", methods=["POST"])
+@login_required
+@admin_required
+def assignee_monitor_people_set():
+    from db import get_db, get_cursor
+    body = request.get_json(silent=True) or {}
+    try:
+        pid = int(body.get("person_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "A valid person_id is required."}), 400
+    ignored = bool(body.get("ignored"))
+    name    = (body.get("name") or "").strip() or None
+
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        if ignored:
+            cur.execute(
+                "INSERT INTO assignee_monitor_ignored_people (person_id, name, created_at, created_by) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (person_id) DO UPDATE SET name = EXCLUDED.name",
+                (pid, name, datetime.utcnow().isoformat(), current_user.id))
+        else:
+            cur.execute("DELETE FROM assignee_monitor_ignored_people WHERE person_id = %s", (pid,))
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    return jsonify({"ok": True, "known_count": len(_ignored_people_map())})
 
 
 # ── Ignored-department keyword management ─────────────────────────

@@ -382,6 +382,22 @@ def init_db():
                 (_kw, _now),
             )
 
+    # Off-list-assignee monitor: PER-PERSON ignore list. The monitor page shows the
+    # full Breezeway roster as checkboxes; a ticked person is "known / expected" and
+    # their tasks never flag. Anything assigned to an UNticked person is flagged.
+    # Keyed on the Breezeway person id, matched exactly against a task assignment's
+    # assignee_id — no name or fuzzy matching. Deliberately INDEPENDENT of the
+    # batcher's assignment_candidates allow-list (that one guards task WRITES and
+    # must stay separate from this passive read-only monitor). Seeded empty: until
+    # the user ticks her crew, every assignee flags — the correct
+    # catch-everything-by-default posture.
+    cur.execute("""CREATE TABLE IF NOT EXISTS assignee_monitor_ignored_people (
+        person_id   BIGINT PRIMARY KEY,
+        name        TEXT,
+        created_at  TEXT NOT NULL,
+        created_by  INTEGER REFERENCES users(id)
+    )""")
+
     # Hot Tub Billing — durable storage so nothing is lost when the host wipes
     # the ephemeral filesystem on deploy/restart. `hot_tub_worksheets` holds each
     # month's read-only scan output (JSON); `hot_tub_overrides` holds Madeline's

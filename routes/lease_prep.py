@@ -161,6 +161,83 @@ def _safe_str(val) -> str:
     return str(val).lower().strip()
 
 
+def _guest_from_reservation(r: dict) -> str:
+    """Best-effort guest name. Prefers the `guests` list (where Breezeway
+    actually stores it), then falls back to flat fields."""
+    for g in (r.get("guests") or []):
+        if isinstance(g, dict):
+            name = f"{g.get('first_name','').strip()} {g.get('last_name','').strip()}".strip()
+            if name:
+                return name
+            if g.get("name"):
+                return str(g["name"]).strip()
+    guest_raw = (r.get("guest_name") or r.get("primary_guest") or r.get("name") or "")
+    if isinstance(guest_raw, dict):
+        return str(guest_raw.get("name") or
+                   f"{guest_raw.get('first_name','')} {guest_raw.get('last_name','')}".strip()).strip()
+    return str(guest_raw).strip()
+
+
+def _first(r: dict, *keys):
+    """Return the first present, non-empty value among keys (top-level)."""
+    for k in keys:
+        v = r.get(k)
+        if v not in (None, "", [], {}):
+            return v
+    return None
+
+
+def _reservation_info(r: dict) -> list:
+    """Best-effort list of {label, value} facts about a reservation.
+
+    Breezeway's reservation object varies by channel, so every field is
+    optional — we only emit rows that are actually present. This is what
+    powers the "more info" block; add promotions here as fields surface.
+    """
+    info = []
+
+    def add(label, value):
+        if value not in (None, "", [], {}):
+            info.append({"label": label, "value": str(value)})
+
+    # Reservation type / status
+    ts = r.get("type_stay")
+    tr = r.get("type_reservation")
+    add("Stay type", (ts.get("name") if isinstance(ts, dict) else ts))
+    add("Reservation type", (tr.get("name") if isinstance(tr, dict) else tr))
+    add("Status", _first(r, "status", "reservation_status", "state"))
+
+    # Contact — from the first guest record, then flat fallbacks
+    guest = (r.get("guests") or [{}])
+    g0 = guest[0] if guest and isinstance(guest[0], dict) else {}
+    add("Email", g0.get("email") or _first(r, "guest_email", "email"))
+    add("Phone", g0.get("phone") or g0.get("phone_number") or
+                 _first(r, "guest_phone", "phone", "phone_number"))
+
+    # Party size
+    add("Guests", _first(r, "number_guests", "num_guests", "guests_count",
+                         "total_guests", "occupancy"))
+    add("Adults", _first(r, "adults", "num_adults"))
+    add("Children", _first(r, "children", "num_children"))
+    add("Pets", _first(r, "pets", "num_pets"))
+
+    # Booking provenance
+    add("Booked / created", _first(r, "created_at", "created", "date_created",
+                                   "booked_at", "date_booked", "reservation_date"))
+    add("Last updated", _first(r, "updated_at", "modified_at", "date_updated"))
+    add("Source / channel", _first(r, "source", "channel", "booking_source",
+                                   "origin", "booking_channel"))
+    add("Confirmation #", _first(r, "confirmation_code", "confirmation_number",
+                                 "reference_id", "external_reservation_id",
+                                 "external_id"))
+
+    # Check-in/out times (dates already shown in the header)
+    add("Check-in time", _first(r, "checkin_time", "check_in_time"))
+    add("Check-out time", _first(r, "checkout_time", "check_out_time"))
+
+    return info
+
+
 def _fmt_task(t: dict) -> dict:
     """Normalize a raw Breezeway task into a clean dict for the frontend."""
     title = t.get("title") or t.get("name") or ""
@@ -400,13 +477,7 @@ def _lease_prep_scan_inner(mode="pre"):
             pid      = str(reservation.get("property_id") or reservation.get("home_id") or "")
             checkin  = str(reservation.get("checkin_date")  or "")[:10]
             checkout = str(reservation.get("checkout_date") or "")[:10]
-            guest_raw = (reservation.get("guest_name") or reservation.get("primary_guest") or
-                         reservation.get("name") or "")
-            if isinstance(guest_raw, dict):
-                guest = str(guest_raw.get("name") or
-                            f"{guest_raw.get('first_name','')} {guest_raw.get('last_name','')}".strip())
-            else:
-                guest = str(guest_raw)
+            guest = _guest_from_reservation(reservation)
             try:
                 nights = (date.fromisoformat(checkout) - date.fromisoformat(checkin)).days
             except ValueError:
@@ -432,6 +503,8 @@ def _lease_prep_scan_inner(mode="pre"):
                 "nights":      nights,
                 "guest":       guest,
                 "has_hot_tub": has_hot_tub,
+                "info":        _reservation_info(reservation),
+                "raw":         reservation,
                 "tasks":       fmt_tasks,
             })
         except Exception as e:

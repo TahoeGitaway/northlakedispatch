@@ -6,15 +6,15 @@
   <div class="mb-4">
     <h2 class="text-xl font-bold text-gray-800">Off-List Assignee Monitor</h2>
     <p class="text-xs text-gray-400 mt-0.5">
-      Scans the selected day's Breezeway tasks and flags any assigned to someone <strong>not on the assignment allow-list</strong> — no matter who or what assigned them.
+      Scans the selected day's Breezeway tasks and flags any assigned to someone you haven't <strong>ticked as known</strong> — no matter who or what assigned them.
     </p>
   </div>
 
   <div class="rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 mb-5 text-xs text-rose-900 space-y-1.5 leading-relaxed">
-    <div class="font-semibold text-rose-800 flex items-center gap-2"><span>🛡️</span> What this catches</div>
+    <div class="font-semibold text-rose-800 flex items-center gap-2"><span>🛡️</span> How it works</div>
     <ul class="space-y-1.5 text-rose-800 list-none pl-1">
-      <li class="flex gap-2"><span class="shrink-0">•</span><span>A task assigned to anyone not on the allow-list (managed on the Assign-by-Group page) — including the Task API assigning someone like Derek directly in Breezeway.</span></li>
-      <li class="flex gap-2"><span class="shrink-0">•</span><span><strong>Cleaning, housekeeping &amp; vendor departments are excluded</strong> (they use other rosters). Tune that list below using the department breakdown.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span>Open <strong>Known people</strong> below and tick everyone whose tasks are expected. Ticked people's tasks are ignored; anything assigned to someone <strong>unticked</strong> gets flagged — including the Task API assigning someone directly in Breezeway.</span></li>
+      <li class="flex gap-2"><span class="shrink-0">•</span><span>Start empty means everyone flags — tick your regular crew once and it settles down.</span></li>
     </ul>
   </div>
 
@@ -27,6 +27,28 @@
       Scan
     </button>
     <span id="subtitle" class="text-xs text-gray-400"></span>
+  </div>
+
+  <!-- Known people (tick to ignore their tasks) -->
+  <div class="mb-5 border border-gray-200 rounded-xl">
+    <button type="button" onclick="togglePeople()"
+            class="w-full flex items-center gap-2 px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded-xl">
+      <span id="pplCaret">▸</span> Known people
+      <span id="pplBadge" class="ml-1 text-xs font-normal text-gray-400"></span>
+    </button>
+    <div id="peoplePanel" class="hidden px-4 pb-4">
+      <p class="text-xs text-gray-400 mb-3">
+        Tick anyone whose tasks are expected — their tasks never flag. Anything assigned to an
+        unticked person is flagged. Changes save instantly; rescan to apply.
+      </p>
+      <div class="flex items-center gap-2 mb-3">
+        <input id="pplFilter" placeholder="Filter names…" oninput="renderPeople()"
+               class="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-rose-300 outline-none">
+        <span id="pplCount" class="text-xs text-gray-400 whitespace-nowrap"></span>
+      </div>
+      <div id="peopleLoading" class="text-xs text-gray-400 italic py-4 text-center">Loading roster…</div>
+      <div id="peopleList" class="grid sm:grid-cols-2 gap-x-6 gap-y-0.5 max-h-80 overflow-y-auto"></div>
+    </div>
   </div>
 
   <div id="loading" class="hidden flex items-center gap-3 py-12 text-gray-400 justify-center">
@@ -121,15 +143,21 @@ function renderResults(data){
   if (data.failed_properties) sub += ` · ⚠ ${data.failed_properties} propert${data.failed_properties===1?'y':'ies'} couldn't load (rescan)`;
   document.getElementById('subtitle').textContent = sub;
 
+  // Reflect the ticked count in the panel badge even before it's opened.
+  if (PEOPLE == null && typeof data.known_count === 'number'){
+    document.getElementById('pplBadge').textContent =
+      data.known_count ? `· ${data.known_count} ticked as known` : '· none ticked yet — everyone flags';
+  }
+
   const el = document.getElementById('results');
   el.innerHTML = '';
   if (!v.length){
     el.innerHTML = `<div class="text-center text-emerald-600 text-sm py-10 italic">
-      ✓ No off-list assignees found this day. Everyone assigned is on the allow-list.</div>`;
+      ✓ No off-list assignees found this day. Everyone assigned is ticked as known.</div>`;
   } else {
     const hd = document.createElement('div');
     hd.style.cssText = 'font-size:0.8rem;font-weight:800;color:#b91c1c;';
-    hd.textContent = `🚨 ${v.length} task${v.length===1?'':'s'} assigned to someone OFF the allow-list`;
+    hd.textContent = `🚨 ${v.length} task${v.length===1?'':'s'} assigned to someone not ticked as known`;
     el.appendChild(hd);
     v.forEach(it => {
       const card = document.createElement('div');
@@ -228,6 +256,79 @@ function toggleDepts(){
   const open = p.classList.contains('hidden');
   p.classList.toggle('hidden');
   document.getElementById('deptCaret').textContent = open ? '▾' : '▸';
+}
+
+// ── Known people (tick to ignore) ──────────────────────────────
+let PEOPLE = null;   // null = not loaded yet
+
+function _updatePplBadge(){
+  const b = document.getElementById('pplBadge');
+  if (PEOPLE == null) return;
+  const n = PEOPLE.filter(p => p.ignored).length;
+  b.textContent = n ? `· ${n} ticked as known` : '· none ticked yet — everyone flags';
+}
+
+function togglePeople(){
+  const p = document.getElementById('peoplePanel');
+  const opening = p.classList.contains('hidden');
+  p.classList.toggle('hidden');
+  document.getElementById('pplCaret').textContent = opening ? '▾' : '▸';
+  if (opening && PEOPLE == null) loadPeople();
+}
+
+async function loadPeople(){
+  document.getElementById('peopleLoading').classList.remove('hidden');
+  try {
+    const r = await fetch('/admin/assignee-monitor/people');
+    const d = await r.json();
+    document.getElementById('peopleLoading').classList.add('hidden');
+    if (d.error){ document.getElementById('peopleList').innerHTML =
+      `<div class="text-xs text-red-600">${esc(d.error)}</div>`; return; }
+    PEOPLE = d.people || [];
+    renderPeople();
+  } catch(e){
+    document.getElementById('peopleLoading').textContent = 'Could not load roster: ' + e.message;
+  }
+}
+
+function renderPeople(){
+  if (PEOPLE == null) return;
+  const q  = (document.getElementById('pplFilter').value || '').toLowerCase();
+  const el = document.getElementById('peopleList');
+  const shown = PEOPLE.filter(p => !q || (p.name || '').toLowerCase().includes(q));
+  document.getElementById('pplCount').textContent =
+    `${PEOPLE.filter(p=>p.ignored).length} / ${PEOPLE.length} ticked`;
+  el.innerHTML = '';
+  if (!shown.length){ el.innerHTML = `<div class="text-xs text-gray-400 italic">No names match.</div>`; }
+  shown.forEach(p => {
+    const row = document.createElement('label');
+    row.className = 'flex items-center gap-2 text-sm py-0.5 cursor-pointer';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !!p.ignored;
+    cb.className = 'accent-rose-600';
+    cb.onchange = () => togglePerson(p, cb);
+    const span = document.createElement('span');
+    span.className = p.inactive ? 'text-gray-400 italic' : 'text-gray-700';
+    span.textContent = p.name + (p.inactive ? ' (inactive)' : '');
+    row.appendChild(cb); row.appendChild(span);
+    el.appendChild(row);
+  });
+  _updatePplBadge();
+}
+
+async function togglePerson(p, cb){
+  const want = cb.checked;
+  try {
+    const r = await fetch('/admin/assignee-monitor/people/set', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ person_id: p.id, name: p.name, ignored: want }),
+    });
+    if (!r.ok){ cb.checked = !want; return; }
+    p.ignored = want;
+    document.getElementById('pplCount').textContent =
+      `${PEOPLE.filter(x=>x.ignored).length} / ${PEOPLE.length} ticked`;
+    _updatePplBadge();
+  } catch(e){ cb.checked = !want; }
 }
 
 (function init(){

@@ -95,7 +95,17 @@ const MODE = {
 };
 
 function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// "📅 calendar ↗" link to a property's Breezeway calendar, matching the style
+// used elsewhere in the app. Returns '' when we don't have the property id.
+function _calLink(name, pid){
+  if(!pid) return '';
+  return `<a href="https://app.breezeway.io/property/${esc(pid)}/calendar" target="_blank" rel="noopener"
+             style="color:#6366f1;font-size:0.72rem;font-weight:600;text-decoration:none;white-space:nowrap;margin-left:8px;"
+             onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'"
+             title="Open ${esc(name)}'s calendar in Breezeway">📅 calendar ↗</a>`;
 }
 
 function _fmtDate(ds) {
@@ -144,11 +154,31 @@ function buildLeaseCard(lease) {
   const secondaryLine = currentMode === 'post'
     ? `Arrival ${_fmtDate(lease.checkin)}`
     : `Checkout ${_fmtDate(lease.checkout)}`;
+  // "More info" grid — best-effort reservation facts, only what's present.
+  const info = lease.info || [];
+  const infoGrid = info.length ? `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px 18px;margin-top:10px;">
+      ${info.map(f => `<div style="font-size:0.75rem;color:#6b7280;">
+          <span style="color:#9ca3af;">${esc(f.label)}:</span>
+          <span style="color:#374151;font-weight:600;">${esc(f.value)}</span>
+        </div>`).join('')}
+    </div>` : '';
+
+  // Collapsible raw reservation — so anything not promoted above is still visible.
+  const rawJson = lease.raw ? JSON.stringify(lease.raw, null, 2) : '';
+  const rawBlock = rawJson ? `
+    <details style="margin-top:10px;">
+      <summary style="font-size:0.72rem;color:#9ca3af;cursor:pointer;">Raw reservation data ↓</summary>
+      <pre style="font-size:0.68rem;color:#6b7280;background:#f9fafb;border:1px solid #eef0f3;border-radius:8px;padding:10px;margin-top:6px;max-height:320px;overflow:auto;white-space:pre-wrap;">${esc(rawJson)}</pre>
+    </details>` : '';
+
   card.innerHTML = `
     <div style="background:#f8f7ff;padding:14px 18px;border-bottom:1px solid #e5e7eb;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-        <div>
-          <div style="font-weight:700;font-size:1rem;color:#1f2937;">${esc(lease.property)}</div>
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:1rem;color:#1f2937;">
+            ${esc(lease.property)}${_calLink(lease.property, lease.pid)}
+          </div>
           <div style="font-size:0.8rem;color:#6b7280;margin-top:3px;">
             ${primaryLine}
           </div>
@@ -158,6 +188,8 @@ function buildLeaseCard(lease) {
           <div style="font-size:0.78rem;color:#6b7280;margin-top:4px;">
             House has hot tub? ${hotTub}
           </div>
+          ${infoGrid}
+          ${rawBlock}
         </div>
         <div style="flex-shrink:0;text-align:right;">
           <span style="font-size:0.75rem;font-weight:600;padding:3px 10px;border-radius:99px;background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;">
