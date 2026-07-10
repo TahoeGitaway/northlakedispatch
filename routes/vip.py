@@ -258,16 +258,22 @@ def vip_clear_departed():
     return jsonify({"ok": True, "removed": len(gone)})
 
 
+def _html_escape(s):
+    return (str(s if s is not None else "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
 @vip_bp.route("/vip/export")
 @login_required
 def vip_export():
-    """Download every current VIP card and its notes as a plain-text file — a
-    dependency-free way to keep a copy of your work before departed cards are
-    auto-removed. Needs no email/SendGrid; the browser just downloads it."""
+    """Download every current VIP card and its notes as a styled HTML document —
+    open it and print to PDF for a clean, shareable record. Dependency-free (the
+    browser handles PDF), so it keeps a copy of your work before cards are cleared."""
     conn = get_db()
     cur = get_cursor(conn)
-    cur.execute("""SELECT item_key, room, guest, ci, co FROM vip_reservations
-                   WHERE active = 1 ORDER BY checkin_iso, item_key""")
+    cur.execute("""SELECT item_key, room, guest, ci, co, nights, guests, total
+                   FROM vip_reservations WHERE active = 1
+                   ORDER BY checkin_iso, item_key""")
     cards = cur.fetchall()
     cur.execute("SELECT item_key, author, body, created_at FROM vip_comments "
                 "ORDER BY created_at ASC")
@@ -283,23 +289,77 @@ def vip_export():
         notes_by.setdefault(c["item_key"], []).append(
             (c["author"] or "?", (c["created_at"] or "")[:16].replace("T", " "), c["body"] or ""))
 
+    e = _html_escape
     today = _today_pacific().isoformat()
-    lines = [f"VIP Arrivals — notes export ({today})", "=" * 60, ""]
-    for c in cards:
-        lines.append(f"{c['room']} — {c['guest']}   (CI {c['ci']} -> CO {c['co']})")
-        ns = notes_by.get(c["item_key"], [])
-        if not ns:
-            lines.append("    (no notes)")
-        for author, when, body in ns:
-            stamp = f" · {when}" if when else ""
-            lines.append(f"    [{author}{stamp}]")
-            for bl in (str(body).splitlines() or [""]):
-                lines.append(f"      {bl}")
-        lines.append("")
+    total_notes = sum(len(v) for v in notes_by.values())
 
-    text = "\n".join(lines)
-    fname = f"vip-notes-{today}.txt"
-    return Response(text, mimetype="text/plain; charset=utf-8",
+    blocks = []
+    for c in cards:
+        meta_bits = [b for b in [
+            e(c["total"]) if c.get("total") else "",
+            f"CI {e(c['ci'])} → CO {e(c['co'])}",
+            f"{c['nights']} nights" if c.get("nights") else "",
+            f"👥 {e(c['guests'])}" if c.get("guests") else "",
+        ] if b]
+        notes = notes_by.get(c["item_key"], [])
+        if notes:
+            note_html = "".join(
+                f'<div class="note"><div class="who">{e(author)}'
+                + (f'<span class="when"> · {e(when)}</span>' if when else "")
+                + f'</div><div class="body">{e(body)}</div></div>'
+                for author, when, body in notes)
+        else:
+            note_html = '<div class="nonotes">No notes.</div>'
+        blocks.append(
+            '<section class="card">'
+            f'<div class="room">{e(c["room"])}</div>'
+            f'<div class="guest">{e(c["guest"])}</div>'
+            f'<div class="meta">{" &nbsp;·&nbsp; ".join(meta_bits)}</div>'
+            f'{note_html}</section>')
+
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VIP Arrivals — Notes ({e(today)})</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+         color: #1f2937; background: #f3f4f6; margin: 0; padding: 28px 16px; }}
+  .sheet {{ max-width: 820px; margin: 0 auto; }}
+  header.top {{ margin-bottom: 22px; }}
+  h1 {{ font-size: 22px; margin: 0 0 3px; }}
+  .sub {{ color: #6b7280; font-size: 13px; }}
+  .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+          padding: 15px 18px; margin-bottom: 14px; }}
+  .room {{ font-weight: 700; font-size: 16px; color: #111827; }}
+  .guest {{ font-size: 13.5px; color: #374151; margin-top: 1px; }}
+  .meta {{ font-size: 12.5px; color: #6b7280; margin: 3px 0 11px; }}
+  .note {{ background: #f9fafb; border: 1px solid #eef2f7; border-radius: 8px;
+          padding: 8px 11px; margin-bottom: 6px; }}
+  .who {{ font-size: 12px; font-weight: 700; color: #374151; }}
+  .when {{ font-weight: 400; color: #9ca3af; }}
+  .body {{ font-size: 13.5px; color: #1f2937; white-space: pre-wrap;
+          word-break: break-word; margin-top: 2px; }}
+  .nonotes {{ font-size: 12.5px; color: #cbd5e1; font-style: italic; }}
+  @media print {{
+    body {{ background: #fff; padding: 0; }}
+    .card {{ break-inside: avoid; border-color: #d1d5db; }}
+    .hint {{ display: none; }}
+  }}
+  .hint {{ margin: 4px 0 18px; font-size: 12px; color: #9ca3af; }}
+</style></head><body>
+<div class="sheet">
+  <header class="top">
+    <h1>⭐ VIP Arrivals — Notes</h1>
+    <div class="sub">Exported {e(today)} · {len(cards)} reservations · {total_notes} notes</div>
+    <div class="hint">Tip: press Ctrl/Cmd&nbsp;+&nbsp;P and choose “Save as PDF” for a clean PDF copy.</div>
+  </header>
+  {"".join(blocks) if blocks else '<p class="sub">No reservations to export.</p>'}
+</div>
+</body></html>"""
+
+    fname = f"vip-notes-{today}.html"
+    return Response(html, mimetype="text/html; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 

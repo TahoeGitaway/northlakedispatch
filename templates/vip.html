@@ -21,6 +21,7 @@
         ⬇ Export notes</button>
       <span id="scanStatus" class="text-sm text-gray-500"></span>
     </div>
+    <div id="departedTop" class="mt-2"></div>
     <div id="busyBanner" class="mt-3 rounded-xl px-4 py-2.5 text-sm"
          style="display:none;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;"></div>
   </div>
@@ -81,6 +82,20 @@ let STATE = {};      // item_key -> {done}
 let COMMENTS = {};   // item_key -> [{id, author, author_id, body, created_at}]
 let EDITING = null;  // comment id currently being edited (one at a time)
 let TODAY = '';      // server's Pacific date (YYYY-MM-DD) — upcoming vs arrived cutoff
+
+// Per-card minimize preference, remembered in THIS browser. null → use the
+// default for the card's date group (upcoming open, in-house/checked-out closed).
+function _collapsePref(key){
+  try{ const m = JSON.parse(localStorage.getItem('vipCollapse')||'{}'); return (key in m) ? !!m[key] : null; }
+  catch(e){ return null; }
+}
+function _setCollapsePref(key, val){
+  let m = {};
+  try{ m = JSON.parse(localStorage.getItem('vipCollapse')||'{}'); }catch(e){}
+  m[key] = !!val;
+  try{ localStorage.setItem('vipCollapse', JSON.stringify(m)); }catch(e){}
+}
+function _effCollapsed(v, def){ const p = _collapsePref(v.key); return p === null ? def : p; }
 
 function _setSaveStatus(t){ document.getElementById('saveStatus').textContent = t; }
 
@@ -288,9 +303,10 @@ function buildCard(v, collapsed){
           <span style="font-weight:700;font-size:0.95rem;color:${v.blue?'#1e40af':'#1f2937'};">${esc(v.room)}</span>
           <span class="vip-cal" data-room="${esc(v.room)}"></span>
           ${badges}
-          ${collapsed ? `<button class="vip-collapse" title="Expand" style="margin-left:auto;flex-shrink:0;font-size:0.8rem;color:#6b7280;background:none;border:none;cursor:pointer;line-height:1;padding:0 4px;">▸</button>` : ''}
+          <button class="vip-collapse" title="Minimize / expand"
+            style="margin-left:auto;flex-shrink:0;font-size:0.8rem;color:#6b7280;background:none;border:none;cursor:pointer;line-height:1;padding:0 4px;">${collapsed?'▸':'▾'}</button>
           <button class="vip-remove" data-key="${esc(v.key)}" title="Remove from VIP list"
-            style="${collapsed?'':'margin-left:auto;'}flex-shrink:0;font-size:0.95rem;color:#cbd5e1;background:none;border:none;cursor:pointer;line-height:1;padding:0 2px;">✕</button>
+            style="flex-shrink:0;font-size:0.95rem;color:#cbd5e1;background:none;border:none;cursor:pointer;line-height:1;padding:0 2px;">✕</button>
         </div>
         <div class="vip-summary" style="${collapsed?'':'display:none;'}font-size:0.76rem;color:#6b7280;margin-top:3px;cursor:pointer;">
           ${esc(v.name)} · 🛬 ${esc(v.ci)} → 🛫 ${esc(v.co)}${nNotes?` · 📝 ${nNotes} note${nNotes>1?'s':''}`:''}<span style="color:#a5b4fc;font-weight:600;"> · tap to expand</span>
@@ -349,10 +365,11 @@ function buildCard(v, collapsed){
   const summaryEl = card.querySelector('.vip-summary');
   const chevBtn   = card.querySelector('.vip-collapse');
   const _toggle = () => {
-    const hidden = bodyEl.style.display === 'none';
+    const hidden = bodyEl.style.display === 'none';   // currently minimized → expanding
     bodyEl.style.display = hidden ? '' : 'none';
     if (summaryEl) summaryEl.style.display = hidden ? 'none' : '';
     if (chevBtn)   chevBtn.textContent = hidden ? '▾' : '▸';
+    _setCollapsePref(v.key, !hidden);                 // remember it for next time
   };
   if (chevBtn)   chevBtn.addEventListener('click', _toggle);
   if (summaryEl) summaryEl.addEventListener('click', _toggle);
@@ -514,6 +531,8 @@ function _updateBusyBanner(){
 function _render(){
   const list = document.getElementById('list');
   list.innerHTML = '';
+  const topBar = document.getElementById('departedTop');
+  if(topBar) topBar.innerHTML = '';
   if(!VIP.length){
     list.innerHTML = `<div style="text-align:center;color:#9ca3af;font-size:0.85rem;padding:28px 0;">No VIP reservations yet — tap <strong>Scan Breezeway</strong> above to pull in VIP-tagged arrivals.</div>`;
     _updateProgress(); _updateBusyBanner(); return;
@@ -525,14 +544,26 @@ function _render(){
   const departed = VIP.filter(v => _isDeparted(v));
   const arrived  = VIP.filter(v => !_isUpcoming(v) && !_isDeparted(v));
 
-  upcoming.forEach(v => list.appendChild(buildCard(v, false)));
+  // Prominent, always-visible control at the top when anything has checked out.
+  if(topBar && departed.length){
+    const b = document.createElement('button');
+    b.textContent = `⬇ Export & clear ${departed.length} checked-out reservation${departed.length>1?'s':''}`;
+    b.title = 'Downloads a file with all notes, then permanently removes the checked-out cards (listed at the bottom)';
+    b.style.cssText = 'font-size:0.8rem;font-weight:700;color:#fff;background:#b91c1c;border:none;border-radius:10px;padding:7px 14px;cursor:pointer;';
+    b.addEventListener('click', _exportAndClear);
+    topBar.appendChild(b);
+  }
+
+  // Default: upcoming open, in-house/checked-out minimized — but a per-card
+  // preference (the chevron) overrides the default and is remembered.
+  upcoming.forEach(v => list.appendChild(buildCard(v, _effCollapsed(v, false))));
 
   if(arrived.length){
     const hdr = document.createElement('div');
     hdr.style.cssText = 'margin:20px 2px 4px;font-size:0.72rem;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;';
     hdr.textContent = `Arrived · in house (${arrived.length}) — tap a card to see its notes`;
     list.appendChild(hdr);
-    arrived.forEach(v => list.appendChild(buildCard(v, true)));
+    arrived.forEach(v => list.appendChild(buildCard(v, _effCollapsed(v, true))));
   }
 
   if(departed.length){
@@ -548,7 +579,7 @@ function _render(){
     clearBtn.addEventListener('click', _exportAndClear);
     bar.appendChild(hdr); bar.appendChild(clearBtn);
     list.appendChild(bar);
-    departed.forEach(v => list.appendChild(buildCard(v, true)));
+    departed.forEach(v => list.appendChild(buildCard(v, _effCollapsed(v, true))));
   }
 
   _updateProgress();
@@ -569,7 +600,7 @@ async function _exportAndClear(){
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `vip-notes-${TODAY||'export'}.txt`;
+    a.href = url; a.download = `vip-notes-${TODAY||'export'}.html`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }catch(e){
