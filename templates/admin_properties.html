@@ -9,10 +9,16 @@
       <h2 class="text-2xl font-bold text-gray-800">Properties</h2>
       <p class="text-sm text-gray-500 mt-0.5">{{ properties|length }} properties in the database</p>
     </div>
-    <a href="{{ url_for('admin.admin_users') }}"
-       class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
-      ← User Management
-    </a>
+    <div class="flex items-center gap-4">
+      <a href="{{ url_for('admin.property_links') }}"
+         class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+        🔗 Breezeway Links
+      </a>
+      <a href="{{ url_for('admin.admin_users') }}"
+         class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+        ← User Management
+      </a>
+    </div>
   </div>
 
   <!-- ══ ADD PROPERTY FORM ══ -->

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Breezeway Links — North Lake Dispatch{% endblock %}
+{% block content %}
+
+<div class="max-w-5xl mx-auto px-6 py-8">
+
+  <div class="flex items-center justify-between mb-2">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-800">Breezeway Property Links</h2>
+      <p class="text-sm text-gray-500 mt-0.5">
+        Link each local property to its Breezeway house so the route scan matches by a
+        stable id instead of by name (which breaks on spelling differences).
+      </p>
+    </div>
+    <a href="{{ url_for('admin.admin_properties') }}"
+       class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">← Properties</a>
+  </div>
+
+  <!-- ══ SUMMARY + AUTO-LINK ══ -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6 flex items-center justify-between gap-4 flex-wrap">
+    <div class="flex gap-5 text-sm">
+      <div><span class="font-bold text-gray-800">{{ counts.linked }}</span> <span class="text-gray-500">linked</span></div>
+      <div><span class="font-bold text-emerald-700">{{ counts.suggested }}</span> <span class="text-gray-500">confident match{{ '' if counts.suggested == 1 else 'es' }}</span></div>
+      <div><span class="font-bold text-amber-700">{{ counts.unmatched }}</span> <span class="text-gray-500">need manual pairing</span></div>
+      <div class="text-gray-400">of {{ counts.total }} total</div>
+    </div>
+    {% if counts.suggested %}
+    <button id="autoBtn" onclick="runAutoLink()"
+            class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold
+                   px-4 py-2 rounded-lg transition-colors">
+      ⚡ Auto-link {{ counts.suggested }} confident match{{ '' if counts.suggested == 1 else 'es' }}
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- ══ CONFIDENT SUGGESTIONS ══ -->
+  {% if suggestions %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+    <h3 class="font-semibold text-gray-800 mb-1">✅ Confident matches</h3>
+    <p class="text-xs text-gray-500 mb-4">Matched exactly on {{ '' }}name or street address. Use Auto-link above to apply all, or confirm one at a time.</p>
+    <div class="divide-y divide-gray-100">
+      {% for p in suggestions %}
+      <div class="py-3 flex items-center justify-between gap-4" id="row-{{ p.id }}">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-gray-800 truncate">{{ p["Property Name"] }}</div>
+          <div class="text-xs text-gray-400 truncate">{{ p["Unit Address"] }}</div>
+          <div class="text-xs text-emerald-700 mt-0.5 truncate">
+            → {{ p.bw_name }}<span class="text-gray-400"> · {{ p.bw_address }} · matched by {{ p.reason }}</span>
+          </div>
+        </div>
+        <button onclick="linkProp({{ p.id }}, {{ p.suggest_pid }}, this)"
+                class="shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold
+                       px-3 py-1.5 rounded-lg transition-colors">Link</button>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ══ UNMATCHED — MANUAL PAIRING ══ -->
+  {% if unmatched %}
+  <div class="bg-white rounded-xl shadow-sm border border-amber-200 p-6 mb-6">
+    <h3 class="font-semibold text-amber-800 mb-1">⚠️ Need manual pairing ({{ unmatched|length }})</h3>
+    <p class="text-xs text-gray-500 mb-4">No confident match — pick the correct Breezeway house. Leave unset if the house isn't in Breezeway yet.</p>
+    <div class="divide-y divide-gray-100">
+      {% for p in unmatched %}
+      <div class="py-3 flex items-center justify-between gap-4" id="row-{{ p.id }}">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-gray-800 truncate">{{ p["Property Name"] }}</div>
+          <div class="text-xs text-gray-400 truncate">{{ p["Unit Address"] }}</div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <select id="sel-{{ p.id }}" class="border rounded-lg px-2 py-1.5 text-xs max-w-xs
+                    focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="">— pick Breezeway house —</option>
+            {% for r in bw_list %}
+            <option value="{{ r.pid }}">{{ r.name }}{% if r.address %} — {{ r.address }}{% endif %}</option>
+            {% endfor %}
+          </select>
+          <button onclick="linkFromSelect({{ p.id }}, this)"
+                  class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold
+                         px-3 py-1.5 rounded-lg transition-colors">Link</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ══ LINKED ══ -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+    <h3 class="font-semibold text-gray-800 mb-4">🔗 Linked ({{ linked|length }})</h3>
+    {% if linked %}
+    <div class="divide-y divide-gray-100">
+      {% for p in linked %}
+      <div class="py-2.5 flex items-center justify-between gap-4" id="row-{{ p.id }}">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-gray-800 truncate">{{ p["Property Name"] }}</div>
+          <div class="text-xs {{ 'text-red-600' if p.bw_missing else 'text-gray-400' }} truncate">
+            → {{ p.bw_name }}{% if p.bw_missing %} <span class="font-semibold">(not in Breezeway cache — id {{ p.breezeway_property_id }})</span>{% elif p.bw_address %} · {{ p.bw_address }}{% endif %}
+          </div>
+        </div>
+        <button onclick="unlinkProp({{ p.id }}, this)"
+                class="shrink-0 text-gray-400 hover:text-red-600 text-xs font-medium
+                       px-2 py-1 rounded transition-colors">Unlink</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400">Nothing linked yet.</p>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+async function _post(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+  return data;
+}
+
+async function linkProp(propId, pid, btn) {
+  btn.disabled = true; btn.textContent = "…";
+  try {
+    await _post("{{ url_for('admin.property_links_set') }}",
+                { property_id: propId, breezeway_property_id: pid });
+    location.reload();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Link";
+    alert("Could not link: " + e.message);
+  }
+}
+
+function linkFromSelect(propId, btn) {
+  const sel = document.getElementById("sel-" + propId);
+  const pid = sel && sel.value;
+  if (!pid) { alert("Pick a Breezeway house first."); return; }
+  linkProp(propId, pid, btn);
+}
+
+async function unlinkProp(propId, btn) {
+  btn.disabled = true; btn.textContent = "…";
+  try {
+    await _post("{{ url_for('admin.property_links_set') }}",
+                { property_id: propId, breezeway_property_id: "" });
+    location.reload();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Unlink";
+    alert("Could not unlink: " + e.message);
+  }
+}
+
+async function runAutoLink() {
+  const btn = document.getElementById("autoBtn");
+  btn.disabled = true; btn.textContent = "Linking…";
+  try {
+    const data = await _post("{{ url_for('admin.property_links_auto') }}", {});
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    alert("Auto-link failed: " + e.message);
+  }
+}
+</script>
+{% endblock %}

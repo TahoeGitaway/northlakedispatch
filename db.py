@@ -421,6 +421,13 @@ def init_db():
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS rescheduled INTEGER DEFAULT 0")
+    # Stable link from a local property to its Breezeway property. Populated via the
+    # /admin/property-links reconciliation page. Once set, the route scan matches houses
+    # by THIS id instead of fuzzy name-matching — which is what let a spelling variant
+    # ("Granite Creak" vs "Granite Creek") show up as both added AND removed, and hid a
+    # same-day check-in whose reservation house name didn't match. NULL = not yet linked
+    # (the scan falls back to strict name matching for those, so nothing regresses).
+    cur.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS breezeway_property_id BIGINT")
 
     # Normalize smart (curly) apostrophes in property names to straight ones so
     # Breezeway names ("Bear's Lair", straight ') match the DB. One curly char

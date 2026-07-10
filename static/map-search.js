@@ -1227,12 +1227,32 @@ function _tasksForStop(name) {
   return hit ? hit.tasks : null;
 }
 
+// Live same-day arrival flag from the latest scan — so a check-in that moved to today
+// lights up the sidebar badge even though the SAVED route (s.arrival) predates the move.
+function _arrivalForStop(name) {
+  const data = _routeChangesCache.data;
+  if (!data || !data.current_tasks) return false;
+  const key = (name || "").toLowerCase();
+  const hit = data.current_tasks.find(c => (c.property || "").toLowerCase() === key);
+  return hit ? !!hit.arrival : false;
+}
+
 function _fmtChangeWhen(w) {
   if (!w) return "";
-  const d = new Date(w);
+  // Breezeway sends these timestamps in UTC but often WITHOUT a timezone marker, so
+  // `new Date("2026-07-10T15:47:00")` would be read as LOCAL time — showing a morning
+  // event (8:47 AM Pacific) as 3:47 PM. If there's no trailing Z/offset, treat it as UTC,
+  // then render in Tahoe (Pacific) time explicitly.
+  let s = String(w).trim();
+  const hasTz = /(Z|[+-]\d{2}:?\d{2})$/.test(s);
+  if (!hasTz && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s)) {
+    s = s.replace(" ", "T") + "Z";
+  }
+  const d = new Date(s);
   return isNaN(d.getTime())
     ? w
-    : d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    : d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric",
+                                  minute: "2-digit", timeZone: "America/Los_Angeles" });
 }
 
 function _escHtml(s) {
@@ -1250,6 +1270,9 @@ function _renderChangesHtml(d) {
   const added   = (d.added   || []).filter(a => !_cur.has((a.property || "").toLowerCase()));
   const removed = (d.removed || []).filter(r =>  _cur.has((r.property || "").toLowerCase()));
   const moved   = d.moved || [];
+  // Houses already on the route that became a same-day check-in — only relevant while the
+  // stop is still in the working list.
+  const newCheckin = (d.new_checkin || []).filter(c => _cur.has((c.property || "").toLowerCase()));
   let h = "";
 
   // Loud, non-silent warning when Breezeway dropped some houses — the comparison
@@ -1260,8 +1283,26 @@ function _renderChangesHtml(d) {
        + `</div>`;
   }
 
+  // ── New same-day check-ins (arrival moved to today on a stop you already have) ──
+  // Shown first because it's time-critical: a check-in is arrive-by-noon.
+  if (newCheckin.length) {
+    h += `<div class="font-semibold text-amber-800 mb-1">☀️ New check-in today (${newCheckin.length})</div>`;
+    for (const c of newCheckin) {
+      h += `<div class="mb-1.5 leading-snug bg-amber-50 border-l-2 border-amber-400 rounded-r pl-2 pr-1 py-1">`;
+      h += `<div class="text-gray-800 font-medium">${_escHtml(c.property)}`
+         + ` <span class="inline-block align-middle bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">☀️ NEW CHECK-IN</span>`
+         + (c.pci ? ` <span class="inline-block align-middle bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">⚡ BY NOON</span>` : "")
+         + `</div>`;
+      for (const t of (c.tasks || [])) {
+        h += `<div class="text-[11px] text-gray-500 pl-3 leading-snug">• ${_escHtml(t)}</div>`;
+      }
+      h += `<div class="text-[11px] text-amber-700 pl-3 italic">Already on your route — arrival moved to today.</div>`;
+      h += `</div>`;
+    }
+  }
+
   // ── What changed since the route was saved ──
-  if (!added.length && !removed.length && !moved.length) {
+  if (!added.length && !removed.length && !moved.length && !newCheckin.length) {
     h += `<div class="text-green-600 mb-1">✓ No changes — the list matches the saved route.</div>`;
   }
   if (added.length) {
@@ -1492,11 +1533,14 @@ function _syncSidebarToSchedule() {
       const num = document.createElement("span");
       num.className = "text-xs text-gray-400 font-medium w-4 shrink-0 pt-px";
       num.textContent = i + 1;
+      // Arrival badge reflects the LIVE scan, not just the saved route — so a check-in
+      // that moved to today shows even though this route was saved before the move.
+      const liveArrival = s.arrival || _arrivalForStop(s.name);
       const name = document.createElement("span");
-      name.className = "text-xs leading-snug " + (s.arrival ? "font-medium text-green-700" : "text-gray-700");
+      name.className = "text-xs leading-snug " + (liveArrival ? "font-medium text-green-700" : "text-gray-700");
       name.textContent = s.name;
       row.appendChild(num); row.appendChild(name);
-      if (s.arrival) {
+      if (liveArrival) {
         const badge = document.createElement("span");
         badge.className = "shrink-0 text-[0.6rem] font-bold text-green-700 bg-green-100 rounded px-1.5 leading-tight mt-px";
         badge.textContent = "CHECK-IN";

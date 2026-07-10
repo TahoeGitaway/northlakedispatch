@@ -1485,24 +1485,46 @@ def route_discrepancies():
     assignee = (row["assigned_to"] or "").strip()
     date_str = str(row["route_date"])[:10]
     schedule = json.loads(row["stops_json"]) or []
-    cur.execute('SELECT "Property Name", "Latitude", "Longitude" FROM properties '
-                'WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL')
-    db_props = {r["Property Name"].lower().strip(): dict(r) for r in cur.fetchall()}
+    cur.execute('SELECT "Property Name", "Latitude", "Longitude", breezeway_property_id '
+                'FROM properties WHERE "Latitude" IS NOT NULL AND "Longitude" IS NOT NULL')
+    db_rows = [dict(r) for r in cur.fetchall()]
     cur.close(); conn.close()
+    db_props = {r["Property Name"].lower().strip(): r for r in db_rows}
+    # Stable Breezeway id → local row. This is what lets the scan identify a house even
+    # when Breezeway and our DB spell it differently — no name guessing on linked houses.
+    # Populated via the /admin/property-links reconciliation page; NULL until linked.
+    bwpid_to_local = {r["breezeway_property_id"]: r for r in db_rows
+                      if r.get("breezeway_property_id")}
 
     if not assignee:
         return jsonify({"error": "This route has no assignee, so there is no task list to compare against."}), 400
 
-    # Saved route: property -> planned ETA minutes
-    route_props, route_time, seen = [], {}, set()
+    # Saved route → canonical house key: the Breezeway id when the house is linked, else
+    # its name. Keying on the id makes a spelling variant a non-issue; unlinked houses keep
+    # the old name behaviour so nothing regresses before reconciliation is finished.
+    def _canon_for_name(nm):
+        row = db_props.get(nm.lower().strip())
+        bid = row.get("breezeway_property_id") if row else None
+        return f"pid:{bid}" if bid else f"name:{nm.lower().strip()}"
+
+    route_by_canon, seen = {}, set()
     for s in schedule:
         if s.get("isLunch") or s.get("isGap"):
             continue
         nm = (s.get("name") or "").strip()
-        if nm and nm.lower() not in seen:
-            seen.add(nm.lower())
-            route_props.append(nm)
-            route_time[nm.lower()] = s.get("eta_minutes")
+        if not nm:
+            continue
+        canon = _canon_for_name(nm)
+        if canon in seen:
+            continue
+        seen.add(canon)
+        route_by_canon[canon] = {
+            "name": nm,
+            "eta":  s.get("eta_minutes"),
+            # Did the saved route already know this was an arrival? If so, an arrival today
+            # is not "new" — only houses that BECAME check-ins since the save get flagged.
+            "was_arrival": bool(s.get("arrival") or s.get("priority_checkin")),
+        }
 
     token = _get_breezeway_token()
     if not token:
@@ -1549,56 +1571,99 @@ def route_discrepancies():
         if _bw_assignee_match(t, asgn_lower):
             mine.append(t)
 
-    tasks_by_prop = {}
+    # Group this person's tasks by canonical house key. A task carries its Breezeway
+    # property id directly (home_id/property_id), so for a LINKED house we know exactly
+    # which local property it is with ZERO name matching. Only unlinked houses fall back
+    # to the strict name match (and adopt that match's id-key if it happens to be linked).
+    tasks_by_canon = {}
     for t in mine:
         pid = t.get("home_id") or t.get("property_id")
-        bw_name = _get_property_name(pid) if pid else (t.get("property_name") or "")
-        local = _match_local_property(bw_name, db_props)
-        prop_name = local["Property Name"] if local else (bw_name or "Unknown property")
-        tasks_by_prop.setdefault(prop_name, []).append(t)
+        if pid in bwpid_to_local:
+            row   = bwpid_to_local[pid]
+            canon = f"pid:{pid}"
+            disp  = row["Property Name"]
+        else:
+            bw_name = _get_property_name(pid) if pid else (t.get("property_name") or "")
+            local   = _match_local_property(bw_name, db_props)
+            disp    = local["Property Name"] if local else (bw_name or "Unknown property")
+            lbid    = local.get("breezeway_property_id") if local else None
+            canon   = f"pid:{lbid}" if lbid else f"name:{disp.lower().strip()}"
+        slot = tasks_by_canon.setdefault(canon, {"name": disp, "pid": pid, "tasks": []})
+        slot["tasks"].append(t)
 
-    route_set = {p.lower() for p in route_props}
-    present   = {p.lower() for p in tasks_by_prop}
-
-    # Which of these properties have a guest check-in that day, so an added stop can
-    # be auto-flagged as an arrival (matching the Breezeway import behaviour).
+    # Which houses have a guest check-in today. Match by Breezeway property id first
+    # (authoritative, spelling-proof); keep a name set for any still-unlinked house.
     from routes.briefing import _fetch_breezeway_checkins, _classify_reservation
-    arrival_names = set()
+    arrival_pids, arrival_names = set(), set()
     try:
         for r in _fetch_breezeway_checkins(date_str):
             if _classify_reservation(r) == "block":
                 continue
-            local = _match_local_property(_get_property_name(r.get("property_id")), db_props)
+            rpid = r.get("property_id")
+            if rpid is not None:
+                arrival_pids.add(rpid)
+            local = _match_local_property(_get_property_name(rpid), db_props)
             if local:
                 arrival_names.add(local["Property Name"])
     except Exception:
         pass
 
+    def _canon_is_arrival(canon, pid, disp):
+        if pid is not None and pid in arrival_pids:
+            return True
+        if canon.startswith("pid:"):
+            try:
+                if int(canon[4:]) in arrival_pids:
+                    return True
+            except ValueError:
+                pass
+        return disp in arrival_names
+
+    # ADDED — a task house that isn't on the saved route.
     added = []
-    for prop_name, tlist in tasks_by_prop.items():
-        if prop_name.lower() not in route_set:
-            is_arrival = prop_name in arrival_names
-            # PCI counts as a priority check-in only when its arrival is that same day
-            # (a same-day check-in exists). A PCI for a next-day arrival is just a task.
-            is_pci     = is_arrival and any(_title_has_pci(_bw_task_title(t)) for t in tlist)
-            for t in tlist:
-                added.append({"property": prop_name, "task_name": _bw_task_title(t),
-                              "task_id": t.get("id"),
-                              "arrival": is_arrival, "pci": is_pci,
-                              "history": _task_history_summary(token, t)})
+    for canon, slot in tasks_by_canon.items():
+        if canon in route_by_canon:
+            continue
+        disp       = slot["name"]
+        is_arrival = _canon_is_arrival(canon, slot["pid"], disp)
+        # PCI counts as a priority check-in only when its arrival is that same day
+        # (a same-day check-in exists). A PCI for a next-day arrival is just a task.
+        is_pci     = is_arrival and any(_title_has_pci(_bw_task_title(t)) for t in slot["tasks"])
+        for t in slot["tasks"]:
+            added.append({"property": disp, "task_name": _bw_task_title(t),
+                          "task_id": t.get("id"),
+                          "arrival": is_arrival, "pci": is_pci,
+                          "history": _task_history_summary(token, t)})
 
-    removed = [{"property": p} for p in route_props if p.lower() not in present]
+    # REMOVED — a saved-route house with no task for this person today.
+    removed = [{"property": info["name"]}
+               for canon, info in route_by_canon.items() if canon not in tasks_by_canon]
 
-    # moved: property is in the route but its task time-of-day differs from the plan
+    # NEW CHECK-IN — a house already ON the route that became a same-day arrival since the
+    # route was saved (the case the old name-only check silently missed). Added houses that
+    # are arrivals are already flagged in `added`, so this covers only existing stops.
+    new_checkin = []
+    for canon, info in route_by_canon.items():
+        if info["was_arrival"]:
+            continue
+        slot = tasks_by_canon.get(canon)
+        pid  = slot["pid"] if slot else (
+            int(canon[4:]) if canon.startswith("pid:") and canon[4:].isdigit() else None)
+        if not _canon_is_arrival(canon, pid, info["name"]):
+            continue
+        tlist = slot["tasks"] if slot else []
+        new_checkin.append({"property": info["name"],
+                            "tasks": [_bw_task_title(t) for t in tlist],
+                            "pci":   any(_title_has_pci(_bw_task_title(t)) for t in tlist)})
+
+    # MOVED — house on the route whose task time-of-day differs from the plan.
     moved = []
-    for prop_name, tlist in tasks_by_prop.items():
-        key = prop_name.lower()
-        if key not in route_set:
+    for canon, slot in tasks_by_canon.items():
+        info = route_by_canon.get(canon)
+        if not info or info.get("eta") is None:
             continue
-        planned = route_time.get(key)
-        if planned is None:
-            continue
-        for t in tlist:
+        planned = info["eta"]
+        for t in slot["tasks"]:
             sched = t.get("scheduled_date") or ""
             tod = sched[11:16] if len(sched) >= 16 else ""
             if not tod or tod == "00:00":
@@ -1606,29 +1671,33 @@ def route_discrepancies():
             task_min = int(tod[:2]) * 60 + int(tod[3:5])
             if abs(task_min - int(planned)) > 15:
                 ph, pm = divmod(int(planned), 60)
-                moved.append({"property": prop_name, "task_name": _bw_task_title(t),
+                moved.append({"property": slot["name"], "task_name": _bw_task_title(t),
                               "was": f"{ph % 24:02d}:{pm:02d}", "now": tod})
 
-    # Full current task list for this person that day, grouped by house. `pci` marks a
-    # SAME-DAY priority check-in (PCI title + a same-day arrival) so the route view can
-    # flag it loudly; a PCI prepping for a next-day arrival is left unflagged.
+    # Full current task list for this person that day, grouped by house, with same-day
+    # arrival + PCI flags so the sidebar can light up check-ins LIVE (not from the stale
+    # saved route). `pci` marks a same-day priority check-in; a next-day PCI stays unflagged.
     current_tasks = sorted(
-        ({"property": p,
-          "tasks": [_bw_task_title(t) for t in tlist],
-          "pci": (p in arrival_names) and any(_title_has_pci(_bw_task_title(t)) for t in tlist)}
-         for p, tlist in tasks_by_prop.items()),
+        ({"property": slot["name"],
+          "tasks":    [_bw_task_title(t) for t in slot["tasks"]],
+          "arrival":  _canon_is_arrival(canon, slot["pid"], slot["name"]),
+          "pci":      _canon_is_arrival(canon, slot["pid"], slot["name"])
+                      and any(_title_has_pci(_bw_task_title(t)) for t in slot["tasks"])}
+         for canon, slot in tasks_by_canon.items()),
         key=lambda x: x["property"].lower(),
     )
 
     payload = {
         "route_id": route_id, "assignee": assignee, "date": date_str,
-        "added":   sorted(added,   key=lambda x: x["property"].lower()),
-        "removed": sorted(removed, key=lambda x: x["property"].lower()),
-        "moved":   sorted(moved,   key=lambda x: x["property"].lower()),
+        "added":       sorted(added,       key=lambda x: x["property"].lower()),
+        "removed":     sorted(removed,     key=lambda x: x["property"].lower()),
+        "moved":       sorted(moved,       key=lambda x: x["property"].lower()),
+        "new_checkin": sorted(new_checkin, key=lambda x: x["property"].lower()),
         "current_tasks": current_tasks,
         "history_available": any(a["history"].get("available") for a in added),
         "failed_properties": failed_props,
-        "summary": {"added": len(added), "removed": len(removed), "moved": len(moved)},
+        "summary": {"added": len(added), "removed": len(removed),
+                    "moved": len(moved), "new_checkin": len(new_checkin)},
     }
     # Cache before returning so the result survives even if the gateway already timed
     # out THIS request — the next call returns it instantly. Don't cache a run that

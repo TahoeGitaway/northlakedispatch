@@ -522,6 +522,169 @@ def delete_property(prop_id):
     return redirect(url_for("admin.admin_properties"))
 
 
+# ── Property ↔ Breezeway reconciliation ───────────────────────────
+# The route scan matches a local property to its Breezeway house. Historically that was
+# a fuzzy NAME match, so a spelling variant ("Granite Creak" vs "Granite Creek") made the
+# same house show up as both added AND removed and hid a same-day check-in. These pages
+# populate properties.breezeway_property_id — a stable id — so the scan can match by id
+# instead of by name. Auto-linking is CONFIDENT-ONLY (exact normalized address or name);
+# anything ambiguous stays for a human to pair, never guessed (the strict-match rule).
+
+def _norm_addr(s: str) -> str:
+    """Normalize a street address for comparison: lowercase, drop unit designators, keep
+    only the street line (before the first comma, so a city/state present on one side but
+    not the other can't block a match), strip punctuation, collapse whitespace."""
+    s = (s or "").split(",")[0].lower()
+    s = re.sub(r'(#\s*\d+[a-z]?|apt\.?\s+\w+|suite\s+\w+|unit\s+\w+|ste\.?\s+\w+)', ' ', s)
+    s = re.sub(r'[^a-z0-9 ]+', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def _norm_name(s: str) -> str:
+    """Lowercase, straighten curly apostrophes, collapse whitespace."""
+    return re.sub(r'\s+', ' ', (s or "").replace("’", "'").lower()).strip()
+
+
+def _bw_property_index():
+    """(bw_list, by_pid) from the live Breezeway cache. bw_list is [{pid,name,address}]
+    sorted by name; by_pid maps pid → that record."""
+    from routes.briefing import (_ensure_property_cache, _get_live_property_cache,
+                                  _get_property_address)
+    _ensure_property_cache()
+    cache = _get_live_property_cache() or {}
+    bw_list, by_pid = [], {}
+    for pid, name in cache.items():
+        rec = {"pid": pid, "name": name or "", "address": _get_property_address(pid) or ""}
+        by_pid[pid] = rec
+        bw_list.append(rec)
+    bw_list.sort(key=lambda r: (r["name"] or "").lower())
+    return bw_list, by_pid
+
+
+def _auto_match_pid(prop, bw_list, taken_pids):
+    """Confident-only match of one local property to a Breezeway pid. Returns
+    (pid, reason) or (None, None). NEVER guesses: exact normalized name, or exact
+    normalized street address that starts with a number. Skips already-taken pids."""
+    name_n = _norm_name(prop["Property Name"])
+    for r in bw_list:
+        if r["pid"] in taken_pids:
+            continue
+        if name_n and _norm_name(r["name"]) == name_n:
+            return r["pid"], "name"
+    addr_n = _norm_addr(prop["Unit Address"])
+    if addr_n and addr_n[0].isdigit():   # require a street number — no blank-street matches
+        for r in bw_list:
+            if r["pid"] in taken_pids:
+                continue
+            if _norm_addr(r["address"]) == addr_n:
+                return r["pid"], "address"
+    return None, None
+
+
+@admin_bp.route("/admin/property-links")
+@login_required
+@admin_required
+def property_links():
+    from routes.briefing import _get_property_name
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute('SELECT id, "Property Name", "Unit Address", breezeway_property_id '
+                'FROM properties ORDER BY "Property Name" ASC')
+    props = [dict(r) for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    bw_list, by_pid = _bw_property_index()
+    # pids already claimed by a linked property — never suggest or offer them twice.
+    taken = {p["breezeway_property_id"] for p in props if p["breezeway_property_id"]}
+
+    linked, suggestions, unmatched = [], [], []
+    taken_run = set(taken)
+    for p in props:
+        bid = p["breezeway_property_id"]
+        if bid:
+            rec = by_pid.get(bid)
+            linked.append({**p,
+                           "bw_name":    rec["name"] if rec else _get_property_name(bid),
+                           "bw_address": rec["address"] if rec else "",
+                           "bw_missing": rec is None})
+            continue
+        pid, reason = _auto_match_pid(p, bw_list, taken_run)
+        if pid:
+            rec = by_pid.get(pid)
+            taken_run.add(pid)   # don't let two unmatched rows claim the same house
+            suggestions.append({**p, "suggest_pid": pid, "reason": reason,
+                                "bw_name": rec["name"], "bw_address": rec["address"]})
+        else:
+            unmatched.append(p)
+
+    return render_template(
+        "admin_property_links.html",
+        linked=linked, suggestions=suggestions, unmatched=unmatched, bw_list=bw_list,
+        counts={"total": len(props), "linked": len(linked),
+                "suggested": len(suggestions), "unmatched": len(unmatched)})
+
+
+@admin_bp.route("/admin/property-links/auto", methods=["POST"])
+@login_required
+@admin_required
+def property_links_auto():
+    """Link every property with a confident match in one pass. Confident-only; ambiguous
+    properties are left untouched for manual pairing."""
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute('SELECT id, "Property Name", "Unit Address", breezeway_property_id '
+                'FROM properties ORDER BY "Property Name" ASC')
+    props = [dict(r) for r in cur.fetchall()]
+    bw_list, by_pid = _bw_property_index()
+    taken = {p["breezeway_property_id"] for p in props if p["breezeway_property_id"]}
+    linked, details = 0, []
+    for p in props:
+        if p["breezeway_property_id"]:
+            continue
+        pid, reason = _auto_match_pid(p, bw_list, taken)
+        if pid:
+            cur.execute('UPDATE properties SET breezeway_property_id=%s WHERE id=%s',
+                        (pid, p["id"]))
+            taken.add(pid)
+            linked += 1
+            details.append({"property": p["Property Name"],
+                            "bw_name": by_pid[pid]["name"], "by": reason})
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"success": True, "linked": linked, "details": details})
+
+
+@admin_bp.route("/admin/property-links/set", methods=["POST"])
+@login_required
+@admin_required
+def property_links_set():
+    """Link (or unlink) one property to a Breezeway pid. Enforces one-house-one-row so a
+    scan can't attribute one Breezeway house to two local properties."""
+    data = request.json or {}
+    try:
+        prop_id = int(data.get("property_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "property_id required"}), 400
+    raw = data.get("breezeway_property_id")
+    conn = get_db(); cur = get_cursor(conn)
+    if raw in (None, "", "none"):
+        cur.execute('UPDATE properties SET breezeway_property_id=NULL WHERE id=%s', (prop_id,))
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"success": True, "linked": None})
+    try:
+        bid = int(raw)
+    except (TypeError, ValueError):
+        cur.close(); conn.close()
+        return jsonify({"error": "breezeway_property_id must be a number"}), 400
+    cur.execute('SELECT id, "Property Name" FROM properties '
+                'WHERE breezeway_property_id=%s AND id<>%s', (bid, prop_id))
+    clash = cur.fetchone()
+    if clash:
+        cur.close(); conn.close()
+        return jsonify({"error": f'That Breezeway house is already linked to '
+                                 f'"{clash["Property Name"]}". Unlink it there first.'}), 409
+    cur.execute('UPDATE properties SET breezeway_property_id=%s WHERE id=%s', (bid, prop_id))
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"success": True, "linked": bid})
+
+
 # ── CSV upload ────────────────────────────────────────────────────
 
 @admin_bp.route("/admin/upload-csv", methods=["POST"])
