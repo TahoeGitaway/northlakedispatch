@@ -117,6 +117,15 @@
     font-size: 0.72rem;
     line-height: 1;
   }
+  /* 📅 → this property's Breezeway calendar (matches the route sidebar / batching tool) */
+  .summary-prop-cal {
+    font-size: 0.72rem;
+    line-height: 1;
+    flex-shrink: 0;
+    text-decoration: none;
+    opacity: 0.7;
+  }
+  .summary-prop-cal:hover { opacity: 1; }
   /* Last clean was owner-handled → schedule the Walk Thru early */
   .summary-prop-oc {
     font-size: 0.72rem;
@@ -539,6 +548,7 @@ async function loadDaySummary(ds, force = false) {
             ${items.map(p => `
               <li class="summary-prop" style="margin-bottom:3px;" data-pid="${p.property_id ?? ''}" data-name="${(p.name || '').replace(/"/g, '&quot;')}" title="${p.vip ? 'VIP · ' : ''}${p.name}">
                 <span class="summary-prop-name">${p.vip ? `<span class="summary-prop-vip" title="VIP reservation">⭐</span> ` : ""}${p.name}</span>
+                ${p.property_id ? `<a class="summary-prop-cal" href="https://app.breezeway.io/property/${encodeURIComponent(p.property_id)}/calendar" target="_blank" rel="noopener" title="Open calendar in Breezeway" onclick="event.stopPropagation()">📅</a>` : ""}
                 ${p.time ? `<span class="summary-prop-time">${p.time}</span>` : ""}
               </li>`).join("")}
           </ul>

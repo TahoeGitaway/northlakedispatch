@@ -1348,11 +1348,16 @@ function _renderChangesHtml(d) {
          + `</div>`;
       for (const a of byProp[prop]) {
         const isPci = !!a.pci;
+        // Breezeway has no "added to the list" event, so this is the task's CREATION
+        // (created_at/created_by). Labelled honestly: "created … by …" when a person made
+        // it, "auto-created …" for nightly system-generated tasks with no creator.
         const who  = a.history && a.history.who  ? _escHtml(a.history.who) : null;
         const when = a.history && a.history.when ? _fmtChangeWhen(a.history.when) : null;
-        const note = (who || when)
-          ? ` <span class="text-gray-400">(${when ? "added " + _escHtml(when) : "added"}${who ? " by " + who : ""})</span>`
-          : ` <span class="text-gray-300 italic">(when/who not exposed)</span>`;
+        const note = when
+          ? (who
+              ? ` <span class="text-gray-400">(created ${_escHtml(when)} by ${who})</span>`
+              : ` <span class="text-gray-400">(auto-created ${_escHtml(when)})</span>`)
+          : "";
         const pciBadge = isPci
           ? ` <span class="inline-block bg-violet-600 text-white text-[10px] font-bold px-1 rounded">⚡ BY NOON</span>`
           : "";

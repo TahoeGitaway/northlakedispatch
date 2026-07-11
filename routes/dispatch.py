@@ -1406,53 +1406,28 @@ def _bw_get_raw(token: str, path: str):
         return None, None
 
 
-def _task_history_summary(token: str, task: dict) -> dict:
-    """Best-effort 'who/when this task landed on the list'.
+def _task_history_summary(task: dict) -> dict:
+    """Who/when a task was CREATED — NOT when it was added to someone's list.
 
-    Breezeway's public API exposure of task history is uncertain, so we look at
-    fields already on the task, then try a few history/audit endpoints, and report
-    what we found plus whether anything was available.
+    Breezeway exposes no 'added to list' event: the assignment record carries no
+    timestamp, and the task history/audit/activity/events/log endpoints all 404
+    (confirmed via /api/bw-task-history-probe). So the only truthful source is the
+    task's own created_at / created_by, and the UI labels it 'created' (never 'added').
+    `who` is None for system/nightly-generated tasks — the UI shows those as
+    'auto-created'. created_at is UTC; the frontend renders it in Pacific.
     """
-    task_id = task.get("id")
-
-    # Fields that may already be on the task object
-    when = task.get("created_at") or task.get("date_added") or task.get("created")
+    when = task.get("created_at") or task.get("created") or task.get("date_added")
     who  = None
-    cb   = task.get("created_by") or task.get("added_by") or task.get("creator")
+    cb   = task.get("created_by") or task.get("creator") or task.get("added_by")
     if isinstance(cb, dict):
         who = cb.get("name") or f"{cb.get('first_name','')} {cb.get('last_name','')}".strip()
     elif isinstance(cb, str):
         who = cb
-
-    # Try candidate history endpoints (may 404 / require elevated access)
-    history = []
-    for path in (f"/public/inventory/v1/task/{task_id}/history",
-                 f"/public/inventory/v1/task/{task_id}/audit",
-                 f"/public/inventory/v1/task/{task_id}/activity"):
-        body, status = _bw_get_raw(token, path)
-        if status == 200 and body:
-            history = body if isinstance(body, list) else body.get("results", body.get("data", []))
-            if history:
-                break
-
-    assigned_when = assigned_by = None
-    for ev in (history or []):
-        if not isinstance(ev, dict):
-            continue
-        ev_type = str(ev.get("type") or ev.get("action") or ev.get("event") or "").lower()
-        if "assign" in ev_type or "create" in ev_type or "add" in ev_type:
-            assigned_when = ev.get("created_at") or ev.get("timestamp") or ev.get("date") or assigned_when
-            actor = ev.get("user") or ev.get("actor") or ev.get("created_by") or ev.get("by")
-            if isinstance(actor, dict):
-                assigned_by = actor.get("name") or f"{actor.get('first_name','')} {actor.get('last_name','')}".strip()
-            elif isinstance(actor, str):
-                assigned_by = actor
-
     return {
-        "available":    bool(assigned_when or who or when),
-        "who":          (assigned_by or who) or None,
-        "when":         (assigned_when or when) or None,
-        "from_history": bool(history),
+        "available": bool(when or who),
+        "who":       who or None,
+        "when":      when or None,
+        "created":   True,   # this is a creation event, not a list-assignment
     }
 
 
@@ -1640,7 +1615,7 @@ def route_discrepancies():
             added.append({"property": disp, "task_name": _bw_task_title(t),
                           "task_id": t.get("id"),
                           "arrival": is_arrival, "pci": is_pci,
-                          "history": _task_history_summary(token, t)})
+                          "history": _task_history_summary(t)})
 
     # REMOVED — a saved-route house with no task for this person today.
     removed = [{"property": info["name"]}

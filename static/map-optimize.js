@@ -218,10 +218,15 @@ function openSaveModal() {
   document.getElementById("saveAssignedTo").value = sidebarAssigned;
   document.getElementById("saveRouteDate").value  = sidebarDate || new Date().toISOString().split("T")[0];
 
-  // Sync team from sidebar to modal
+  // Team: a NEW route must force an explicit choice (leave blank); UPDATING an existing
+  // route auto-populates with the team it was saved under (mirrored on the sidebar select).
   const sidebarTeam = document.getElementById("sidebarTeamId");
   const modalTeam   = document.getElementById("saveTeamId");
-  if (sidebarTeam && modalTeam) modalTeam.value = sidebarTeam.value;
+  if (modalTeam) {
+    modalTeam.value = (currentRouteId && sidebarTeam && sidebarTeam.value)
+      ? sidebarTeam.value
+      : "";
+  }
 
   document.getElementById("saveModal").classList.remove("hidden");
 }
@@ -309,6 +314,9 @@ async function submitSaveRoute(mode = "return") {
 
   if (!name)      { errorEl.textContent = "Please enter a route name."; errorEl.classList.remove("hidden"); return; }
   if (!routeDate) { errorEl.textContent = "Please choose a date.";      errorEl.classList.remove("hidden"); return; }
+  // Team is required. New routes open blank (forcing a pick); updates open pre-filled, so
+  // this only bites if the team is genuinely unset (e.g. an old route saved before teams).
+  if (teamEl && !teamEl.value) { errorEl.textContent = "Please choose a team."; errorEl.classList.remove("hidden"); return; }
 
   if (syncBtn) syncBtn.disabled = true;
   if (returnBtn) returnBtn.disabled = true;
