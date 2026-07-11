@@ -220,9 +220,14 @@ def _google_route_polyline(locations):
 @dispatch_bp.route("/")
 @login_required
 def root():
-    """Landing page: send visitors straight to the Saved Routes dashboard.
-    The map builder now lives at /map (endpoint still `home`, so nav links
-    and post-login redirects that use url_for('dispatch.home') are unaffected)."""
+    """Landing page: the BARE root sends visitors to the Saved Routes dashboard.
+    But the map builder is still opened via query params on `/` — `/?load=<id>`
+    to reopen a saved route and `/?date=<ds>` to start a new one (see routes.html
+    and map-optimize.js). Only redirect when there are no query params; otherwise
+    serve the map so those params reach it. The map also lives at /map (endpoint
+    still `home`, so url_for('dispatch.home') nav/redirects are unaffected)."""
+    if request.args:
+        return home()
     return redirect(url_for("dispatch.saved_routes"))
 
 
