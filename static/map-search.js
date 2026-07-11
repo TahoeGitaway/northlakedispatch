@@ -1171,6 +1171,9 @@ function _selectDailyRouteTab(routeId, label) {
 let _routeChangesCache    = { routeId: null, html: null };
 let _routeChangesInflight = { routeId: null, promise: null };
 let _appliedRouteChanges  = new Set();   // route ids whose changes have been applied (hide the Apply button)
+// Per-route UI state for the "Changes vs Breezeway" box: after Apply we collapse it and
+// mark it Stale (the shown list no longer reflects a fresh Breezeway check). ↻ Recheck clears both.
+let _routeChangesUiState  = { routeId: null, collapsed: false, stale: false };
 
 // Force the NEXT render to re-pull from Breezeway instead of serving the cached
 // result. Used on explicit ↻ Recheck and to avoid caching an error; a page reload
@@ -1187,22 +1190,60 @@ function _invalidateRouteChanges() {
 function _appendRouteChanges(content) {
   if (!currentRouteId) return;
   const rid = currentRouteId;
+  // Reset collapse/stale when a DIFFERENT route loads; otherwise preserve it across the
+  // many sidebar re-renders so the panel stays minimized (and Stale) after Apply.
+  if (_routeChangesUiState.routeId !== rid) {
+    _routeChangesUiState = { routeId: rid, collapsed: false, stale: false };
+  }
   const box = document.createElement("div");
   box.className = "mt-3 pt-3 border-t border-gray-200";
   box.innerHTML = `
     <div class="flex items-center justify-between mb-2">
-      <span class="text-xs font-semibold text-gray-700 uppercase tracking-wide">Changes vs Breezeway</span>
+      <button data-toggle class="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide hover:text-gray-900">
+        <span data-caret class="text-gray-400 text-[10px] leading-none"></span>
+        <span>Changes vs Breezeway</span>
+        <span data-stale class="hidden normal-case tracking-normal text-[10px] font-bold text-amber-700 bg-amber-100 border border-amber-200 rounded px-1.5 py-px">Stale</span>
+      </button>
       <button data-refresh class="text-xs text-indigo-500 hover:text-indigo-700 font-medium">↻ Recheck</button>
     </div>
     <div data-body class="text-xs text-gray-400">Checking Breezeway…</div>`;
   content.appendChild(box);
-  const body = box.querySelector("[data-body]");
+  const body   = box.querySelector("[data-body]");
+  const caret  = box.querySelector("[data-caret]");
+  const staleB = box.querySelector("[data-stale]");
+
+  // Header chrome (caret direction, Stale badge, body visibility) from the saved state.
+  const paintChrome = () => {
+    const st = _routeChangesUiState;
+    caret.textContent  = st.collapsed ? "▸" : "▾";
+    staleB.classList.toggle("hidden", !st.stale);
+    body.style.display = st.collapsed ? "none" : "";
+  };
+  // Body: a Stale notice once changes have been applied, else the live change render.
+  const paintBody = () => {
+    if (_routeChangesUiState.stale) {
+      body.innerHTML = `<span class="text-amber-700">Stale — changes applied. Click ↻ Recheck to refresh against Breezeway.</span>`;
+      return;
+    }
+    _renderRouteChangesInto(rid, body);
+  };
+
+  box.querySelector("[data-toggle]").addEventListener("click", () => {
+    _routeChangesUiState.collapsed = !_routeChangesUiState.collapsed;
+    paintChrome();
+    if (!_routeChangesUiState.collapsed) paintBody();
+  });
   box.querySelector("[data-refresh]").addEventListener("click", () => {
     _invalidateRouteChanges();
-    _appliedRouteChanges.delete(rid);   // a fresh check brings the Apply button back
-    _renderRouteChangesInto(rid, body, true);   // explicit Recheck = bypass the server cache
+    _appliedRouteChanges.delete(rid);          // a fresh check brings the Apply button back
+    _routeChangesUiState.stale     = false;    // fresh data → no longer stale
+    _routeChangesUiState.collapsed = false;    // and re-open it to show the result
+    paintChrome();
+    _renderRouteChangesInto(rid, body, true);  // explicit Recheck = bypass the server cache
   });
-  _renderRouteChangesInto(rid, body);
+
+  paintChrome();
+  if (!_routeChangesUiState.collapsed) paintBody();
 }
 
 function _renderRouteChangesInto(routeId, body, force) {
@@ -1488,8 +1529,9 @@ async function reapproachWithChanges() {
     if (typeof _bwPlaceMarkers === "function") _bwPlaceMarkers();
   }
 
-  // The changes panel re-renders against the current list (resolved items vanish,
-  // button hides on its own). Make sure it repaints now.
+  // Applied: the shown change list no longer reflects a fresh Breezeway check. Collapse
+  // the panel and mark it Stale — re-expanding shows "Stale"; ↻ Recheck refreshes it.
+  _routeChangesUiState = { routeId: currentRouteId, collapsed: true, stale: true };
   if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
 
   if (notFound.length) {
