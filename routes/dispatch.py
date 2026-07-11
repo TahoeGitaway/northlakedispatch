@@ -219,6 +219,15 @@ def _google_route_polyline(locations):
 
 @dispatch_bp.route("/")
 @login_required
+def root():
+    """Landing page: send visitors straight to the Saved Routes dashboard.
+    The map builder now lives at /map (endpoint still `home`, so nav links
+    and post-login redirects that use url_for('dispatch.home') are unaffected)."""
+    return redirect(url_for("dispatch.saved_routes"))
+
+
+@dispatch_bp.route("/map")
+@login_required
 def home():
     conn = get_db()
     cur  = get_cursor(conn)
