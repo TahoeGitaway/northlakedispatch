@@ -1621,13 +1621,15 @@ def route_discrepancies():
         # (a same-day check-in exists). A PCI for a next-day arrival is just a task.
         is_pci     = is_arrival and any(_title_has_pci(_bw_task_title(t)) for t in slot["tasks"])
         for t in slot["tasks"]:
-            added.append({"property": disp, "task_name": _bw_task_title(t),
+            added.append({"property": disp, "property_id": slot["pid"],
+                          "task_name": _bw_task_title(t),
                           "task_id": t.get("id"),
                           "arrival": is_arrival, "pci": is_pci,
                           "history": _task_history_summary(t)})
 
     # REMOVED — a saved-route house with no task for this person today.
-    removed = [{"property": info["name"]}
+    removed = [{"property": info["name"],
+                "property_id": int(canon[4:]) if canon.startswith("pid:") and canon[4:].isdigit() else None}
                for canon, info in route_by_canon.items() if canon not in tasks_by_canon]
 
     # NEW CHECK-IN — a house already ON the route that became a same-day arrival since the
@@ -1643,7 +1645,7 @@ def route_discrepancies():
         if not _canon_is_arrival(canon, pid, info["name"]):
             continue
         tlist = slot["tasks"] if slot else []
-        new_checkin.append({"property": info["name"],
+        new_checkin.append({"property": info["name"], "property_id": pid,
                             "tasks": [_bw_task_title(t) for t in tlist],
                             "pci":   any(_title_has_pci(_bw_task_title(t)) for t in tlist)})
 
@@ -1662,7 +1664,8 @@ def route_discrepancies():
             task_min = int(tod[:2]) * 60 + int(tod[3:5])
             if abs(task_min - int(planned)) > 15:
                 ph, pm = divmod(int(planned), 60)
-                moved.append({"property": slot["name"], "task_name": _bw_task_title(t),
+                moved.append({"property": slot["name"], "property_id": slot["pid"],
+                              "task_name": _bw_task_title(t),
                               "was": f"{ph % 24:02d}:{pm:02d}", "now": tod})
 
     # Full current task list for this person that day, grouped by house, with same-day

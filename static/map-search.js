@@ -1029,6 +1029,17 @@ function _bwTaskLabel(taskId, text, className) {
   return span;
 }
 
+// 📅 link (as an HTML string) to a property's Breezeway calendar, for the string-built
+// CHANGES-vs-Breezeway panel. Lets her open a changed/removed house's calendar to see
+// what happened. Returns "" when we don't have the property id. Style matches the sidebar.
+function _bwCalLinkHtml(pid, name) {
+  if (pid == null || pid === "") return "";
+  return ` <a href="https://app.breezeway.io/property/${encodeURIComponent(pid)}/calendar"`
+       + ` target="_blank" rel="noopener"`
+       + ` class="text-indigo-500 hover:underline text-[11px] font-normal whitespace-nowrap"`
+       + ` title="Open ${_escHtml(name || "")}'s calendar in Breezeway" onclick="event.stopPropagation()">📅 ↗</a>`;
+}
+
 let _bwSidebarMinimized = true;  // starts minimized
 
 function bwSidebarMinimize() {
@@ -1316,7 +1327,7 @@ function _renderChangesHtml(d) {
     h += `<div class="font-semibold text-amber-800 mb-1">☀️ New check-in today (${newCheckin.length})</div>`;
     for (const c of newCheckin) {
       h += `<div class="mb-1.5 leading-snug bg-amber-50 border-l-2 border-amber-400 rounded-r pl-2 pr-1 py-1">`;
-      h += `<div class="text-gray-800 font-medium">${_escHtml(c.property)}`
+      h += `<div class="text-gray-800 font-medium">${_escHtml(c.property)}${_bwCalLinkHtml(c.property_id, c.property)}`
          + ` <span class="inline-block align-middle bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">☀️ NEW CHECK-IN</span>`
          + (c.pci ? ` <span class="inline-block align-middle bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">⚡ BY NOON</span>` : "")
          + `</div>`;
@@ -1343,7 +1354,7 @@ function _renderChangesHtml(d) {
       // `a.pci` already requires a same-day arrival; a next-day PCI stays unflagged.
       const propPci = byProp[prop].some(a => a.pci);
       h += `<div class="mb-1.5 leading-snug">`;
-      h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}`
+      h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}${_bwCalLinkHtml(byProp[prop][0].property_id, prop)}`
          + (propPci ? ` <span class="inline-block align-middle bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">⚡ PRIORITY CHECK-IN</span>` : "")
          + `</div>`;
       for (const a of byProp[prop]) {
@@ -1371,12 +1382,12 @@ function _renderChangesHtml(d) {
   }
   if (removed.length) {
     h += `<div class="font-semibold text-amber-700 mt-3 mb-1">➖ No longer on list (${removed.length})</div>`;
-    for (const r of removed) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}</div>`;
+    for (const r of removed) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}${_bwCalLinkHtml(r.property_id, r.property)}</div>`;
   }
   if (moved.length) {
     h += `<div class="font-semibold text-blue-700 mt-3 mb-1">🕑 Time changed (${moved.length})</div>`;
     for (const m of moved) {
-      h += `<div class="text-gray-700 mb-1">${_escHtml(m.property)}: `
+      h += `<div class="text-gray-700 mb-1">${_escHtml(m.property)}${_bwCalLinkHtml(m.property_id, m.property)}: `
          + `<span class="text-gray-400">${_escHtml(m.was)} → </span>${_escHtml(m.now)}</div>`;
     }
   }
