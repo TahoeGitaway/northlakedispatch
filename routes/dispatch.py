@@ -6,6 +6,7 @@ optimize, matrix-row, public route viewer, portfolio.
 import json
 import math
 import os
+import secrets
 from datetime import datetime
 
 import requests
@@ -251,9 +252,10 @@ def home():
     )
 
 
-# ── Portfolio (public) ────────────────────────────────────────────
+# ── Portfolio ─────────────────────────────────────────────────────
 
 @dispatch_bp.route("/portfolio")
+@login_required
 def portfolio():
     conn = get_db()
     cur  = get_cursor(conn)
@@ -281,7 +283,7 @@ def saved_routes():
     cur  = get_cursor(conn)
     cur.execute("""
         SELECT r.id, r.name, r.assigned_to, r.route_date, r.created_at, r.updated_at,
-               r.total_duration, r.driving_duration, r.distance, r.team_id,
+               r.total_duration, r.driving_duration, r.distance, r.team_id, r.view_token,
                COALESCE(r.archived, 0) AS archived,
                COALESCE(r.created_by_display, u.name) AS created_by_name,
                lu.name AS last_edited_by_name
@@ -341,24 +343,26 @@ def save_route():
         if ps:
             team_id = ps["id"]
 
+    # Unguessable token for the shareable /view link (so links can't be enumerated).
+    view_token = secrets.token_urlsafe(16)
     cur.execute(
         """INSERT INTO saved_routes
            (name, assigned_to, route_date, start_time, start_location_json, end_location_json,
             stops_json, total_duration, driving_duration, service_duration, distance,
-            notes, notes_public, team_id,
+            notes, notes_public, team_id, view_token,
             created_by, last_edited_by, created_at, updated_at)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (name, assigned_to or None, route_date, start_time, start_loc_json, end_loc_json,
          json.dumps(schedule),
          stats.get("total_duration", 0), stats.get("driving_duration", 0),
          stats.get("service_duration", 0), stats.get("distance", 0),
-         notes, notes_public, team_id,
+         notes, notes_public, team_id, view_token,
          current_user.id, current_user.id, now, now)
     )
     route_id = cur.fetchone()["id"]
     conn.commit()
     cur.close(); conn.close()
-    return jsonify({"success": True, "id": route_id})
+    return jsonify({"success": True, "id": route_id, "view_token": view_token})
 
 
 @dispatch_bp.route("/routes/<int:route_id>/update", methods=["POST"])
@@ -1057,9 +1061,11 @@ def route_geometry():
 
 
 # ── Public route viewer ───────────────────────────────────────────
+# Public by design (crew open their route without an account), but addressed by
+# an unguessable token — never the sequential id — so links can't be enumerated.
 
-@dispatch_bp.route("/view/<int:route_id>")
-def view_route(route_id):
+@dispatch_bp.route("/view/<token>")
+def view_route(token):
     conn = get_db()
     cur  = get_cursor(conn)
     cur.execute(
@@ -1068,8 +1074,8 @@ def view_route(route_id):
                   u.name AS created_by_name
            FROM saved_routes r
            JOIN users u ON r.created_by = u.id
-           WHERE r.id = %s""",
-        (route_id,)
+           WHERE r.view_token = %s""",
+        (token,)
     )
     row = cur.fetchone()
     cur.close(); conn.close()
@@ -1308,7 +1314,8 @@ def bw_import():
                     if n:
                         asgn_list.append(n)
                 bw_name_tasks.setdefault(bw_name, []).append(
-                    {"task_name": task_name, "assignees": asgn_list, "date": t_date}
+                    {"task_name": task_name, "task_id": t.get("id"),
+                     "assignees": asgn_list, "date": t_date}
                 )
         matched, uncertain, unmatched = [], [], []
         for bw_name in bw_names:
@@ -1679,7 +1686,8 @@ def route_discrepancies():
     # saved route). `pci` marks a same-day priority check-in; a next-day PCI stays unflagged.
     current_tasks = sorted(
         ({"property": slot["name"],
-          "tasks":    [_bw_task_title(t) for t in slot["tasks"]],
+          "property_id": slot["pid"],
+          "tasks":    [{"name": _bw_task_title(t), "id": t.get("id")} for t in slot["tasks"]],
           "arrival":  _canon_is_arrival(canon, slot["pid"], slot["name"]),
           "pci":      _canon_is_arrival(canon, slot["pid"], slot["name"])
                       and any(_title_has_pci(_bw_task_title(t)) for t in slot["tasks"])}

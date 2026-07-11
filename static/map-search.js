@@ -816,7 +816,7 @@ function _flagPciFromTasks(currentTasks) {
   const wantByProp = new Map();   // propLower -> should-be-PCI (boolean)
   for (const c of currentTasks) {
     const hasPciTitle = (c.tasks || []).some(t =>
-      _titleHasPci(typeof t === "string" ? t : ((t && (t.task_name || t.title)) || "")));
+      _titleHasPci(typeof t === "string" ? t : ((t && (t.name || t.task_name || t.title)) || "")));
     if (!hasPciTitle) continue;
     // Trust the backend `pci` flag (already requires a SAME-DAY arrival). Older
     // payloads without the field fall back to "has PCI title" = treat as same-day.
@@ -1005,6 +1005,28 @@ function _bwCalendarLink(name) {
   a.textContent = "📅 ↗";
   a.addEventListener("click", e => e.stopPropagation());  // don't trigger row/stop handlers
   return a;
+}
+
+// Return a task-title element for the sidebar: an <a> linking straight to the task in
+// Breezeway when we have its id, otherwise a plain <span>. `className` styles the text
+// either way (so it matches the surrounding rows); the link just adds a hover underline
+// and stops the click from bubbling to the row/stop handlers.
+function _bwTaskLabel(taskId, text, className) {
+  if (taskId != null && taskId !== "") {
+    const a = document.createElement("a");
+    a.href      = `https://app.breezeway.io/task/${encodeURIComponent(taskId)}`;
+    a.target    = "_blank";
+    a.rel       = "noopener";
+    a.className  = className + " hover:underline";
+    a.title      = "Open this task in Breezeway";
+    a.textContent = text;
+    a.addEventListener("click", e => e.stopPropagation());
+    return a;
+  }
+  const span = document.createElement("span");
+  span.className   = className;
+  span.textContent = text;
+  return span;
 }
 
 let _bwSidebarMinimized = true;  // starts minimized
@@ -1210,6 +1232,11 @@ function _renderRouteChangesInto(routeId, body, force) {
     body.innerHTML = html;
     _routeChangesCache = { routeId, html, data };
     _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
+    // Remember each house's Breezeway property_id from the live scan so the saved-route
+    // sidebar can render 📅 calendar links (the imported-BW path fills this in separately).
+    for (const c of (data.current_tasks || [])) {
+      if (c.property_id && !_bwPropIdByName[c.property]) _bwPropIdByName[c.property] = c.property_id;
+    }
     _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
   }).catch(e => {
     console.error("[route-changes] route", routeId, "fetch failed:", e);
@@ -1539,6 +1566,8 @@ function _syncSidebarToSchedule() {
       const name = document.createElement("span");
       name.className = "text-xs leading-snug " + (liveArrival ? "font-medium text-green-700" : "text-gray-700");
       name.textContent = s.name;
+      const cal = _bwCalendarLink(s.name);   // 📅 → property's Breezeway calendar (when we have its id)
+      if (cal) name.appendChild(cal);
       row.appendChild(num); row.appendChild(name);
       if (liveArrival) {
         const badge = document.createElement("span");
@@ -1547,12 +1576,21 @@ function _syncSidebarToSchedule() {
         row.appendChild(badge);
       }
       card.appendChild(row);
-      // Auto-loaded task titles for this property that day, for this person
+      // Auto-loaded tasks for this property that day, for this person. Each links to the
+      // task in Breezeway when we have its id (older payloads sent plain title strings).
       const tasks = _tasksForStop(s.name);
       if (tasks && tasks.length) {
         const tl = document.createElement("div");
         tl.className = "pl-6 mt-0.5 space-y-0.5";
-        tl.innerHTML = tasks.map(t => `<div class="text-[11px] text-gray-400 leading-snug">• ${_escHtml(t)}</div>`).join("");
+        for (const t of tasks) {
+          const title = (t && typeof t === "object") ? (t.name || "") : t;
+          const tid   = (t && typeof t === "object") ? t.id : null;
+          const line  = document.createElement("div");
+          line.className = "text-[11px] text-gray-400 leading-snug";
+          line.appendChild(document.createTextNode("• "));
+          line.appendChild(_bwTaskLabel(tid, title, "text-gray-400"));
+          tl.appendChild(line);
+        }
         card.appendChild(tl);
       }
       content.appendChild(card);
@@ -1589,10 +1627,8 @@ function _syncSidebarToSchedule() {
     for (const t of tasks) {
       const taskRow = document.createElement("div");
       taskRow.className = "flex items-baseline gap-1 mt-0.5";
-      const tname = document.createElement("span");
-      tname.className = (s.priority_checkin && _titleHasPci(t.task_name)) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
-      tname.textContent = t.task_name;
-      taskRow.appendChild(tname);
+      const tnameClass = (s.priority_checkin && _titleHasPci(t.task_name)) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
+      taskRow.appendChild(_bwTaskLabel(t.task_id, t.task_name, tnameClass));  // → task in Breezeway when we have its id
       if (t.assignees && t.assignees.length) {
         const asgn = document.createElement("span");
         asgn.className = "text-xs text-gray-400";

@@ -113,6 +113,30 @@
     color: #9ca3af;
     flex-shrink: 0;
   }
+  .summary-prop-vip {
+    font-size: 0.72rem;
+    line-height: 1;
+  }
+  /* Last clean was owner-handled → schedule the Walk Thru early */
+  .summary-prop-oc {
+    font-size: 0.72rem;
+    line-height: 1;
+  }
+  .summary-oc-badge {
+    display: inline-block;
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #92400e;
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    border-radius: 4px;
+    padding: 1px 4px;
+    margin-left: 4px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
 </style>
 
 <div class="px-6 py-6">
@@ -513,8 +537,8 @@ async function loadDaySummary(ds, force = false) {
           </div>
           <ul style="margin:0;padding:0;list-style:none;">
             ${items.map(p => `
-              <li class="summary-prop" style="margin-bottom:3px;" title="${p.name}">
-                <span class="summary-prop-name">${p.name}</span>
+              <li class="summary-prop" style="margin-bottom:3px;" data-pid="${p.property_id ?? ''}" data-name="${(p.name || '').replace(/"/g, '&quot;')}" title="${p.vip ? 'VIP · ' : ''}${p.name}">
+                <span class="summary-prop-name">${p.vip ? `<span class="summary-prop-vip" title="VIP reservation">⭐</span> ` : ""}${p.name}</span>
                 ${p.time ? `<span class="summary-prop-time">${p.time}</span>` : ""}
               </li>`).join("")}
           </ul>
@@ -526,8 +550,58 @@ async function loadDaySummary(ds, force = false) {
     renderGroup(arrEl, data.arrivals   || {});
     renderGroup(depEl, data.departures || {});
     panel.classList.remove("hidden");
+
+    // Lazily flag arrivals whose LAST clean was owner-handled ("Owner Cleaned"),
+    // so she can schedule those Walk Thrus earlier. Runs after the panel renders
+    // (it fans out one Breezeway task call per arriving house) and never blocks it.
+    decorateOwnerCleaned(ds, force);
   } catch (e) {
     loading.classList.add("hidden");
+  }
+}
+
+/* Flag arrivals whose last clean was "Owner Cleaned". Best-effort DOM overlay —
+   a failure here never disturbs the arrivals list itself. */
+async function decorateOwnerCleaned(ds, force = false) {
+  const arrEl = document.getElementById("daySummaryArrivals");
+  if (!arrEl) return;
+  try {
+    const url = `/briefing/owner-cleaned-check?date=${ds}` + (force ? "&refresh=1" : "");
+    const res = await fetch(url);
+    const data = await res.json();
+    // A later day-click may have superseded this fetch — bail if the day changed.
+    if (currentSummaryDate !== ds) return;
+    if (!data || !Array.isArray(data.flagged)) return;
+
+    const byPid  = new Set(data.flagged.map(f => String(f.property_id)).filter(Boolean));
+    const byName = new Set(data.flagged.map(f => f.name).filter(Boolean));
+
+    arrEl.querySelectorAll("li.summary-prop").forEach(li => {
+      const pid  = li.getAttribute("data-pid") || "";
+      const name = li.getAttribute("data-name") || "";
+      const hit  = (pid && byPid.has(pid)) || (name && byName.has(name));
+      if (!hit || li.querySelector(".summary-oc-badge")) return;
+
+      li.title = "Last clean was Owner Cleaned — schedule Walk Thru early. " + li.title;
+      const nameEl = li.querySelector(".summary-prop-name");
+      if (nameEl) {
+        const icon = document.createElement("span");
+        icon.className = "summary-prop-oc";
+        icon.title = "Last clean was Owner Cleaned";
+        icon.textContent = "🧹";
+        nameEl.prepend(icon, document.createTextNode(" "));
+      }
+      const badge = document.createElement("span");
+      badge.className = "summary-oc-badge";
+      badge.title = "Last clean was Owner Cleaned — schedule Walk Thru early";
+      badge.textContent = "Owner Cleaned";
+      // Insert the badge before the time so it sits with the name.
+      const timeEl = li.querySelector(".summary-prop-time");
+      if (timeEl) li.insertBefore(badge, timeEl);
+      else li.appendChild(badge);
+    });
+  } catch (e) {
+    /* silent — decoration is optional, arrivals list stands on its own */
   }
 }
 
@@ -723,7 +797,8 @@ const allRoutes = [
     total_duration: {{ r.total_duration or 0 }},
     distance: {{ r.distance or 0 }},
     team_id: {{ r.team_id if r.team_id else 'null' }},
-    archived: {{ 1 if r.archived else 0 }}
+    archived: {{ 1 if r.archived else 0 }},
+    view_token: {{ (r.view_token or '') | tojson }}
   }{{ "," if not loop.last }}
   {% endfor %}
 ];
@@ -981,7 +1056,7 @@ function selectDay(ds) {
     const shareBtn = document.createElement("button");
     shareBtn.className = "bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors";
     shareBtn.textContent = "📤 Share";
-    shareBtn.onclick = () => shareRoute(route.id, route.name);
+    shareBtn.onclick = () => shareRoute(route.view_token, route.name);
     btns.appendChild(shareBtn);
 
     const archBtn = document.createElement("button");
@@ -1292,8 +1367,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-function shareRoute(routeId, routeName) {
-  const url = `${window.location.origin}/view/${routeId}`;
+function shareRoute(token, routeName) {
+  const url = `${window.location.origin}/view/${token}`;
   if (navigator.share) {
     navigator.share({ title: routeName + ' — North Lake Dispatch', text: 'Your route for today:', url }).catch(() => {});
     return;

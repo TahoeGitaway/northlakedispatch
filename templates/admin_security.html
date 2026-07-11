@@ -66,7 +66,7 @@
       <div class="px-6 py-5 space-y-3 text-sm text-gray-600">
         <div class="flex gap-3">
           <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
-          <span><strong class="text-gray-800">All routes require login.</strong> Every page and API endpoint is protected with <code class="bg-gray-100 px-1 rounded">@login_required</code>. Unauthenticated requests are redirected to the login page — no data is served to anonymous users.</span>
+          <span><strong class="text-gray-800">Routes require login.</strong> Every page and API endpoint is protected with <code class="bg-gray-100 px-1 rounded">@login_required</code>, with one deliberate exception: the shareable route viewer, which crew open without an account. That page is reachable only through an unguessable per-route token (never a sequential id), so it can't be enumerated — and it exposes only that single route's stops, nothing else.</span>
         </div>
         <div class="flex gap-3">
           <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
@@ -74,7 +74,7 @@
         </div>
         <div class="flex gap-3">
           <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
-          <span><strong class="text-gray-800">Passwords are hashed.</strong> User passwords are stored using Werkzeug's <code class="bg-gray-100 px-1 rounded">generate_password_hash</code> (PBKDF2-SHA256). Plain-text passwords are never stored.</span>
+          <span><strong class="text-gray-800">Passwords are hashed.</strong> User passwords are stored using Werkzeug's <code class="bg-gray-100 px-1 rounded">generate_password_hash</code> with per-user salted hashing. Plain-text passwords are never stored.</span>
         </div>
         <div class="flex gap-3">
           <span class="text-emerald-500 mt-0.5 shrink-0">✓</span>

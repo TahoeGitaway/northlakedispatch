@@ -16,12 +16,6 @@
     <label class="text-gray-500 font-medium text-sm">Day</label>
     <input type="date" id="theDate"
            class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-rose-300">
-    <label class="text-gray-500 font-medium text-sm">Who</label>
-    <button type="button" id="whoBtn"
-            onclick="document.getElementById('peoplePanel').classList.toggle('hidden')"
-            class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-rose-300">
-      <span id="whoSummary">Everyone</span> <span class="text-gray-400">▾</span>
-    </button>
     <button onclick="load()"
             class="px-4 py-1.5 bg-rose-500 text-white text-sm font-semibold rounded-lg hover:bg-rose-600 transition-colors">
       Check
@@ -165,6 +159,7 @@ function _setAllPeople(on) {
 
 function _syncWhoSummary() {
   const el = document.getElementById("whoSummary");
+  if (!el) return;                       // "Who" dropdown removed — nothing to sync
   const total = PEOPLE.length;
   if (!total) { el.textContent = "Everyone"; return; }
   const checked = _checkedIds();
@@ -181,6 +176,7 @@ function _populatePeople(people) {
   PEOPLE = people || [];
   const list  = document.getElementById("peopleList");
   const empty = document.getElementById("peopleEmpty");
+  document.getElementById("peoplePanel").classList.remove("hidden");  // pop up after Check
   const hadPrev = list.querySelectorAll(".who-cb").length > 0;
   const prev = _checkedIds();
   list.innerHTML = "";

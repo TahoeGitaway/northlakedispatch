@@ -11,6 +11,7 @@ Never creates tasks. Only updates tasks that already exist.
 import requests
 from flask import Blueprint, request, jsonify
 from flask_login import login_required
+from routes.auth import admin_required
 
 bw_sync_bp = Blueprint("bw_sync", __name__)
 
@@ -139,6 +140,7 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
 
 @bw_sync_bp.route("/api/bw-sync-times", methods=["POST"])
 @login_required
+@admin_required
 def bw_sync_times():
     """
     Body: {"date": "YYYY-MM-DD", "stops": [{"name": str, "eta_minutes": int}, ...]}

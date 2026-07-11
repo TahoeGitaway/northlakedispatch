@@ -46,6 +46,7 @@ CALENDAR_CACHE_TTL = 30 * 60   # 30 minutes for calendar activity
 _briefing_cache:      dict  = {}   # {cache_key: (timestamp, payload)}
 _calendar_cache:      dict  = {}   # {(year, month): (timestamp, activity_dict)}
 _day_summary_cache:   dict  = {}   # {date_str: (timestamp, payload)}
+_owner_cleaned_cache: dict  = {}   # {date_str: (timestamp, payload)} — owner-cleaned arrival flags
 _prop_status_cache:   dict  = {}   # {property_id: (timestamp, payload)}
 _PROP_STATUS_TTL            = 20 * 60   # 20 minutes per property
 _bw_token:            dict  = {"value": None, "expires_at": 0}
@@ -821,7 +822,13 @@ def day_summary():
             continue
         prop = _get_property_name(r.get("property_id"))
         t    = (r.get("checkin_time") or "")[:5]
-        arrivals.setdefault(kind, []).append({"name": prop, "time": t})
+        # Star arrivals whose reservation carries a VIP tag (same detection the
+        # VIP tracker's scan uses). Only arrivals get the flag — departures don't.
+        is_vip = any("vip" in _extract_str(tag) for tag in (r.get("tags") or []))
+        arrivals.setdefault(kind, []).append({
+            "name": prop, "time": t, "vip": is_vip,
+            "property_id": r.get("property_id"),
+        })
 
     for r in checkouts:
         kind = _classify_reservation(r)
@@ -875,6 +882,180 @@ def save_day_summary():
         return jsonify({"success": True, "saved_at": saved_at})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── Owner-cleaned arrival check ───────────────────────────────────
+#
+# She manages the inspectors. When the LAST clean at an arriving house was the
+# owner handling it themselves (a Breezeway task literally titled "Owner Cleaned"),
+# she wants to schedule that house's Walk Thru earlier in the day — an owner clean
+# needs a closer look than a staff turnover. This scan finds those houses so the
+# arrivals list can flag them.
+
+def _is_owner_cleaned_title(title: str) -> bool:
+    """True when a cleaning task's title marks it as owner-handled.
+    Strict-ish: the title must contain 'owner' and 'clean' (case-insensitive),
+    which matches 'Owner Cleaned' / 'Owner Clean' without grabbing an unrelated
+    'Deep Clean' or 'Owner Arrival'."""
+    t = (title or "").lower()
+    return "owner" in t and "clean" in t
+
+
+def _is_cleaning_dept(task: dict) -> bool:
+    """True when a Breezeway task belongs to the cleaning/housekeeping department.
+    Same normalization group_assign / assignee_monitor use."""
+    dept = task.get("type_department")
+    if isinstance(dept, dict):
+        dept = dept.get("code") or dept.get("name") or ""
+    dl = str(dept).strip().lower()
+    return "clean" in dl or "housekeep" in dl
+
+
+def _robust_property_tasks_window(token, ref_id, start_str, end_str):
+    """Fetch ONE property's tasks over a date window with retry/backoff, mirroring
+    occupancy_check's single-day fetcher so a momentary Breezeway throttle
+    (429 / 5xx) doesn't silently drop the property.
+    Returns (tasks, ok); ok=False means it genuinely couldn't be loaded."""
+    for attempt in range(3):
+        r, _, status = _fetch_bw_endpoint(
+            token, "/public/inventory/v1/task",
+            {"reference_property_id": ref_id, "scheduled_date": f"{start_str},{end_str}"})
+        if status == 200:
+            return (r or [], True)
+        if status is None or status == 429 or status >= 500:
+            time.sleep(0.3 * (attempt + 1))
+            continue
+        r2, _, st2 = _fetch_bw_endpoint(
+            token, "/public/inventory/v1/task",
+            {"reference_property_id": ref_id, "start_date": start_str, "end_date": end_str})
+        return (r2 or [], True) if st2 == 200 else ([], False)
+    return ([], False)
+
+
+def _last_clean_is_owner(tasks: list, arrival_date) -> bool:
+    """Given a property's tasks and its arrival date, decide whether the LAST clean
+    on or before arrival was an 'Owner Cleaned' task.
+
+    Look-back is tiered so a recent turnover is preferred over a stale one: try the
+    3 days up to arrival, then 7, then the full 14 — the first tier that contains
+    any cleaning task wins. Within that tier the LATEST scheduled date is 'the last
+    clean'. Flag only when that date's cleaning tasks are owner-cleaned AND carry no
+    competing staff clean (a same-day staff clean supersedes the owner one)."""
+    # Keep only cleaning-department tasks scheduled on/before the arrival day,
+    # tagged with their parsed date.
+    dated = []
+    for t in tasks:
+        if not _is_cleaning_dept(t):
+            continue
+        ds = (t.get("scheduled_date") or "")[:10]
+        try:
+            d = date_cls.fromisoformat(ds)
+        except Exception:
+            continue
+        if d > arrival_date:
+            continue
+        dated.append((d, t))
+    if not dated:
+        return False
+
+    for window in (3, 7, 14):
+        cutoff = arrival_date - timedelta(days=window)
+        tier = [(d, t) for (d, t) in dated if d >= cutoff]
+        if not tier:
+            continue
+        latest = max(d for d, _ in tier)
+        latest_tasks = [t for d, t in tier if d == latest]
+        owner = any(_is_owner_cleaned_title(_get_task_title(t)) for t in latest_tasks)
+        other = any(not _is_owner_cleaned_title(_get_task_title(t)) for t in latest_tasks)
+        return owner and not other
+    return False
+
+
+def _get_task_title(t: dict) -> str:
+    """Pull a task's display title, same field order the rest of the app uses."""
+    title = (t.get("name") or t.get("task_name") or t.get("task_type") or t.get("type") or "")
+    if isinstance(title, dict):
+        title = title.get("value") or title.get("name") or ""
+    return str(title)
+
+
+@briefing_bp.route("/briefing/owner-cleaned-check")
+@login_required
+def owner_cleaned_check():
+    """For the arrivals on a given date, flag houses whose LAST clean was owner-handled.
+
+    Fans out one Breezeway task query per arriving property (the task API has no
+    company-wide day query — it needs a reference_property_id per call), so this runs
+    lazily after the arrivals panel renders rather than blocking it.
+    Returns {date, flagged: [{property_id, name}], scanned, failed_properties, error}.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    force    = request.args.get("refresh") == "1"
+
+    cached = _owner_cleaned_cache.get(date_str)
+    if cached and not force and (time.time() - cached[0]) < 600:
+        return jsonify({**cached[1], "cached_at": _fmt_pacific(cached[0])})
+
+    try:
+        arrival_date = date_cls.fromisoformat(date_str)
+    except Exception:
+        return jsonify({"error": f"Bad date: {date_str}"}), 400
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"date": date_str, "flagged": [], "scanned": 0,
+                        "failed_properties": 0, "error": "Breezeway not configured."})
+
+    _ensure_property_cache()
+    checkins = _fetch_bw_reservations(token, {
+        "checkin_date_ge": date_str, "checkin_date_le": date_str,
+    })
+
+    # property_id -> display name, for each non-block arrival
+    arriving = {}
+    for r in checkins:
+        if _classify_reservation(r) == "block":
+            continue
+        pid = r.get("property_id")
+        if pid:
+            arriving[pid] = _get_property_name(pid)
+
+    if not arriving:
+        payload = {"date": date_str, "flagged": [], "scanned": 0, "failed_properties": 0}
+        _owner_cleaned_cache[date_str] = (time.time(), payload)
+        return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
+
+    ref_cache = _get_live_ref_cache()
+    start_str = (arrival_date - timedelta(days=14)).isoformat()
+
+    def _job(pid):
+        ref = ref_cache.get(pid) or str(pid)
+        tasks, ok = _robust_property_tasks_window(token, ref, start_str, date_str)
+        if not ok:
+            return (pid, None)   # None == load failed, distinct from False (loaded, not flagged)
+        return (pid, _last_clean_is_owner(tasks, arrival_date))
+
+    flagged, failed = [], 0
+    with ThreadPoolExecutor(max_workers=32) as ex:
+        for pid, result in ex.map(_job, list(arriving.keys())):
+            if result is None:
+                failed += 1
+            elif result:
+                flagged.append({"property_id": pid, "name": arriving[pid]})
+
+    payload = {
+        "date":              date_str,
+        "flagged":           flagged,
+        "scanned":           len(arriving),
+        "failed_properties": failed,
+    }
+    # Only cache a clean scan — a run with failed properties may be missing flags,
+    # so let the next load retry rather than serving an incomplete result for 10 min.
+    if not failed:
+        _owner_cleaned_cache[date_str] = (time.time(), payload)
+    return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
 
 
 @briefing_bp.route("/briefing/property-status")

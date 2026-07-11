@@ -4,6 +4,7 @@ Imported by app.py and all blueprint modules.
 """
 
 import os
+import secrets
 import psycopg2
 import psycopg2.extras
 from flask_login import UserMixin
@@ -433,6 +434,17 @@ def init_db():
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS created_by_display TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS team_id INTEGER")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS archived INTEGER DEFAULT 0")
+
+    # Shareable route links use an unguessable token instead of the sequential id,
+    # so the public /view/<token> page can't be enumerated. Backfill any existing
+    # route once, then enforce uniqueness.
+    cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS view_token TEXT")
+    cur.execute("SELECT id FROM saved_routes WHERE view_token IS NULL")
+    for _r in cur.fetchall():
+        cur.execute("UPDATE saved_routes SET view_token = %s WHERE id = %s",
+                    (secrets.token_urlsafe(16), _r["id"]))
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saved_routes_view_token_idx "
+                "ON saved_routes (view_token)")
     cur.execute("ALTER TABLE task_completions ADD COLUMN IF NOT EXISTS task_type TEXT DEFAULT 'departure_clean'")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
