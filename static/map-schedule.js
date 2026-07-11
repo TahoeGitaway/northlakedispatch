@@ -393,7 +393,7 @@ function restartRoute() {
   if ((selectedStops.length || isOptimized) &&
       !confirm("Start over? This will clear all stops and the current route.")) return;
   selectedStops = []; optimizedSchedule = []; isOptimized = false;
-  durationMatrix = []; startMinutes = 9 * 60; currentRouteId = null;
+  durationMatrix = []; startMinutes = 9 * 60; currentRouteId = null; currentRouteTeamId = null;
   lastStats = { total_duration:0, driving_duration:0, service_duration:0, distance:0 };
   if (typeof _bwByAssignee !== "undefined") _bwByAssignee = null;
   if (typeof _bwTasksByPropName !== "undefined") _bwTasksByPropName = {};

@@ -223,9 +223,13 @@ function openSaveModal() {
   const sidebarTeam = document.getElementById("sidebarTeamId");
   const modalTeam   = document.getElementById("saveTeamId");
   if (modalTeam) {
-    modalTeam.value = (currentRouteId && sidebarTeam && sidebarTeam.value)
-      ? sidebarTeam.value
-      : "";
+    // Updating an existing route: pre-fill from currentRouteTeamId (set when the
+    // route was loaded/saved) — the reliable source. Fall back to the sidebar
+    // select only if that's unset. A NEW route stays blank to force a pick.
+    const savedTeam = (currentRouteId && (currentRouteTeamId || (sidebarTeam && sidebarTeam.value))) || "";
+    modalTeam.value = savedTeam;
+    // Keep the sidebar select in sync in case its options loaded after the route did.
+    if (savedTeam && sidebarTeam) sidebarTeam.value = savedTeam;
   }
 
   document.getElementById("saveModal").classList.remove("hidden");
@@ -346,6 +350,7 @@ async function submitSaveRoute(mode = "return") {
       reenable(); return;
     }
     if (data.id) currentRouteId = data.id;
+    currentRouteTeamId = teamId;   // remember for subsequent same-session updates
 
     if (mode === "sync") {
       // Save is done — hand straight off to the ORIGINAL, untouched sidebar
@@ -483,6 +488,11 @@ async function loadRouteById(loadId) {
     document.getElementById("notesPublicField").checked = data.notes_public || false;
     const teamEl      = document.getElementById("saveTeamId");
     const sidebarTeam = document.getElementById("sidebarTeamId");
+    // Remember the route's team as the source of truth. The sidebar <select>'s
+    // options are built in a DOMContentLoaded handler that can run AFTER this
+    // fetch resolves, so setting sidebarTeam.value here may silently no-op; the
+    // modal reads currentRouteTeamId instead of trusting the sidebar value.
+    currentRouteTeamId = data.team_id || null;
     if (data.team_id) {
       if (teamEl)      teamEl.value      = data.team_id;
       if (sidebarTeam) sidebarTeam.value = data.team_id;

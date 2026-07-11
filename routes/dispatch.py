@@ -631,7 +631,24 @@ def _solve_route(
         secs = max(5, min(10, n_stops))     # 5-10 s; unconstrained TSP
     params.time_limit.FromSeconds(secs)
 
-    solution = routing.SolveWithParameters(params)
+    # A "go first" front block is a hard ordering constraint the from-scratch
+    # first-solution search can time out on (all three passes returning
+    # ROUTING_FAIL_TIMEOUT). But we already KNOW one valid ordering: every
+    # go-first stop, then the rest. Seed the solver with that route so it starts
+    # from a feasible solution and only has to IMPROVE it, instead of searching
+    # for feasibility from zero. This is what lets 1, 2, or N go-first stops
+    # optimize instead of erroring. The front-block constraint is unchanged and
+    # still enforced — only the search's STARTING POINT changes.
+    solution = None
+    if front_flags and any(front_flags[1:]):
+        seed = ([n for n in range(1, size) if n != end_node and front_flags[n]] +
+                [n for n in range(1, size) if n != end_node and not front_flags[n]])
+        initial = routing.ReadAssignmentFromRoutes([seed], True)
+        if initial is not None:
+            solution = routing.SolveFromAssignmentWithParameters(initial, params)
+    if solution is None:
+        solution = routing.SolveWithParameters(params)
+
     status_code = routing.status()
     status_name = _ROUTING_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
     if not solution:
