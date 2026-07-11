@@ -400,6 +400,32 @@ function _taskRow(t, isCheckin) {
       <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${propLine}</div>
       <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;">📅 ${esc(when)}</div>
     </div>`;
+  // Reassignment state — driven by the model (set in _applyAssignResults), so it
+  // survives both a full re-render AND switching tabs. This is what fixes the stale
+  // "still shows the old person, not marked as changed" view.
+  const badges = row.querySelector('.task-badges');
+  if (t._reassigned && badges) {
+    const b = document.createElement('span');
+    b.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;';
+    b.textContent = '↔ reassigned → ' + t._reassigned;
+    badges.appendChild(b);
+  }
+  if (t._assignFailed) {
+    row.style.background = '#fef2f2';
+    row.style.boxShadow = 'inset 3px 0 0 #ef4444';
+    if (badges) {
+      const b = document.createElement('span');
+      b.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;';
+      b.textContent = '✗ FAILED';
+      badges.appendChild(b);
+    }
+  }
+  if (t._flash) {
+    t._flash = false;                                   // one-shot: consume the flag
+    const settle = t._assignFailed ? '#fef2f2' : '';
+    row.style.background = '#fde68a';                   // amber flash on arrival in the new spot
+    setTimeout(() => { row.style.transition = 'background 0.8s ease'; row.style.background = settle; }, 700);
+  }
   return row;
 }
 
@@ -783,14 +809,12 @@ async function assignSelected() {
     }
     _renderAssignResults(data, personName);
 
-    // Gray out the successes; mark FAILURES red and keep them selected so they're
-    // impossible to miss and one click (Assign) retries them.
+    // Update the SHARED scan model (single source of truth) so BOTH tabs reflect the
+    // change; successes relocate under the new person with a persistent tag + a flash,
+    // failures stay red and selected for one-click retry. Then re-render the tab.
     const ok = data.ok_count || 0, fail = data.fail_count || 0;
-    (data.results || []).forEach(r => {
-      if (r.ok) _markAssigned(r.task_id, personName);
-      else      _markFailed(r.task_id);
-    });
-    _refreshCount();
+    _applyAssignResults(data.results || [], personName, Number(assignee_id));
+    _rerenderActive();
     if (fail) {
       const eb = document.getElementById('errorBox');
       eb.innerHTML = `<b>⚠ ${fail} assignment${fail !== 1 ? 's' : ''} FAILED.</b> `
@@ -804,47 +828,45 @@ async function assignSelected() {
   }
 }
 
-// Gray out a reassigned task row in place (no re-fetch) and lock its checkbox.
-function _markAssigned(taskId, personName) {
-  const row = document.querySelector(`.task-row[data-tid="${taskId}"]`);
-  if (!row) return;
-  const cb = row.querySelector('.task-cb');
-  if (cb) { cb.checked = false; cb.disabled = true; }
-  row.style.opacity = '0.45';
-  // Clear any prior FAILED styling (e.g. a retry that now succeeded).
-  row.style.background = '';
-  row.style.boxShadow = '';
-  const fb = row.querySelector('.failed-badge'); if (fb) fb.remove();
-  if (!row.querySelector('.reassigned-badge')) {
-    const b = document.createElement('span');
-    b.className = 'reassigned-badge';
-    b.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;';
-    b.textContent = '→ ' + personName;
-    const badges = row.querySelector('.task-badges');
-    if (badges) badges.appendChild(b);
-  }
+// Write assignment results into the SHARED scan task objects (the single source both
+// tabs render from). OK tasks take the new assignee from Breezeway's read-back so the
+// Specialist tab re-buckets them under the new person; they also get a persistent
+// "reassigned" tag and a one-shot flash. FAILED tasks get a sticky flag so they render
+// red and stay selectable for a one-click retry. No DOM is touched here — the re-render
+// after this reads these flags, so the change survives switching tabs.
+function _applyAssignResults(results, personName, assigneeId) {
+  const byId = {};
+  _allScanTasks().forEach(t => { byId[t.task_id] = t; });
+  results.forEach(r => {
+    const t = byId[r.task_id];
+    if (!t) return;
+    if (r.ok) {
+      // Prefer Breezeway's confirmed post-assign name(s); fall back to the picked name.
+      const after = (Array.isArray(r.assignees_after) && r.assignees_after.length)
+        ? r.assignees_after : [personName];
+      t.assignees     = after;
+      t.assignee_ids  = [assigneeId];
+      t._reassigned   = personName;   // persistent "↔ reassigned → X" tag until next rescan
+      t._flash        = true;         // brief highlight when it lands in its new spot
+      t._assignFailed = false;
+    } else {
+      t._assignFailed = true;         // sticky red + stays selected for retry
+      t._flash        = false;
+    }
+  });
 }
 
-// Mark a FAILED assignment in place — red, badged, and left SELECTED so the next
-// Assign click retries exactly the ones that didn't go through.
-function _markFailed(taskId) {
-  const row = document.querySelector(`.task-row[data-tid="${taskId}"]`);
-  if (!row) return;
-  const cb = row.querySelector('.task-cb');
-  if (cb) { cb.checked = true; cb.disabled = false; }
-  row.style.background = '#fef2f2';
-  row.style.boxShadow = 'inset 3px 0 0 #ef4444';
-  let badge = row.querySelector('.failed-badge');
-  if (!badge) {
-    badge = document.createElement('span');
-    badge.className = 'failed-badge';
-    badge.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;';
-    const badges = row.querySelector('.task-badges');
-    if (badges) badges.appendChild(badge);
-  }
-  badge.textContent = '✗ FAILED';
-  // Remove any stale "assigned" badge from a prior attempt.
-  const ab = row.querySelector('.reassigned-badge'); if (ab) ab.remove();
+// Re-render the active tab from the updated model, then re-check the failed tasks
+// (selection is checkbox/DOM-based, so it must be re-applied after the rebuild).
+function _rerenderActive() {
+  if (activeTab === 'spec') renderSpecTab(); else renderScan();
+  _allScanTasks().forEach(t => {
+    if (t._assignFailed) {
+      const cb = document.querySelector(`.task-cb[data-tid="${t.task_id}"]`);
+      if (cb) cb.checked = true;
+    }
+  });
+  _refreshCount();
 }
 
 // Brief auto-dismissing confirmation near the action bar.

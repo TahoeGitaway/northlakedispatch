@@ -679,7 +679,7 @@ function estServiceMinutes(tasks) {
   let sum = 0;
   for (const t of tasks) sum += estTaskMinutes(t.task_name || t.name || t);
   sum = Math.round(sum / 15) * 15;             // snap to 15-min steps (the dropdown's increments)
-  return Math.max(15, Math.min(240, sum));     // clamp to the dropdown range (15–240)
+  return Math.max(15, Math.min(60, sum));      // auto-allot caps at 60 min; user can raise it via the dropdown
 }
 
 /* ── BREEZEWAY IMPORT ── */

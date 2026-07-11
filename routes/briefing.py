@@ -893,12 +893,14 @@ def save_day_summary():
 # arrivals list can flag them.
 
 def _is_owner_cleaned_title(title: str) -> bool:
-    """True when a cleaning task's title marks it as owner-handled.
-    Strict-ish: the title must contain 'owner' and 'clean' (case-insensitive),
-    which matches 'Owner Cleaned' / 'Owner Clean' without grabbing an unrelated
-    'Deep Clean' or 'Owner Arrival'."""
-    t = (title or "").lower()
-    return "owner" in t and "clean" in t
+    """True ONLY for the owner-handled placeholder clean, titled exactly
+    'Owner Clean' / 'Owner Cleaned'.
+
+    Strict exact match on purpose: a mere 'owner' + 'clean' substring test wrongly
+    catches the standard 'Owner Departure Clean' turnover task, which is NOT owner-
+    handled and must not raise the flag. Prefer a miss over a wrong flag."""
+    t = " ".join((title or "").split()).lower().strip(" .-")
+    return t in ("owner clean", "owner cleaned")
 
 
 def _is_cleaning_dept(task: dict) -> bool:
