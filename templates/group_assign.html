@@ -906,8 +906,12 @@ function _renderAssignResults(data, personName) {
   html += '<div style="display:flex;flex-direction:column;gap:3px;">';
   results.forEach(r => {
     const now = (r.assignees_after && r.assignees_after.length) ? r.assignees_after.join(', ') : '—';
+    const taskLink = `<a href="https://app.breezeway.io/task/${esc(String(r.task_id))}" target="_blank" rel="noopener"`
+      + ` title="Open this task in Breezeway"`
+      + ` style="color:inherit;font-weight:700;text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;"`
+      + ` onmouseover="this.style.textDecorationColor='#6b7280'" onmouseout="this.style.textDecorationColor='#d1d5db'">${esc(r.task_id)}</a>`;
     html += `<div style="font-size:0.74rem;color:${r.ok ? '#374151' : '#b91c1c'};">`
-      + `${r.ok ? '✓' : '✗'} task <b>${esc(r.task_id)}</b> — ${esc(r.detail || '')}`
+      + `${r.ok ? '✓' : '✗'} task ${taskLink} — ${esc(r.detail || '')}`
       + (r.ok ? ` — now assigned to: <b>${esc(now)}</b>` : '')
       + `</div>`;
   });
@@ -1093,8 +1097,12 @@ function _renderDateChangeResults(data) {
     + `Move ${esc(data.from_date || '')} → ${esc(data.new_date || '')} · ${ok} succeeded${fail ? ` · ${fail} FAILED` : ''}</div>`;
   html += '<div style="display:flex;flex-direction:column;gap:3px;">';
   results.forEach(r => {
+    const taskLink = `<a href="https://app.breezeway.io/task/${esc(String(r.task_id))}" target="_blank" rel="noopener"`
+      + ` title="Open this task in Breezeway"`
+      + ` style="color:inherit;font-weight:700;text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;"`
+      + ` onmouseover="this.style.textDecorationColor='#6b7280'" onmouseout="this.style.textDecorationColor='#d1d5db'">${esc(r.task_id)}</a>`;
     html += `<div style="font-size:0.74rem;color:${r.ok ? '#374151' : '#b91c1c'};">`
-      + `${r.ok ? '✓' : '✗'} task <b>${esc(r.task_id)}</b> — ${esc(r.detail || '')}`
+      + `${r.ok ? '✓' : '✗'} task ${taskLink} — ${esc(r.detail || '')}`
       + (r.ok && r.date_after ? ` — now dated <b>${esc(r.date_after)}</b>` : '')
       + `</div>`;
   });
