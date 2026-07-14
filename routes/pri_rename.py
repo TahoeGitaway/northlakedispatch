@@ -42,6 +42,9 @@ LOOKAHEAD_DAYS = 180
 PRI_PATTERN   = re.compile(r"post[\s\-]?rental[\s\-]?inspection", re.IGNORECASE)
 # Trailing date suffix to strip before re-dating: " for 6/22", " *6/22", " 6/22".
 TRAILING_DATE = re.compile(r"\s*(?:for\s+|\*\s*)?\d{1,2}/\d{1,2}\s*$", re.IGNORECASE)
+# Back-to-back marker: a "b/b " prefix on the title. These are usually left alone, so
+# the UI tucks them into a separate collapsed section — see is_bb on each proposal.
+BB_PREFIX     = re.compile(r"^\s*b\s*/\s*b\b", re.IGNORECASE)
 
 
 def _get_token():
@@ -237,6 +240,7 @@ def pri_rename_scan():
             "task_date":      sched[:10],
             "arrival_date":   arrival.isoformat(),
             "proposed_title": proposed,
+            "is_bb":          bool(BB_PREFIX.match(title.strip())),
         })
 
     proposals.sort(key=lambda x: x["task_date"])

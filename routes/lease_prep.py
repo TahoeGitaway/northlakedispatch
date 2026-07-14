@@ -359,6 +359,7 @@ def lease_prep_house_week():
         if isinstance(dept, dict):
             dept = dept.get("name") or dept.get("code")
         tasks.append({
+            "id":        t.get("id"),
             "name":      _bw_task_title(t),
             "date":      td,
             "time":      (str(t.get("scheduled_time") or "")[:5]) or None,

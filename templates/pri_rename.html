@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Rename PRIs — North Lake Dispatch{% endblock %}
 {% block content %}
-<div class="max-w-4xl mx-auto px-4 py-6">
+<!-- Wide on big screens so the whole week-before strip is visible without scrolling;
+     the strip itself keeps overflow-x:auto so it scrolls left↔right on small screens. -->
+<div class="max-w-4xl xl:max-w-[1400px] mx-auto px-4 py-6">
 
   <!-- PRI workflow tabs -->
   <div class="mb-5">
@@ -87,6 +89,32 @@
     </div>
   </div>
 
+  <!-- Back-to-back PRIs — collapsed by default and unchecked, since these are usually
+       left alone. Expand to review/select any you do want to re-date. -->
+  <details id="bbWrap" class="hidden mt-5 rounded-xl border border-violet-200 bg-white overflow-hidden">
+    <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-violet-800 bg-violet-50 hover:bg-violet-100">
+      🔁 Back-to-back PRIs (<span id="bbCount">0</span>) — collapsed; expand to rename any of these
+    </summary>
+    <div class="p-3">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-100 bg-gray-50">
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 w-8">
+              <input type="checkbox" id="bbSelectAll" onchange="toggleAllBb(this.checked)"
+                     class="rounded border-gray-300 text-violet-600 focus:ring-violet-500">
+            </th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Property</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Task Date</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Current Title</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Owner Arrival</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Proposed Title</th>
+          </tr>
+        </thead>
+        <tbody id="bbBody"></tbody>
+      </table>
+    </div>
+  </details>
+
   <!-- Apply results -->
   <div id="resultsBox" class="hidden mt-6 space-y-2"></div>
 
@@ -107,8 +135,12 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function toggleAll(checked) {
-  document.querySelectorAll('.row-check').forEach(cb => cb.checked = checked);
+function toggleAll(checked) {   // main table only
+  document.querySelectorAll('#tableBody .row-check').forEach(cb => cb.checked = checked);
+  updateCount();
+}
+function toggleAllBb(checked) { // the collapsed back-to-back section only
+  document.querySelectorAll('#bbBody .row-check').forEach(cb => cb.checked = checked);
   updateCount();
 }
 
@@ -116,6 +148,51 @@ function updateCount() {
   const checked = document.querySelectorAll('.row-check:checked').length;
   document.getElementById('selectedCount').textContent = `${checked} of ${proposals.length} selected`;
   document.getElementById('applyBtn').disabled = checked === 0;
+}
+
+// Breezeway deep-links — same convention used across the app.
+function _bwCalendarUrl(pid){ return `https://app.breezeway.io/property/${encodeURIComponent(pid)}/calendar`; }
+function _bwTaskUrl(tid){ return `https://app.breezeway.io/task/${encodeURIComponent(tid)}`; }
+
+// Build one proposal's main row + its hidden week-detail row, into the given tbody.
+// `checked` sets the row's initial selection (main = true, b/b = false).
+function _appendProposalRow(tbody, p, i, checked){
+  const propCell = p.pid
+    ? `<a href="${_bwCalendarUrl(p.pid)}" target="_blank" rel="noopener"
+          class="text-gray-800 hover:text-indigo-600 hover:underline font-medium"
+          title="Open ${esc(p.property)}'s calendar in Breezeway">${esc(p.property)}</a>`
+    : `<span class="font-medium text-gray-800">${esc(p.property)}</span>`;
+  const titleCell = p.task_id
+    ? `<a href="${_bwTaskUrl(p.task_id)}" target="_blank" rel="noopener"
+          class="text-gray-500 hover:text-indigo-600 hover:underline"
+          title="Open task ${esc(String(p.task_id))} in Breezeway">${esc(p.current_title)}</a>`
+    : esc(p.current_title);
+
+  const tr = document.createElement('tr');
+  tr.className = 'border-b border-gray-50 hover:bg-gray-50';
+  tr.innerHTML = `
+    <td class="px-4 py-3">
+      <input type="checkbox" class="row-check rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+             data-index="${i}" ${checked ? 'checked' : ''} onchange="updateCount()">
+    </td>
+    <td class="px-4 py-3">
+      ${propCell}
+      <button type="button" class="week-btn" data-index="${i}" onclick="toggleWeek(this, ${i})"
+              style="display:block;margin-top:3px;font-size:0.72rem;font-weight:600;color:#4338ca;background:none;border:none;cursor:pointer;padding:0;">📅 Week before arrival →</button>
+    </td>
+    <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.task_date)}</td>
+    <td class="px-4 py-3 text-gray-500">${titleCell}</td>
+    <td class="px-4 py-3 text-amber-600 whitespace-nowrap font-medium">${_fmtDate(p.arrival_date)}</td>
+    <td class="px-4 py-3 font-semibold text-gray-800">${esc(p.proposed_title)}</td>
+  `;
+  tbody.appendChild(tr);
+
+  const weekTr = document.createElement('tr');
+  weekTr.id = `week-row-${i}`;
+  weekTr.style.display = 'none';
+  weekTr.innerHTML = `<td colspan="6" class="px-4 py-3 bg-gray-50 border-b border-gray-100">
+    <div class="week-box" data-index="${i}"></div></td>`;
+  tbody.appendChild(weekTr);
 }
 
 // ── Week-before-arrival dropdown ──────────────────────────────────────────
@@ -164,15 +241,16 @@ async function _loadPriWeek(box, p){
     }
     const tasksByDay = {};
     tasks.forEach(t => { (tasksByDay[t.date] = tasksByDay[t.date] || []).push(t); });
-    function resForDay(iso){
-      let cover = null;
+    // Split each day's reservations into arrivals / departures / mid-stay so a same-day
+    // turnover (a checkout AND a checkin on the same day = a b/b turn) can be flagged.
+    function resInfoForDay(iso){
+      const arrivals = [], departures = [], covers = [];
       for (const rv of resvs){
-        if (rv.checkin <= iso && iso <= rv.checkout){
-          if (rv.checkin === iso) return rv;
-          cover = cover || rv;
-        }
+        if (rv.checkin === iso) arrivals.push(rv);
+        else if (rv.checkout === iso) departures.push(rv);
+        else if (rv.checkin < iso && iso < rv.checkout) covers.push(rv);
       }
-      return cover;
+      return { arrivals, departures, covers };
     }
 
     let html = `<div style="font-size:0.7rem;color:#9ca3af;margin-bottom:6px;">${_fmtDay(d.start)} → ${_fmtDay(d.anchor)} · ${esc(d.matched_name||p.property)} · owner arrival</div>`;
@@ -182,21 +260,35 @@ async function _loadPriWeek(box, p){
       const wd = dd.toLocaleDateString('en-US',{weekday:'short'});
       const md = dd.toLocaleDateString('en-US',{month:'short',day:'numeric'});
       const isArr = iso === d.anchor;
-      const rv = resForDay(iso);
+      const { arrivals, departures, covers } = resInfoForDay(iso);
+      const isTurn = arrivals.length > 0 && departures.length > 0;   // same-day b/b turnover
       const dayTasks = tasksByDay[iso] || [];
 
-      html += `<div style="flex:0 0 146px;border:1px solid ${isArr?'#d97706':'#e5e7eb'};border-radius:8px;overflow:hidden;background:#fff;${isArr?'box-shadow:0 0 0 2px #fcd34d;':''}">`;
-      html += `<div style="padding:4px 7px;background:${isArr?'#fffbeb':'#f9fafb'};border-bottom:1px solid #f1f5f9;">`
+      // Arrival day → amber; b/b turn → purple; otherwise plain.
+      const border = isArr ? '#d97706' : (isTurn ? '#7c3aed' : '#e5e7eb');
+      const shadow = isArr ? 'box-shadow:0 0 0 2px #fcd34d;'
+                   : (isTurn ? 'box-shadow:0 0 0 2px #ddd6fe;' : '');
+      const hdrBg  = isArr ? '#fffbeb' : (isTurn ? '#f5f3ff' : '#f9fafb');
+      html += `<div style="flex:0 0 150px;border:1px solid ${border};border-radius:8px;overflow:hidden;background:#fff;${shadow}">`;
+      html += `<div style="padding:4px 7px;background:${hdrBg};border-bottom:1px solid #f1f5f9;">`
         + `<div style="font-size:0.62rem;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">${esc(wd)}${isArr?' · arrival':''}</div>`
         + `<div style="font-size:0.8rem;font-weight:700;color:#1f2937;">${esc(md)}</div></div>`;
 
-      if (rv){
-        const c = TC[rv.type]||'#6b7280', bgc = TBG[rv.type]||'#f3f4f6';
-        const arr = rv.checkin === iso, dep = rv.checkout === iso;
-        html += `<div title="${esc(rv.guest||'')}" style="font-size:0.6rem;font-weight:800;color:${c};background:${bgc};padding:2px 7px;letter-spacing:0.03em;">`
-          + `${esc((rv.type||'').toUpperCase())}${arr?' ▸in':''}${dep?' ◂out':''}</div>`;
+      if (isTurn){
+        const outRv = departures[0], inRv = arrivals[0];
+        html += `<div style="font-size:0.58rem;font-weight:800;color:#fff;background:#7c3aed;padding:2px 7px;letter-spacing:0.05em;">🔁 B/B TURN</div>`;
+        html += `<div title="out: ${esc(outRv.guest||'')} · in: ${esc(inRv.guest||'')}" style="font-size:0.58rem;font-weight:700;background:#f5f3ff;color:#6b21a8;padding:2px 7px;">`
+          + `◂ ${esc((outRv.type||'').toUpperCase())} out · ${esc((inRv.type||'').toUpperCase())} in ▸</div>`;
       } else {
-        html += `<div style="font-size:0.6rem;font-weight:700;color:#9ca3af;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 4px,#f3f4f6 4px,#f3f4f6 8px);padding:2px 7px;">vacant</div>`;
+        const rv = arrivals[0] || departures[0] || covers[0];
+        if (rv){
+          const c = TC[rv.type]||'#6b7280', bgc = TBG[rv.type]||'#f3f4f6';
+          const arr = arrivals.length > 0, dep = departures.length > 0;
+          html += `<div title="${esc(rv.guest||'')}" style="font-size:0.6rem;font-weight:800;color:${c};background:${bgc};padding:2px 7px;letter-spacing:0.03em;">`
+            + `${esc((rv.type||'').toUpperCase())}${arr?' ▸in':''}${dep?' ◂out':''}</div>`;
+        } else {
+          html += `<div style="font-size:0.6rem;font-weight:700;color:#9ca3af;background:repeating-linear-gradient(45deg,#fafafa,#fafafa 4px,#f3f4f6 4px,#f3f4f6 8px);padding:2px 7px;">vacant</div>`;
+        }
       }
 
       html += `<div style="padding:5px 7px;display:flex;flex-direction:column;gap:5px;min-height:24px;">`;
@@ -209,8 +301,11 @@ async function _loadPriWeek(box, p){
           const slbl = _done?'Done':(_prog?'In progress':'Pending');
           const scol = _done?'#16a34a':(_prog?'#2563eb':'#9ca3af');
           const who = (t.assignees&&t.assignees.length)?t.assignees.join(', '):'unassigned';
+          const nameHtml = t.id
+            ? `<a href="${_bwTaskUrl(t.id)}" target="_blank" rel="noopener" title="Open task ${esc(String(t.id))} in Breezeway" style="color:inherit;font-weight:700;text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;">${esc(t.name)}</a>`
+            : `<b>${esc(t.name)}</b>`;
           html += `<div style="font-size:0.64rem;line-height:1.3;color:#374151;border-left:2px solid #e5e7eb;padding-left:5px;">`
-            + `<span title="${esc(t.status)}" style="font-weight:700;color:${scol};">${icon} ${slbl}</span>${t.time?(' · '+esc(_fmtTime(t.time))):''} <b>${esc(t.name)}</b>`
+            + `<span title="${esc(t.status)}" style="font-weight:700;color:${scol};">${icon} ${slbl}</span>${t.time?(' · '+esc(_fmtTime(t.time))):''} ${nameHtml}`
             + `<div style="color:#9ca3af;">👤 ${esc(who)}</div></div>`;
         });
       }
@@ -270,37 +365,30 @@ async function runScan() {
     }
 
     const tbody = document.getElementById('tableBody');
+    const bbody = document.getElementById('bbBody');
     tbody.innerHTML = '';
+    bbody.innerHTML = '';
+    let mainCount = 0, bbN = 0;
     proposals.forEach((p, i) => {
-      const tr = document.createElement('tr');
-      tr.className = 'border-b border-gray-50 hover:bg-gray-50';
-      tr.innerHTML = `
-        <td class="px-4 py-3">
-          <input type="checkbox" class="row-check rounded border-gray-300 text-amber-600 focus:ring-amber-500"
-                 data-index="${i}" checked onchange="updateCount()">
-        </td>
-        <td class="px-4 py-3 font-medium text-gray-800">
-          ${esc(p.property)}
-          <button type="button" class="week-btn" data-index="${i}" onclick="toggleWeek(this, ${i})"
-                  style="display:block;margin-top:3px;font-size:0.72rem;font-weight:600;color:#4338ca;background:none;border:none;cursor:pointer;padding:0;">📅 Week before arrival →</button>
-        </td>
-        <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.task_date)}</td>
-        <td class="px-4 py-3 text-gray-500">${esc(p.current_title)}</td>
-        <td class="px-4 py-3 text-amber-600 whitespace-nowrap font-medium">${_fmtDate(p.arrival_date)}</td>
-        <td class="px-4 py-3 font-semibold text-gray-800">${esc(p.proposed_title)}</td>
-      `;
-      tbody.appendChild(tr);
-
-      // Hidden detail row for the week-before view — spans the full table.
-      const weekTr = document.createElement('tr');
-      weekTr.id = `week-row-${i}`;
-      weekTr.style.display = 'none';
-      weekTr.innerHTML = `<td colspan="6" class="px-4 py-3 bg-gray-50 border-b border-gray-100">
-        <div class="week-box" data-index="${i}"></div></td>`;
-      tbody.appendChild(weekTr);
+      // b/b PRIs go to the collapsed section below, UNCHECKED; the rest to the main
+      // table, checked. Both index into the same `proposals` array so Apply works either way.
+      if (p.is_bb) { _appendProposalRow(bbody, p, i, false); bbN++; }
+      else         { _appendProposalRow(tbody, p, i, true);  mainCount++; }
     });
+    if (mainCount === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-4 text-center text-xs text-gray-400">All matches are back-to-back — see the collapsed section below.</td></tr>`;
+    }
 
-    document.getElementById('selectAll').checked = true;
+    const bbWrap = document.getElementById('bbWrap');
+    if (bbN) {
+      document.getElementById('bbCount').textContent = bbN;
+      bbWrap.classList.remove('hidden');
+    } else {
+      bbWrap.classList.add('hidden');
+    }
+    document.getElementById('bbSelectAll').checked = false;
+
+    document.getElementById('selectAll').checked = mainCount > 0;
     updateCount();
     document.getElementById('tableWrap').classList.remove('hidden');
 
