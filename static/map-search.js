@@ -754,7 +754,9 @@ async function runBwImport() {
         color = "amber";
       }
       if (unmatched.length) {
-        msg  += ` Not found: ${unmatched.join(", ")}.`;
+        // Distinct from an "unsure match" — these homes aren't in the property DB
+        // at all (no confident OR plausible match), so there's nothing to confirm.
+        msg  += ` Not in your property DB (add ${unmatched.length !== 1 ? "them" : "it"} there first): ${unmatched.join(", ")}.`;
         color = added > 0 ? "amber" : "red";
       }
       if (data.failed_properties) {
@@ -989,6 +991,50 @@ let _bwByAssignee     = null;
 let _bwActiveDate     = null;
 let _bwTasksByPropName = {};  // {propertyName: [{task_name, assignees}]} — keyed for sync
 let _bwPropIdByName    = {};  // {propertyName: breezeway home_id} — for the 📅 calendar link
+
+// House occupancy for the route's date: {String(breezeway pid): {kind, until}}.
+// Same fact as the Group Batcher (guest/tenant/owner/block). Only occupied houses
+// appear. Loaded once per date and cached; _loadOccupancy re-renders when it lands.
+let _occByPid   = {};
+let _occDate    = null;
+let _occLoading = false;
+
+function _loadOccupancy(date) {
+  if (!date || date === _occDate || _occLoading) return;   // cache: one fetch per date
+  _occLoading = true;
+  const forDate = date;
+  fetch(`/route/occupancy?date=${encodeURIComponent(date)}`, { credentials: "same-origin" })
+    .then(r => (r.ok ? r.json() : { occupancy: {} }))
+    .then(d => {
+      if (d && d.error) console.warn("Occupancy lookup:", d.error);   // real failure, not "everyone vacant"
+      _occByPid = (d && d.occupancy) || {}; _occDate = forDate;
+    })
+    .catch(() => { _occByPid = {}; _occDate = forDate; })   // set date so we don't retry-storm
+    .finally(() => { _occLoading = false; _syncSidebarToSchedule(); });
+}
+
+// A small occupancy badge for a house, or null when vacant/unknown. Colors match
+// the Group Batcher's guest/tenant/owner/block pills; the date it's occupied
+// "until" rides in the tooltip to keep the narrow sidebar readable.
+function _occupancyBadge(pid) {
+  const occ = (pid != null && pid !== "") ? _occByPid[String(pid)] : null;
+  if (!occ || !occ.kind) return null;
+  const M = {
+    guest: ["#fef3c7", "#92400e", "#fde68a", "🛏️ Guest",  "Guest in house"],
+    lease: ["#ffedd5", "#9a3412", "#fdba74", "🔑 Tenant", "Long-term tenant in house"],
+    owner: ["#dbeafe", "#1e40af", "#93c5fd", "👤 Owner",  "Owner in house"],
+    block: ["#e2e8f0", "#475569", "#cbd5e1", "🚫 Block",  "House blocked / on hold"],
+  };
+  const m = M[occ.kind];
+  if (!m) return null;
+  const until = occ.until ? (typeof _fmtTaskDate === "function" ? _fmtTaskDate(occ.until) : String(occ.until).slice(5)) : "";
+  const b = document.createElement("span");
+  b.className = "shrink-0 text-[0.58rem] font-bold rounded px-1.5 leading-tight";
+  b.style.cssText = `background:${m[0]};color:${m[1]};border:1px solid ${m[2]};`;
+  b.textContent = m[3];
+  b.title = m[4] + (until ? ` · until ${until}` : "") + " (on this route's date)";
+  return b;
+}
 
 // Build a "📅 calendar ↗" link to a property's Breezeway calendar, matching the
 // style used elsewhere in the app (occupancy check, hot tub billing). Returns null
@@ -1623,6 +1669,12 @@ function _syncSidebarToSchedule() {
     return;
   }
 
+  // Who's in each house on this route's date (guest/tenant/owner/block). Fetched
+  // once per date; when it lands it re-renders and the badges appear. The date is
+  // the sidebar's route date (set on load/optimize), falling back to the BW date.
+  const _routeDate = (document.getElementById("routeDateField") || {}).value || _bwActiveDate;
+  if (_routeDate) _loadOccupancy(_routeDate);
+
   // Daily-routes mode (no BW tasks): keep stop list in sync with schedule order
   if (!hasBwTasks) {
     content.innerHTML = "";
@@ -1649,6 +1701,8 @@ function _syncSidebarToSchedule() {
         badge.textContent = "CHECK-IN";
         row.appendChild(badge);
       }
+      const occB = _occupancyBadge(_bwPropIdByName[s.name]);   // who's in the house that day
+      if (occB) { occB.classList.add("mt-px"); row.appendChild(occB); }
       card.appendChild(row);
       // Auto-loaded tasks for this property that day, for this person. Each links to the
       // task in Breezeway when we have its id (older payloads sent plain title strings).
@@ -1703,6 +1757,8 @@ function _syncSidebarToSchedule() {
     propName.appendChild(propNameText);
     const cal = _bwCalendarLink(s.name);
     if (cal) { cal.classList.add("align-middle"); propName.appendChild(cal); }
+    const occB = _occupancyBadge(_bwPropIdByName[s.name]);   // who's in the house that day
+    if (occB) { occB.classList.add("align-middle"); occB.style.marginLeft = "5px"; propName.appendChild(occB); }
     body.appendChild(propName);
 
     for (const t of tasks) {

@@ -341,6 +341,15 @@ def _extract_str(val) -> str:
     return str(val).lower().strip()
 
 
+def _tag_is_pci(tag) -> bool:
+    """True when a reservation tag marks PCI. Matches 'PCI' as a standalone token
+    (so 'PCI', 'PCI Priority', '(PCI)' all hit) — mirrors the app's task-title PCI
+    convention so a word merely containing the letters can't false-positive."""
+    s = _extract_str(tag)
+    norm = "".join(c if c.isalnum() else " " for c in s)
+    return "pci" in norm.split()
+
+
 def _classify_reservation(r: dict) -> str:
     """Returns 'lease', 'owner', 'block', or 'guest'.
 
@@ -383,6 +392,45 @@ def _classify_reservation(r: dict) -> str:
         return "lease"
 
     return "guest"
+
+
+# Kept alongside _classify_reservation so both the Group Batcher and the map
+# sidebar agree on "who's most present" when several stays span one day.
+_OCC_PRIORITY = {"guest": 0, "lease": 1, "owner": 2, "block": 3}
+
+
+def compute_occupancy_by_date(token: str, date_str: str) -> dict:
+    """Who/what is STRICTLY mid-stay in each house on date_str (checkin < D < checkout)
+    — present that night, not arriving or departing that day.
+
+    Returns {str(property_id): {"kind": guest|lease|owner|block, "until": checkout ISO}}.
+
+    Mirrors the occupancy block in routes/group_assign.py so the map sidebar shows
+    the SAME fact as the Group Batcher. If several stays span the day, keep the most
+    "present" one by _OCC_PRIORITY (guest < lease < owner < block)."""
+    occupancy: dict = {}
+    try:
+        day_d = date_cls.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return occupancy
+    for r in _fetch_bw_reservations(token, {"checkin_date_le": date_str,
+                                            "checkout_date_ge": date_str}):
+        kind = _classify_reservation(r)
+        opid = r.get("property_id") or r.get("home_id")
+        if opid is None:
+            continue
+        ci = (r.get("checkin_date") or "")[:10]
+        co = (r.get("checkout_date") or "")[:10]
+        try:
+            if not (date_cls.fromisoformat(ci) < day_d < date_cls.fromisoformat(co)):
+                continue
+        except (ValueError, TypeError):
+            continue
+        key  = str(opid)
+        prev = occupancy.get(key)
+        if prev is None or _OCC_PRIORITY.get(kind, 9) < _OCC_PRIORITY.get(prev["kind"], 9):
+            occupancy[key] = {"kind": kind, "until": co}
+    return occupancy
 
 
 def _fmt_time(hhmm: str) -> str:
@@ -824,9 +872,14 @@ def day_summary():
         t    = (r.get("checkin_time") or "")[:5]
         # Star arrivals whose reservation carries a VIP tag (same detection the
         # VIP tracker's scan uses). Only arrivals get the flag — departures don't.
-        is_vip = any("vip" in _extract_str(tag) for tag in (r.get("tags") or []))
+        # A PCI tag gets a purple P — these are all same-day check-ins, so the
+        # "PCI = same-day only" rule is satisfied by construction. Flags are
+        # independent: an arrival can be VIP and PCI (and owner-cleaned) at once.
+        tags   = r.get("tags") or []
+        is_vip = any("vip" in _extract_str(tag) for tag in tags)
+        is_pci = any(_tag_is_pci(tag) for tag in tags)
         arrivals.setdefault(kind, []).append({
-            "name": prop, "time": t, "vip": is_vip,
+            "name": prop, "time": t, "vip": is_vip, "pci": is_pci,
             "property_id": r.get("property_id"),
         })
 

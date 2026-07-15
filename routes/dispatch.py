@@ -69,6 +69,15 @@ def _match_local_property_scored(bw_name: str, db_props: dict):
 # uncertain and surfaced to the user for confirmation.
 _MATCH_CONFIDENT = 0.72
 
+# A match below THIS floor is too weak to be a real confirmation candidate: the
+# substring/keyword tiers will latch onto the closest wrong house whenever the
+# Breezeway name merely shares a word with one in the DB (e.g. "The Lodge" →
+# "The Lodge at Northstar Village…" at ~30%). Below the floor we treat the home
+# as genuinely NOT in the DB rather than asking the user to "confirm" a bogus
+# match — a different, clearer message than an uncertain match. Only scores in
+# the band [floor, confident) are surfaced as "unsure — confirm each".
+_MATCH_FLOOR = 0.50
+
 
 def _match_local_property(bw_name: str, db_props: dict):
     """Return the matched row only when we're CONFIDENT. Low-confidence matches
@@ -566,6 +575,38 @@ def task_flag_restore():
     cur.execute("DELETE FROM task_flag_dismissals WHERE task_id = %s", (task_id,))
     conn.commit(); cur.close(); conn.close()
     return jsonify({"ok": True})
+
+
+# ── House occupancy for the map sidebar ──────────────────────────────
+# Same fact as the Group Batcher's guest/tenant/owner/block badge, so the route
+# sidebar can show who's in each house on the route's date. A day's occupancy
+# barely shifts within a work session, so a short TTL cache avoids re-hitting
+# Breezeway on every route load / sidebar reopen.
+_occupancy_cache: dict = {}
+_OCCUPANCY_TTL = 600   # seconds
+
+@dispatch_bp.route("/route/occupancy", methods=["GET"])
+@login_required
+def route_occupancy():
+    """Occupancy per Breezeway property_id for ?date=YYYY-MM-DD. Returns
+    {"occupancy": {"<pid>": {"kind": guest|lease|owner|block, "until": ISO}}}.
+    Only mid-stay houses appear (checkin < date < checkout); vacant houses are absent."""
+    import time as _t
+    date_str = (request.args.get("date") or "").strip()[:10]
+    if not date_str:
+        return jsonify({"error": "date required"}), 400
+    force = request.args.get("force") == "1"
+    hit = _occupancy_cache.get(date_str)
+    if hit and not force and (_t.time() - hit["ts"] < _OCCUPANCY_TTL):
+        return jsonify({"occupancy": hit["occ"], "cached": True})
+    from routes.briefing import _get_breezeway_token, compute_occupancy_by_date
+    token = _get_breezeway_token()
+    if not token:
+        # Report the real failure rather than silently pretending everyone's vacant.
+        return jsonify({"occupancy": {}, "error": "Breezeway auth unavailable"}), 200
+    occ = compute_occupancy_by_date(token, date_str)
+    _occupancy_cache[date_str] = {"ts": _t.time(), "occ": occ}
+    return jsonify({"occupancy": occ})
 
 
 # ── OR-Tools solver ───────────────────────────────────────────────
@@ -1396,7 +1437,10 @@ def bw_import():
         matched, uncertain, unmatched = [], [], []
         for bw_name in bw_names:
             row, score, tier = _match_local_property_scored(bw_name, db_props)
-            if not row:
+            # No row at all, OR a row so weak it's just a shared-word coincidence:
+            # in both cases the home isn't really in the DB — surface it as
+            # "not found" rather than as a wrong-house "confirm" candidate.
+            if not row or (tier != "exact" and score < _MATCH_FLOOR):
                 unmatched.append(bw_name)
                 continue
             tasks_here  = bw_name_tasks.get(bw_name, [])
@@ -1824,9 +1868,21 @@ def bw_task_probe():
         task_id = str(found.get("id"))
 
     detail, st = _bw_get_raw(token, f"/public/inventory/v1/task/{task_id}")
+
+    # Does the task object carry tags? Surface any tag-shaped field directly so we
+    # get a plain yes/no without hunting through the full body.
+    tag_summary = {"has_tag_field": False, "tag_fields": {}}
+    if isinstance(detail, dict):
+        for k, v in detail.items():
+            if "tag" in k.lower():
+                tag_summary["has_tag_field"] = True
+                tag_summary["tag_fields"][k] = v
+        tag_summary["nonempty_tags"] = any(bool(v) for v in tag_summary["tag_fields"].values())
+
     out["task_detail"] = {
         "status":      st,
         "keys":        list(detail.keys()) if isinstance(detail, dict) else None,
+        "tags":        tag_summary,
         "assignments": detail.get("assignments") if isinstance(detail, dict) else None,
         "body":        detail,
     }
