@@ -60,8 +60,19 @@
     /\bhomeowner\s+request\b/i,
   ];
 
+  // Routine task TYPES that always carry a date ("... for 7/16") by habit, so the
+  // date must NOT flag them purple. Matched by their fixed name phrase regardless
+  // of the date. If a title matches any of these, it's never time-flagged.
+  const EXCLUSIONS = [
+    /\bwalk[\s-]*thru\b/i,
+    /\bwalk[\s-]*through\b/i,
+    /\bpost\s+rental\s+inspection\b/i,
+    /\barrival\s+hot\s+tub\s+service\b/i,
+  ];
+
   function isTimeSensitiveTitle(title) {
     if (!title || typeof title !== "string") return false;
+    if (EXCLUSIONS.some(re => re.test(title))) return false;
     return PATTERNS.some(re => re.test(title));
   }
 

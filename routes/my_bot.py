@@ -331,7 +331,16 @@ def _clean_house_name(raw):
     raw = (raw or "").strip()
     if not raw:
         return ""
-    raw = _LEAD_DATES_RE.sub("", raw).strip()  # drop a leading lease date-range
+    # Iteratively strip whatever leads the name before the house: the lease
+    # date-range AND "(CHECK RETURN)" / "(CHECK)" / "(RETURN)" parentheticals,
+    # in any order (e.g. "6/29-7/30/26 (CHECK RETURN) - Forest Haven TD…" or
+    # "(CHECK RETURN)- Crossroads…").
+    prev = None
+    while prev != raw:
+        prev = raw
+        raw = _LEAD_DATES_RE.sub("", raw).strip()
+        raw = re.sub(r"^\s*\([^)]*\)\s*[-–]?\s*", "", raw).strip()  # leading (…)
+        raw = re.sub(r"^[-–]\s*", "", raw).strip()                  # stray leading dash
     parts = [p.strip() for p in raw.split(" - ") if p.strip()]
     while parts and _DATEISH_RE.match(parts[0].replace(" ", "")):
         parts.pop(0)
@@ -339,6 +348,29 @@ def _clean_house_name(raw):
     house = re.split(r"\s*[-–]?\s*\(", house, maxsplit=1)[0]  # cut at "(" / " -("
     house = house.strip(" -–\t")
     return house or raw
+
+
+_CORE_SPLIT_RE = re.compile(r"\s+[-–—]\s+")   # ' - ', ' – ', ' — '
+
+
+def _clean_core(name):
+    """Extract the base task phrase (e.g. 'Post Lease Inspection') from a task
+    name that may already be mangled by old stamps — leading dates/labels, a
+    repeated house, em-dash trailers like '— FDL 16 (Lupusor)', etc. The base
+    lease-task phrase always contains 'Lease'; pick that segment and drop an
+    'Operations-' prefix and any trailing '(owner)'."""
+    name = (name or "").strip()
+    segs = [s.strip() for s in _CORE_SPLIT_RE.split(name) if s.strip()]
+    lease_segs = [s for s in segs if re.search(r"\blease\b", s, re.I)]
+    if lease_segs:
+        typed = [s for s in lease_segs
+                 if re.search(r"activit|inspection|carpet|clean|arrival|walk", s, re.I)]
+        core = (typed or lease_segs)[0]
+    else:
+        core = segs[-1] if segs else name
+    core = _OPS_RE.sub("", core).strip()                 # drop 'Operations-'
+    core = re.sub(r"\s*\([^)]*\)\s*$", "", core).strip() # drop trailing '(owner)'
+    return core
 # A title we already stamped, so re-runs don't nest the prefix:
 #   "6/28 Dept - Solstice Ridge - Post Lease Activities"
 _STAMP_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}\s+(?:Arrival|Dept)\s+-\s+.+?\s+-\s+",
@@ -986,7 +1018,7 @@ def my_bot_chat():
                 skipped.append((name, f"unreadable date '{iso}'"))
                 continue
             label    = "Arrival" if kind == "pre" else "Dept"
-            core     = _OPS_RE.sub("", _strip_stamp(name)).strip()
+            core     = _clean_core(name)
             new_name = f"{md} {label} - {house} - {core}"
             if new_name == name and (t.get("due_on") or None) == iso:
                 skipped.append((name, "already stamped"))
