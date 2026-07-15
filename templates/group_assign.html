@@ -352,6 +352,9 @@ function _taskRow(t, isCheckin) {
   row.dataset.tid = t.task_id;
   row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:8px 16px 8px 26px;border-bottom:1px solid #f3f4f6;transition:opacity 0.2s;';
   const when = [t.date ? t.date.slice(5).replace('-','/') : '', _fmtTime(t.time)].filter(Boolean).join(' ') || '—';
+  // A per-task dismissal (the ✕) hides BOTH the purple flag and the VIP badge.
+  const flagDismissed = !!(window.NLD && NLD.isFlagDismissed(t.task_id));
+  const vipBadge = (!flagDismissed && window.NLD && NLD.isVipTitle(t.name)) ? NLD.vipBadgeHtml() : '';
   const arrivalBadge = t.arrival
     ? `<span style="display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dcfce7;color:#15803d;border:1px solid #86efac;">✓ CHECK-IN</span>` : '';
   const pciBadge = t.pci
@@ -384,26 +387,49 @@ function _taskRow(t, isCheckin) {
   const propLine = propHtml + (isCheckin && t.group ? ` <span style="color:#9ca3af;">· ${esc(t.group)}</span>` : '');
   // Task title links to the task itself in Breezeway. Same font/color as before, just a
   // subtle underline (light by default, darkens on hover) so it reads as a gentle link.
+  // Time/date-sensitive titles (a date, an explicit or written-out time, "Issue",
+  // or "HO Request") render purple with a purple left bar. Shared matcher lives in
+  // task-time-flag.js so Group Assign and the map sidebar agree on what qualifies.
+  const timeFlag  = !flagDismissed && !!(window.NLD && NLD.isTimeSensitiveTitle(t.name));
+  const titleColor = timeFlag ? (NLD.TIME_FLAG_COLOR || '#7c3aed') : '#1f2937';
   const nameHtml = t.task_id
     ? `<a href="https://app.breezeway.io/task/${esc(String(t.task_id))}" target="_blank" rel="noopener"
          title="Open this task in Breezeway"
-         style="font-size:0.85rem;font-weight:600;color:#1f2937;text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;"
+         style="font-size:0.85rem;font-weight:600;color:${titleColor};text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;"
          onmouseover="this.style.textDecorationColor='#6b7280'" onmouseout="this.style.textDecorationColor='#d1d5db'">${esc(t.name)}</a>`
-    : `<span style="font-size:0.85rem;font-weight:600;color:#1f2937;">${esc(t.name)}</span>`;
+    : `<span style="font-size:0.85rem;font-weight:600;color:${titleColor};">${esc(t.name)}</span>`;
   row.innerHTML = `
     <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
     <div style="flex:1;min-width:0;">
       <div class="task-badges" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
         ${nameHtml}
-        ${arrivalBadge}${pciBadge}${occBadge}
+        ${vipBadge}${arrivalBadge}${pciBadge}${occBadge}
       </div>
       <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${propLine}</div>
       <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;">📅 ${esc(when)}</div>
     </div>`;
+  // Purple left bar for a time/date-sensitive title. Set before the _assignFailed
+  // block below so a failed task's red bar still overrides it. The row already has
+  // 26px of left padding, so the inset bar needs no extra room.
+  if (timeFlag) row.style.boxShadow = 'inset 3px 0 0 ' + (window.NLD.TIME_FLAG_COLOR || '#7c3aed');
   // Reassignment state — driven by the model (set in _applyAssignResults), so it
   // survives both a full re-render AND switching tabs. This is what fixes the stale
   // "still shows the old person, not marked as changed" view.
   const badges = row.querySelector('.task-badges');
+  // ✕ to remove this task's flag(s). Only when something is actually flagged and
+  // we have a task_id to persist against. Removes the flag IN PLACE (purple title,
+  // left bar, VIP badge, and the ✕ itself) so the user's checkbox selections on the
+  // rest of the scan are preserved — no full re-render.
+  if (badges && (timeFlag || vipBadge) && t.task_id && window.NLD) {
+    const titleEl = badges.querySelector('a, span');   // the task name is the first a/span
+    const xEl = NLD.makeFlagRemoveX(String(t.task_id), () => {
+      row.style.boxShadow = '';                                   // drop the purple left bar
+      if (titleEl) titleEl.style.color = '#1f2937';               // reset the purple title
+      badges.querySelectorAll('[data-vip-badge]').forEach(el => el.remove());  // drop the VIP pill
+      xEl.remove();                                               // drop the ✕ itself
+    });
+    badges.appendChild(xEl);
+  }
   if (t._reassigned && badges) {
     const b = document.createElement('span');
     b.style.cssText = 'display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;border-radius:99px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;';

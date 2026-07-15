@@ -523,6 +523,51 @@ def archive_route(route_id):
     return jsonify({"success": True, "archived": archived})
 
 
+# ── Task-flag dismissals (purple time flag + gold VIP badge) ──────────
+# The flags are derived from a task's TITLE client-side (task-time-flag.js).
+# Dismissing a task_id here hides BOTH flags for that task on every surface,
+# for everyone, until it's restored. Mirrors the pri_dismissals pattern.
+
+@dispatch_bp.route("/task-flags/dismissed", methods=["GET"])
+@login_required
+def task_flags_dismissed():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT task_id FROM task_flag_dismissals")
+    ids = [r["task_id"] for r in cur.fetchall()]
+    cur.close(); conn.rollback(); conn.close()
+    return jsonify({"ids": ids})
+
+
+@dispatch_bp.route("/task-flags/dismiss", methods=["POST"])
+@login_required
+def task_flag_dismiss():
+    task_id = str((request.get_json(force=True) or {}).get("task_id", "")).strip()
+    if not task_id:
+        return jsonify({"error": "task_id required"}), 400
+    now  = datetime.utcnow().isoformat()
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO task_flag_dismissals (task_id, dismissed_by, dismissed_at) "
+        "VALUES (%s, %s, %s) ON CONFLICT (task_id) DO NOTHING",
+        (task_id, current_user.id, now),
+    )
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
+@dispatch_bp.route("/task-flags/restore", methods=["POST"])
+@login_required
+def task_flag_restore():
+    """Un-dismiss: the auto flag comes back for this task_id."""
+    task_id = str((request.get_json(force=True) or {}).get("task_id", "")).strip()
+    if not task_id:
+        return jsonify({"error": "task_id required"}), 400
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("DELETE FROM task_flag_dismissals WHERE task_id = %s", (task_id,))
+    conn.commit(); cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
 # ── OR-Tools solver ───────────────────────────────────────────────
 
 # OR-Tools RoutingModel.status() codes → human names, so a failed solve

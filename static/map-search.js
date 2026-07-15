@@ -1012,6 +1012,18 @@ function _bwCalendarLink(name) {
 // either way (so it matches the surrounding rows); the link just adds a hover underline
 // and stops the click from bubbling to the row/stop handlers.
 function _bwTaskLabel(taskId, text, className) {
+  // Time/date-sensitive titles (a date, an explicit or written-out time, "Issue",
+  // "HO Request") render purple + bold via the shared matcher. Inline color wins
+  // over the Tailwind text-* class. Callers add the purple left bar to the row.
+  // Suppressed when this task_id has had its flag dismissed (the ✕).
+  const timeFlag = !!(window.NLD && !NLD.isFlagDismissed(taskId) && NLD.isTimeSensitiveTitle(text));
+  const paint = (el) => {
+    if (timeFlag) {
+      el.style.color     = window.NLD.TIME_FLAG_COLOR || "#7c3aed";
+      el.style.fontWeight = "700";
+      el.dataset.timeFlag = "1";
+    }
+  };
   if (taskId != null && taskId !== "") {
     const a = document.createElement("a");
     a.href      = `https://app.breezeway.io/task/${encodeURIComponent(taskId)}`;
@@ -1021,11 +1033,13 @@ function _bwTaskLabel(taskId, text, className) {
     a.title      = "Open this task in Breezeway";
     a.textContent = text;
     a.addEventListener("click", e => e.stopPropagation());
+    paint(a);
     return a;
   }
   const span = document.createElement("span");
   span.className   = className;
   span.textContent = text;
+  paint(span);
   return span;
 }
 
@@ -1646,7 +1660,14 @@ function _syncSidebarToSchedule() {
           const line  = document.createElement("div");
           line.className = "text-[11px] text-gray-400 leading-snug";
           line.appendChild(document.createTextNode("• "));
-          line.appendChild(_bwTaskLabel(tid, title, "text-gray-400"));
+          const lbl = _bwTaskLabel(tid, title, "text-gray-400");
+          line.appendChild(lbl);
+          const vipHere = !!(window.NLD && !NLD.isFlagDismissed(tid) && NLD.isVipTitle(title));
+          if (vipHere) { const vb = NLD.makeVipBadge(); vb.style.marginLeft = "5px"; line.appendChild(vb); }
+          if (lbl.dataset.timeFlag && window.NLD) NLD.markTimeFlagRow(line, 6);
+          if ((lbl.dataset.timeFlag || vipHere) && tid != null && tid !== "" && window.NLD) {
+            line.appendChild(NLD.makeFlagRemoveX(tid, _syncSidebarToSchedule));
+          }
           tl.appendChild(line);
         }
         card.appendChild(tl);
@@ -1686,7 +1707,14 @@ function _syncSidebarToSchedule() {
       const taskRow = document.createElement("div");
       taskRow.className = "flex items-baseline gap-1 mt-0.5";
       const tnameClass = (s.priority_checkin && _titleHasPci(t.task_name)) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
-      taskRow.appendChild(_bwTaskLabel(t.task_id, t.task_name, tnameClass));  // → task in Breezeway when we have its id
+      const tLbl = _bwTaskLabel(t.task_id, t.task_name, tnameClass);  // → task in Breezeway when we have its id
+      taskRow.appendChild(tLbl);
+      const vipHere = !!(window.NLD && !NLD.isFlagDismissed(t.task_id) && NLD.isVipTitle(t.task_name));
+      if (vipHere) { const vb = NLD.makeVipBadge(); vb.style.marginLeft = "4px"; taskRow.appendChild(vb); }
+      if (tLbl.dataset.timeFlag && window.NLD) NLD.markTimeFlagRow(taskRow, 6);
+      if ((tLbl.dataset.timeFlag || vipHere) && t.task_id != null && t.task_id !== "" && window.NLD) {
+        taskRow.appendChild(NLD.makeFlagRemoveX(t.task_id, _syncSidebarToSchedule));
+      }
       if (t.assignees && t.assignees.length) {
         const asgn = document.createElement("span");
         asgn.className = "text-xs text-gray-400";

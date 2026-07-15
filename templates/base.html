@@ -20,6 +20,9 @@
         isAdmin: {{ (current_user.is_authenticated and current_user.is_admin) | tojson }}
       };
     </script>
+
+    <!-- Shared matcher: flags time/date-sensitive task titles purple (Group Assign + map sidebar) -->
+    <script src="{{ url_for('static', filename='task-time-flag.js') }}"></script>
 </head>
 
 <body class="bg-gray-100">

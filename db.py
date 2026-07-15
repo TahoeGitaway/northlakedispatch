@@ -204,6 +204,18 @@ def init_db():
         dismissed_at  TEXT NOT NULL
     )""")
 
+    # A per-task "hide the auto flag" record, shared across all users/browsers.
+    # The purple time/date flag and the gold VIP badge are derived from the task
+    # TITLE (task-time-flag.js); dismissing a task_id here suppresses BOTH on every
+    # surface (Group Assign + map sidebar) until it's restored. Keyed by the
+    # Breezeway task id as text.
+    cur.execute("""CREATE TABLE IF NOT EXISTS task_flag_dismissals (
+        id            SERIAL PRIMARY KEY,
+        task_id       TEXT NOT NULL UNIQUE,
+        dismissed_by  INTEGER REFERENCES users(id),
+        dismissed_at  TEXT NOT NULL
+    )""")
+
     # Temporary "snooze" for the PRI Check page only (separate from the red
     # banner ✕). Hides a flagged PRI until snoozed_until, then it returns so
     # ops can re-check after a reservation has had time to change.
