@@ -1011,12 +1011,13 @@ function _bwCalendarLink(name) {
 // Breezeway when we have its id, otherwise a plain <span>. `className` styles the text
 // either way (so it matches the surrounding rows); the link just adds a hover underline
 // and stops the click from bubbling to the row/stop handlers.
-function _bwTaskLabel(taskId, text, className) {
+function _bwTaskLabel(taskId, text, className, suppressTimeFlag) {
   // Time/date-sensitive titles (a date, an explicit or written-out time, "Issue",
   // "HO Request") render purple + bold via the shared matcher. Inline color wins
   // over the Tailwind text-* class. Callers add the purple left bar to the row.
-  // Suppressed when this task_id has had its flag dismissed (the ✕).
-  const timeFlag = !!(window.NLD && !NLD.isFlagDismissed(taskId) && NLD.isTimeSensitiveTitle(text));
+  // Suppressed when this task_id has had its flag dismissed (the ✕), OR when the
+  // house has an arrival that day (arrival tasks always carry a date by habit).
+  const timeFlag = !suppressTimeFlag && !!(window.NLD && !NLD.isFlagDismissed(taskId) && NLD.isTimeSensitiveTitle(text));
   const paint = (el) => {
     if (timeFlag) {
       el.style.color     = window.NLD.TIME_FLAG_COLOR || "#7c3aed";
@@ -1660,7 +1661,7 @@ function _syncSidebarToSchedule() {
           const line  = document.createElement("div");
           line.className = "text-[11px] text-gray-400 leading-snug";
           line.appendChild(document.createTextNode("• "));
-          const lbl = _bwTaskLabel(tid, title, "text-gray-400");
+          const lbl = _bwTaskLabel(tid, title, "text-gray-400", liveArrival);  // no purple on arrival houses
           line.appendChild(lbl);
           const vipHere = !!(window.NLD && !NLD.isFlagDismissed(tid) && NLD.isVipTitle(title));
           if (vipHere) { const vb = NLD.makeVipBadge(); vb.style.marginLeft = "5px"; line.appendChild(vb); }
@@ -1707,7 +1708,8 @@ function _syncSidebarToSchedule() {
       const taskRow = document.createElement("div");
       taskRow.className = "flex items-baseline gap-1 mt-0.5";
       const tnameClass = (s.priority_checkin && _titleHasPci(t.task_name)) ? "text-xs font-bold text-violet-700" : "text-xs text-gray-600";
-      const tLbl = _bwTaskLabel(t.task_id, t.task_name, tnameClass);  // → task in Breezeway when we have its id
+      const bwArrival  = s.arrival || (typeof _arrivalForStop === "function" && _arrivalForStop(s.name));
+      const tLbl = _bwTaskLabel(t.task_id, t.task_name, tnameClass, bwArrival);  // no purple on arrival houses
       taskRow.appendChild(tLbl);
       const vipHere = !!(window.NLD && !NLD.isFlagDismissed(t.task_id) && NLD.isVipTitle(t.task_name));
       if (vipHere) { const vb = NLD.makeVipBadge(); vb.style.marginLeft = "4px"; taskRow.appendChild(vb); }

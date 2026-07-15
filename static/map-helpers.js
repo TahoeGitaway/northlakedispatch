@@ -28,7 +28,7 @@ function hhmmToMinutes(hhmm) {
 }
 
 function generateTimeOptions(selected) {
-  let html = "";
+  let html = `<option value="5" ${5===selected?"selected":""}>5 min</option>`;
   for (let m = 15; m <= 240; m += 15)
     html += `<option value="${m}" ${m===selected?"selected":""}>${m} min</option>`;
   return html;

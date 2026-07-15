@@ -127,6 +127,33 @@ def _delete_task(token: str, task_id) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _unassign_task(token: str, task_id) -> tuple[bool, str]:
+    """Clear a task's assignee(s) (PATCH assignments:[]) WITHOUT touching its date.
+    Reversible — just drops it back to Unassigned on the same day. Confirms by
+    re-reading the task so we report what actually happened, not just the status."""
+    headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
+    url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
+    try:
+        r = requests.patch(url, headers=headers, json={"assignments": []}, timeout=15)
+        ok = r.status_code in (200, 201, 202, 204)
+        detail = f"status={r.status_code}"
+        if not ok:
+            return False, detail + f" body={r.text[:200]}"
+        # Re-read to confirm it really cleared.
+        after = None
+        try:
+            g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+            if g.ok:
+                after = _assignee_names(g.json())
+        except Exception:
+            pass
+        if after:
+            return True, detail + f" ⚠ still assigned to {', '.join(after)}"
+        return True, detail + " ✓ confirmed unassigned"
+    except Exception as e:
+        return False, str(e)
+
+
 @bear_fence_delete_bp.route("/admin/bear-fence-delete")
 @login_required
 @admin_required
@@ -267,4 +294,69 @@ def bear_fence_delete_apply():
         })
 
     _scan_cache.clear()   # tasks removed — next scan should be fresh
+    return jsonify({"results": results})
+
+
+@bear_fence_delete_bp.route("/admin/bear-fence-delete/unassign", methods=["POST"])
+@login_required
+@admin_required
+def bear_fence_delete_unassign():
+    """Softer alternative to delete: drop the selected Disarm Bear Fence tasks back
+    to Unassigned, keeping them on the same day. Reversible; nothing is removed.
+    Same hard name-gate as delete — only ever touches tasks named exactly
+    "Disarm Bear Fence", checked against the live record."""
+    token = _get_token()
+    if not token:
+        return jsonify({"error": "Breezeway not configured."}), 500
+
+    body    = request.get_json(silent=True) or {}
+    items   = body.get("items", [])
+    results = []
+    for item in items:
+        task_id = item.get("task_id")
+        prop    = item.get("property", "")
+
+        # Re-read the LIVE task and gate everything on it, not on the client payload.
+        live = _fetch_task_by_id(token, task_id)
+        if live is None:
+            results.append({
+                "task_id": task_id, "property": prop, "name": item.get("name", ""),
+                "success": False,
+                "detail": "⚠ skipped — couldn't re-read the task to verify it. Rescan and try again.",
+            })
+            continue
+
+        live_name = _task_title(live)
+
+        # HARD CONSTRAINT: only ever touch a task whose live name is exactly
+        # "Disarm Bear Fence". Anything else is refused, loudly.
+        if not _is_bear_fence_exact(live_name):
+            results.append({
+                "task_id": task_id, "property": prop, "name": live_name,
+                "success": False,
+                "detail": f"🛑 REFUSED — this task is named “{live_name or '(no name)'}”, "
+                          f"not “Disarm Bear Fence”. Left untouched.",
+            })
+            continue
+
+        before    = _assignee_names(live)
+        live_date = _task_date(live)
+        if not before:
+            results.append({
+                "task_id": task_id, "property": prop, "name": live_name,
+                "success": True,
+                "detail": f"already unassigned · still on {live_date} — no change needed",
+            })
+            continue
+
+        ok, msg = _unassign_task(token, task_id)
+        who = ", ".join(before)
+        results.append({
+            "task_id": task_id, "property": prop, "name": live_name,
+            "success": ok,
+            "detail":  (f"unassigned from {who} · kept on {live_date} · {msg}") if ok
+                       else (f"unassign FAILED (was {who}) · {msg}"),
+        })
+
+    _scan_cache.clear()   # assignees changed — next scan should be fresh
     return jsonify({"results": results})

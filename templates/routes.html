@@ -146,6 +146,29 @@
     flex-shrink: 0;
     white-space: nowrap;
   }
+  /* Owner-clean scan status shown on the Arrivals header */
+  .summary-oc-status {
+    font-size: 0.6rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .summary-oc-status.is-checking { color: #9ca3af; }
+  .summary-oc-status.is-checking::before {
+    content: "";
+    display: inline-block;
+    width: 8px; height: 8px;
+    margin-right: 4px;
+    vertical-align: -1px;
+    border: 1.5px solid #d1d5db;
+    border-top-color: #6b7280;
+    border-radius: 50%;
+    animation: oc-spin 0.7s linear infinite;
+  }
+  .summary-oc-status.is-found   { color: #92400e; }
+  .summary-oc-status.is-clear   { color: #9ca3af; }
+  .summary-oc-status.is-warn    { color: #b45309; }
+  @keyframes oc-spin { to { transform: rotate(360deg); } }
 </style>
 
 <div class="px-6 py-6">
@@ -231,7 +254,10 @@
               <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); border-bottom:0;">
                 <!-- Arrivals -->
                 <div class="px-4 py-4" style="border-right:1px solid #f3f4f6;">
-                  <div class="summary-type-label text-emerald-600 mb-3">Arrivals</div>
+                  <div class="flex items-center justify-between mb-3 gap-2">
+                    <span class="summary-type-label text-emerald-600">Arrivals</span>
+                    <span id="daySummaryOcStatus" class="summary-oc-status"></span>
+                  </div>
                   <div id="daySummaryArrivals"></div>
                 </div>
                 <!-- Departures -->
@@ -504,6 +530,7 @@ async function loadDaySummary(ds, force = false) {
   loading.classList.remove("hidden");
   arrEl.innerHTML = "";
   depEl.innerHTML = "";
+  setOcStatus("", "");   // clear any owner-clean status from the previous day
 
   try {
     const url  = `/briefing/day-summary?date=${ds}` + (force ? "&refresh=1" : "");
@@ -570,18 +597,33 @@ async function loadDaySummary(ds, force = false) {
   }
 }
 
+/* Set the owner-clean scan status shown on the Arrivals header.
+   state: "" | "checking" | "found" | "clear" | "warn" */
+function setOcStatus(state, text, title = "") {
+  const el = document.getElementById("daySummaryOcStatus");
+  if (!el) return;
+  el.className = "summary-oc-status" + (state ? ` is-${state}` : "");
+  el.textContent = text || "";
+  el.title = title || "";
+}
+
 /* Flag arrivals whose last clean was "Owner Cleaned". Best-effort DOM overlay —
    a failure here never disturbs the arrivals list itself. */
 async function decorateOwnerCleaned(ds, force = false) {
   const arrEl = document.getElementById("daySummaryArrivals");
   if (!arrEl) return;
+  setOcStatus("checking", "checking cleans…", "Scanning each arriving house's last clean in Breezeway");
   try {
     const url = `/briefing/owner-cleaned-check?date=${ds}` + (force ? "&refresh=1" : "");
     const res = await fetch(url);
     const data = await res.json();
     // A later day-click may have superseded this fetch — bail if the day changed.
     if (currentSummaryDate !== ds) return;
-    if (!data || !Array.isArray(data.flagged)) return;
+    if (!data || !Array.isArray(data.flagged)) {
+      setOcStatus("warn", "⚠ clean check unavailable",
+                  (data && data.error) ? data.error : "The owner-clean scan did not return.");
+      return;
+    }
 
     const byPid  = new Set(data.flagged.map(f => String(f.property_id)).filter(Boolean));
     const byName = new Set(data.flagged.map(f => f.name).filter(Boolean));
@@ -610,8 +652,24 @@ async function decorateOwnerCleaned(ds, force = false) {
       if (timeEl) li.insertBefore(badge, timeEl);
       else li.appendChild(badge);
     });
+
+    // Done — tell her the scan finished and what it found.
+    const n      = data.flagged.length;
+    const failed = data.failed_properties || 0;
+    if (failed > 0) {
+      // Never imply "all clear" when some houses couldn't be checked.
+      const found = n ? `🧹 ${n} owner-cleaned · ` : "";
+      setOcStatus("warn", `${found}⚠ ${failed} couldn't be checked`,
+                  `${failed} house${failed === 1 ? "" : "s"} failed to load from Breezeway — hit Refresh to retry.`);
+    } else if (n > 0) {
+      setOcStatus("found", `🧹 ${n} owner-cleaned`,
+                  "These arrivals' last clean was owner-handled — schedule their Walk Thrus early.");
+    } else {
+      setOcStatus("clear", "✓ no owner cleans",
+                  "No arriving house's last clean was owner-handled.");
+    }
   } catch (e) {
-    /* silent — decoration is optional, arrivals list stands on its own */
+    setOcStatus("warn", "⚠ clean check unavailable", "The owner-clean scan errored.");
   }
 }
 

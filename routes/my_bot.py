@@ -194,6 +194,40 @@ def _lease_dates_from_parent_name(pname):
     return _mk_iso(arr_y, arr_m, arr_d), _mk_iso(dep_y, dep_m, dep_d)
 
 
+def _lease_ancestor_name(parent, cache=None):
+    """Walk UP from a task's immediate parent to the LEASE task — the ancestor
+    whose name carries the M/D-M/D/YY lease range (that's where the house name +
+    dates live). Handles multi-level trees where the immediate parent is itself
+    an already-stamped/intermediate task. Returns the lease task's name, or the
+    immediate parent's name if no lease ancestor is found. `cache` (parent_gid →
+    name) avoids repeat look-ups when many tasks share a parent."""
+    start = parent or {}
+    key = start.get("gid")
+    if cache is not None and key in cache:
+        return cache[key]
+    node = start
+    result = start.get("name") or ""
+    for _ in range(4):   # cap the climb; trees are 2–3 deep
+        nm = node.get("name") or ""
+        if _LEASE_RANGE_RE.search(nm):
+            result = nm
+            break
+        gid = node.get("gid")
+        if not gid:
+            break
+        data, err = _asana_request("GET", f"/tasks/{gid}",
+                                   {"opt_fields": "name,parent.name,parent.gid"})
+        if err or not isinstance(data, dict):
+            break
+        up = data.get("parent")
+        if not up or not up.get("gid"):
+            break
+        node = up
+    if cache is not None and key:
+        cache[key] = result
+    return result
+
+
 def _normalize_date(s):
     """Normalize a user-supplied date ('YYYY-MM-DD', 'M/D/YY', 'M/D/YYYY') to ISO,
     or None if it isn't a valid date."""
@@ -907,11 +941,16 @@ def my_bot_chat():
         pf      = (property_name or "").strip().lower()
         plan    = []   # (task, new_name, new_due_iso, old_due)
         skipped = []
+        ancestor_cache = {}   # parent_gid -> lease task name (dedupe walk-ups)
         for t in tasks:
             name   = t.get("name", "") or ""
             gid    = str(t.get("gid") or "")
             parent = t.get("parent") or {}
-            house  = _clean_house_name(parent.get("name"))
+            # Walk UP to the real lease task, so multi-level trees (where the
+            # immediate parent is an already-stamped/intermediate task) still get
+            # the correct house + dates.
+            lease_name = _lease_ancestor_name(parent, ancestor_cache)
+            house  = _clean_house_name(lease_name)
             if pf and pf not in house.lower() and pf not in name.lower():
                 continue
             kind = _detect_lease_kind(name)
@@ -921,13 +960,20 @@ def my_bot_chat():
             if not house:
                 skipped.append((name, "no parent (house) task"))
                 continue
+            # Safety net: if even after walking up the "house" is a date-stamp
+            # (no lease ancestor found), refuse rather than write a wrong title.
+            if re.match(r"^\s*\d{1,2}/\d{1,2}\s+(arrival|dept)\b", house, re.I):
+                skipped.append((name,
+                    f"couldn't find the lease task above '{house}…' — skipped so I "
+                    f"don't write a wrong house name [GID {gid}]"))
+                continue
             # Date source: a manual override wins; otherwise the REAL lease dates
-            # live in the parent's NAME, not its date fields (start_on empty,
+            # live in the lease task's NAME, not its date fields (start_on empty,
             # due_on is the deposit-return date).
             if gid in overrides:
                 iso = overrides[gid]
             else:
-                arr_iso, dep_iso = _lease_dates_from_parent_name(parent.get("name", ""))
+                arr_iso, dep_iso = _lease_dates_from_parent_name(lease_name)
                 iso = arr_iso if kind == "pre" else dep_iso
             if not iso:
                 which = "arrival" if kind == "pre" else "departure"
@@ -948,6 +994,18 @@ def my_bot_chat():
             plan.append((t, new_name, iso, t.get("due_on")))
 
         scope = f" for '{property_name}'" if pf else ""
+
+        # Hard cap: at most 50 tasks per run, so previews stay easy to oversee and
+        # applies don't time out. Deterministic order → the same 50 show each run.
+        plan.sort(key=lambda it: ((it[2] or "9999-99-99"), str(it[0].get("gid"))))
+        STAMP_CAP = 50
+        total_matched = len(plan)
+        cap_note = ""
+        if total_matched > STAMP_CAP:
+            plan = plan[:STAMP_CAP]
+            cap_note = (f"\n(Showing the first {STAMP_CAP} of {total_matched} matching "
+                        f"tasks — stamp these, then run again for the next batch.)")
+
         ov_warn = []
         if bad_overrides:
             ov_warn.append(f"\n⚠️ {len(bad_overrides)} supplied date(s) didn't parse "
@@ -967,7 +1025,7 @@ def my_bot_chat():
         if not apply:
             out = [
                 f"PREVIEW{scope} — {len(plan)} task(s) CAN be renamed and have their "
-                f"due date reset. Nothing has changed yet.",
+                f"due date reset. Nothing has changed yet.{cap_note}",
                 "Show the user this NUMBERED list. Ask which to apply — 'all', "
                 "'all except 3, 7', or 'just 1, 2, 5'. Then call stamp_house_and_date again "
                 "with apply=true and approved_gids set to ONLY the GIDs the user approved.",

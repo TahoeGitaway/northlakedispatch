@@ -23,7 +23,7 @@
   </div>
 
   <p class="text-xs text-gray-400 mb-4">
-    Pick a day. This pulls every <b>Disarm Bear Fence</b> task scheduled that day — who it's assigned to, at what time — with the rest of that house's tasks below it for context. Check the ones to delete, type the confirmation, and delete. <span class="text-red-500 font-medium">Deletion is permanent.</span> Only tasks named exactly “Disarm Bear Fence” can ever be deleted.
+    Pick a day. This pulls every <b>Disarm Bear Fence</b> task scheduled that day — who it's assigned to, at what time — with the rest of that house's tasks below it for context. Check the ones you want, then either <span class="text-indigo-600 font-medium">Unassign</span> them (keeps the task on the same day, just drops it to Unassigned — reversible) or <span class="text-red-500 font-medium">Delete</span> them permanently. Only tasks named exactly “Disarm Bear Fence” can ever be touched.
   </p>
 
   <!-- Day + scan controls -->
@@ -67,6 +67,20 @@
     </div>
 
     <div id="cards" class="space-y-3 mb-5"></div>
+
+    <!-- Unassign panel (softer, reversible alternative) -->
+    <div class="rounded-xl p-4 mb-3" style="background:#eef2ff;border:1px solid #c7d2fe;">
+      <div class="text-sm font-bold text-indigo-700 mb-1">↩ Unassign instead — keeps the task, drops it to Unassigned on the same day</div>
+      <div id="unassignSummary" class="text-xs text-indigo-600 mb-3"></div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button id="unassignBtn" onclick="applyUnassign()"
+                class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg
+                       hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          Unassign Selected
+        </button>
+        <span class="text-[11px] text-indigo-500">Reversible · the task stays on its day, just with no one assigned</span>
+      </div>
+    </div>
 
     <!-- Delete confirmation panel -->
     <div class="rounded-xl p-4 mb-4" style="background:#fef2f2;border:1px solid #fecaca;">
@@ -128,6 +142,11 @@ function updateCount() {
   document.getElementById('deleteSummary').textContent = checked === 0
     ? 'Select at least one task above.'
     : `${checked} “Disarm Bear Fence” task${checked !== 1 ? 's' : ''} will be permanently deleted from Breezeway.`;
+
+  document.getElementById('unassignBtn').disabled = checked === 0;
+  document.getElementById('unassignSummary').textContent = checked === 0
+    ? 'Select at least one task above.'
+    : `${checked} “Disarm Bear Fence” task${checked !== 1 ? 's' : ''} will be dropped to Unassigned, kept on the same day.`;
 }
 
 async function runScan() {
@@ -206,7 +225,7 @@ async function runScan() {
             <div class="flex items-center gap-4 mt-1.5 text-sm flex-wrap">
               <span class="text-gray-500">🕑 <span class="font-medium text-gray-700">${_fmtTime(it.time)}</span></span>
               <span class="text-gray-500">📅 <span class="font-medium text-gray-700">${_fmtDate(it.date)}</span></span>
-              <span class="text-gray-500">👤 ${_assignees(it.assignees)}</span>
+              <span class="text-gray-500">👤 <span class="assignee-cell" data-index="${i}">${_assignees(it.assignees)}</span></span>
               ${it.status ? `<span class="text-gray-400" style="font-size:0.75rem;">${esc(it.status)}</span>` : ''}
             </div>
           </div>
@@ -335,6 +354,86 @@ async function applyDelete() {
 
   } catch (e) {
     btn.textContent = 'Delete Selected';
+    updateCount();
+    alert('Error: ' + e.message);
+  }
+}
+
+async function applyUnassign() {
+  const checked = [...document.querySelectorAll('.row-check:checked')];
+  const chosen  = checked.map(cb => items[parseInt(cb.dataset.index)]);
+  if (!chosen.length) return;
+
+  const details = chosen.map(c => {
+    const who = (c.assignees && c.assignees.length) ? c.assignees.join(', ') : 'Unassigned';
+    return `• ${c.property} — ${_fmtTime(c.time).replace(/<[^>]*>/g, '') || 'no time'} · currently: ${who}`;
+  }).join('\n');
+  const n = chosen.length;
+  const msg = `Unassign ${n} Disarm Bear Fence task${n !== 1 ? 's' : ''}?\n\n${details}\n\n`
+    + `They stay on the same day — just dropped to Unassigned. You can reassign anytime.`;
+  if (!confirm(msg)) return;
+
+  const btn = document.getElementById('unassignBtn');
+  btn.disabled = true;
+  btn.textContent = 'Unassigning…';
+
+  try {
+    const resp = await fetch('/admin/bear-fence-delete/unassign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: chosen }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      alert(data.error);
+      btn.textContent = 'Unassign Selected';
+      updateCount();
+      return;
+    }
+
+    const okIds = new Set((data.results || []).filter(r => r.success).map(r => String(r.task_id)));
+    document.querySelectorAll('.row-check').forEach(cb => {
+      const idx = parseInt(cb.dataset.index);
+      if (okIds.has(String(items[idx].task_id))) {
+        items[idx].assignees = [];                       // reflect the change locally
+        const cell = document.querySelector(`.assignee-cell[data-index="${idx}"]`);
+        if (cell) cell.innerHTML = _assignees([]);       // → "Unassigned"
+        cb.checked = false;
+      }
+    });
+
+    const done   = okIds.size;
+    const failed = (data.results || []).length - done;
+    const box    = document.getElementById('resultsBox');
+    box.innerHTML = '';
+
+    const summary = document.createElement('div');
+    summary.style.cssText = `font-size:0.85rem;font-weight:700;color:${failed ? '#b91c1c' : '#4338ca'};margin-bottom:8px;`;
+    summary.textContent = failed
+      ? `${done} unassigned · ${failed} NOT unassigned — see below`
+      : `${done} Disarm Bear Fence task${done !== 1 ? 's' : ''} dropped to Unassigned (kept on the same day)`;
+    box.appendChild(summary);
+
+    (data.results || []).forEach(r => {
+      const div = document.createElement('div');
+      div.style.cssText = `font-size:0.78rem;border-left:3px solid ${r.success ? '#6366f1' : '#ef4444'};`
+        + `background:${r.success ? '#eef2ff' : '#fef2f2'};padding:6px 10px;border-radius:0 6px 6px 0;`
+        + `color:${r.success ? '#374151' : '#b91c1c'};`;
+      div.innerHTML = `${r.success ? '✓' : '✗'} <b>${esc(r.property)}</b> — “${esc(r.name)}”`
+        + `<div style="color:#6b7280;font-family:monospace;font-size:0.7rem;margin-top:1px;">${esc(r.detail)}</div>`;
+      box.appendChild(div);
+    });
+    box.classList.remove('hidden');
+
+    btn.textContent = 'Unassign Selected';
+    updateCount();
+
+    if (failed) {
+      alert(`⚠ ${failed} task${failed !== 1 ? 's were' : ' was'} NOT unassigned — see the notes below.`);
+    }
+
+  } catch (e) {
+    btn.textContent = 'Unassign Selected';
     updateCount();
     alert('Error: ' + e.message);
   }

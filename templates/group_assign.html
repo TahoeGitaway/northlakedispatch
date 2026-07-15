@@ -390,7 +390,9 @@ function _taskRow(t, isCheckin) {
   // Time/date-sensitive titles (a date, an explicit or written-out time, "Issue",
   // or "HO Request") render purple with a purple left bar. Shared matcher lives in
   // task-time-flag.js so Group Assign and the map sidebar agree on what qualifies.
-  const timeFlag  = !flagDismissed && !!(window.NLD && NLD.isTimeSensitiveTitle(t.name));
+  // A house with an arrival that day: she always adds a date to those arrival tasks,
+  // so the date would false-trigger the purple flag. Suppress purple on arrival tasks.
+  const timeFlag  = !flagDismissed && !t.arrival && !!(window.NLD && NLD.isTimeSensitiveTitle(t.name));
   const titleColor = timeFlag ? (NLD.TIME_FLAG_COLOR || '#7c3aed') : '#1f2937';
   const nameHtml = t.task_id
     ? `<a href="https://app.breezeway.io/task/${esc(String(t.task_id))}" target="_blank" rel="noopener"
