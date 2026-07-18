@@ -32,6 +32,75 @@ ops_bot_bp = Blueprint("ops_bot", __name__)
 _bw_ctx_cache: dict = {}
 _BW_CTX_TTL = 10 * 60  # 10 minutes
 
+# Task-fetch cache — keyed (property_id, start, end, dept_filter) → (ts, tasks_list).
+# Task data (carpet cleans, inspections, etc.) was previously uncached, so every
+# "check all houses" question re-ran the full 23-property fan-out from scratch and
+# blew the gateway timeout. Cache the raw task lists so re-asks / multi-fetch reuse them.
+_bw_task_cache: dict = {}
+_BW_TASK_TTL = 5 * 60  # 5 minutes
+
+# Remembers which Breezeway property-key (reference_property_id / property_id / home_id)
+# actually returned tasks for a given property id, so cold fetches try the winning key
+# FIRST instead of firing up to 3 sequential calls per property.
+_bw_endpoint_key_cache: dict = {}
+
+# Overall wall-clock budget (seconds) for a single multi-property fan-out. Kept well
+# under the 120 s gunicorn worker timeout so we return partial-WITH-a-loud-warning
+# instead of being killed mid-stream and leaving a confidently-wrong partial answer.
+_BW_FANOUT_DEADLINE = 90
+
+
+def _span_days(start_str, end_str):
+    """Inclusive day span between two YYYY-MM-DD strings; 1 on parse failure."""
+    from datetime import date as _d
+    try:
+        return (_d.fromisoformat(end_str) - _d.fromisoformat(start_str)).days + 1
+    except Exception:
+        return 1
+
+
+def _scope_signature(tool_name, inp):
+    """Stable key for one fetch's scope, used to block same-request self-confirmation."""
+    start = inp.get("start_date", "")
+    end   = inp.get("end_date", "")
+    if tool_name == "fetch_tasks_multi":
+        scope = ",".join(sorted(str(n).lower().strip() for n in (inp.get("property_names") or [])))
+    elif tool_name == "fetch_task_data":
+        scope = str(inp.get("property_name", "")).lower().strip()
+    else:
+        scope = "reservations"
+    return f"{tool_name}|{start}|{end}|{scope}"
+
+
+def _scope_confirm_message(tool_name, inp):
+    """Human-readable SCOPE_CONFIRM_REQUIRED sentinel the model must relay to the user."""
+    start = inp.get("start_date", "?")
+    end   = inp.get("end_date", "?")
+    days  = _span_days(start, end)
+    status = inp.get("status")
+    filt   = f", filter '{status}'" if status else ""
+    if tool_name == "fetch_tasks_multi":
+        n = len(inp.get("property_names") or [])
+        scope = f"{n} propert{'y' if n == 1 else 'ies'} over {days} day{'s' if days != 1 else ''} ({start}→{end}){filt}"
+        est   = f"~{max(n, 1)} Breezeway calls, roughly {max(5, min(n * 3, 90))}s"
+    elif tool_name == "fetch_task_data":
+        prop  = inp.get("property_name", "a property")
+        scope = f"tasks for {prop} over {days} day{'s' if days != 1 else ''} ({start}→{end}){filt}"
+        est   = "~1–3 Breezeway calls, a few seconds"
+    else:  # fetch_reservation_data
+        scope = f"reservations (arrivals/departures) over {days} day{'s' if days != 1 else ''} ({start}→{end})"
+        est   = "~2 Breezeway calls, a few seconds"
+    return (
+        "SCOPE_CONFIRM_REQUIRED\n"
+        "This data is NOT in your pre-loaded context, so it needs the user's OK before fetching.\n"
+        f"Scope: {scope}.\n"
+        f"Estimated cost: {est}.\n"
+        "DO NOT fetch yet. In your reply, tell the user in plain language exactly what you're about "
+        "to pull (properties, date range, estimated time) and ask them to confirm. Then STOP and wait. "
+        "Only after they reply yes in a NEW message, call this same tool again with confirmed=true. "
+        "Never set confirmed=true on your own."
+    )
+
 
 def _safe_trim(messages, limit):
     """Trim history to `limit` messages without orphaning tool_result blocks."""
@@ -121,13 +190,16 @@ def chatbot_chat():
                 "Use this whenever the user asks about dates not already in the loaded context — "
                 "e.g. 'next week', 'this Friday', 'next month', 'June', 'this summer'. "
                 "Resolve relative references using today's date before calling. "
-                "Maximum range is 30 days per call."
+                "Maximum range is 30 days per call. "
+                "SCOPE CONFIRM: this pulls live data beyond what's pre-loaded, so the first call "
+                "will return SCOPE_CONFIRM_REQUIRED — follow the confirmation protocol in your instructions."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "start_date": {"type": "string", "description": "Start date YYYY-MM-DD"},
                     "end_date":   {"type": "string", "description": "End date YYYY-MM-DD (inclusive, max 30 days after start)"},
+                    "confirmed":  {"type": "boolean", "description": "Set true ONLY after the user has explicitly approved this fetch's scope in a message. Never set it yourself."},
                 },
                 "required": ["start_date", "end_date"],
             },
@@ -140,7 +212,9 @@ def chatbot_chat():
                 "it fetches all of them in parallel and is much faster. "
                 "Use this only when fetching exactly one property. "
                 "Maximum date range is 30 days per call. "
-                "Use status='housekeeping' for cleaning tasks, 'maintenance' for maintenance, 'inspection' for inspections."
+                "Use status='housekeeping' for cleaning tasks, 'maintenance' for maintenance, 'inspection' for inspections. "
+                "SCOPE CONFIRM: task data is never pre-loaded, so the first call will return "
+                "SCOPE_CONFIRM_REQUIRED — follow the confirmation protocol in your instructions."
             ),
             "input_schema": {
                 "type": "object",
@@ -149,6 +223,7 @@ def chatbot_chat():
                     "end_date":      {"type": "string", "description": "End date YYYY-MM-DD (max 30 days after start)"},
                     "property_name": {"type": "string", "description": "Required: property name (partial match ok)."},
                     "status":        {"type": "string", "description": "Optional: 'housekeeping', 'maintenance', 'inspection', 'safety', 'complete', 'pending', or 'in_progress'."},
+                    "confirmed":     {"type": "boolean", "description": "Set true ONLY after the user has explicitly approved this fetch's scope in a message. Never set it yourself."},
                 },
                 "required": ["start_date", "end_date", "property_name"],
             },
@@ -160,7 +235,10 @@ def chatbot_chat():
                 "ALWAYS use this instead of multiple fetch_task_data calls when the user asks about "
                 "2 or more properties. It runs all fetches concurrently so results come back in seconds "
                 "regardless of how many properties are requested. "
-                "Maximum date range is 30 days per call."
+                "Maximum date range is 30 days per call. "
+                "SCOPE CONFIRM: this is the big fan-out — task data for many properties is never "
+                "pre-loaded, so the first call will return SCOPE_CONFIRM_REQUIRED — follow the "
+                "confirmation protocol in your instructions before fetching."
             ),
             "input_schema": {
                 "type": "object",
@@ -170,6 +248,7 @@ def chatbot_chat():
                     "property_names":  {"type": "array", "items": {"type": "string"},
                                         "description": "List of property names to fetch tasks for simultaneously."},
                     "status":          {"type": "string", "description": "Optional: 'housekeeping', 'maintenance', 'inspection', 'safety', 'complete', 'pending', or 'in_progress'."},
+                    "confirmed":       {"type": "boolean", "description": "Set true ONLY after the user has explicitly approved this fetch's scope (property count + date range) in a message. Never set it yourself."},
                 },
                 "required": ["start_date", "end_date", "property_names"],
             },
@@ -341,24 +420,38 @@ def chatbot_chat():
         if dept_filter:
             params["type_department"] = dept_filter
 
-        ref_id = _get_live_ref_cache().get(pid)
-        prop_params_to_try = []
-        if ref_id:
-            prop_params_to_try.append(("reference_property_id", ref_id))
-        prop_params_to_try.extend([("property_id", pid), ("home_id", pid)])
+        dept_key       = dept_filter or ""
+        task_cache_key = (pid, start_str, end_str, dept_key)
+        _cached        = _bw_task_cache.get(task_cache_key)
+        if _cached and _time.time() - _cached[0] < _BW_TASK_TTL:
+            tasks = list(_cached[1])
+        else:
+            ref_id = _get_live_ref_cache().get(pid)
+            # Candidate property-key params, plus the previously-winning key tried FIRST
+            # so a cold fetch usually costs 1 call instead of up to 3.
+            key_opts = {}
+            if ref_id:
+                key_opts["reference_property_id"] = ref_id
+            key_opts["property_id"] = pid
+            key_opts["home_id"]     = pid
+            won   = _bw_endpoint_key_cache.get(pid)
+            order = ([won] if won in key_opts else []) + [k for k in key_opts if k != won]
 
-        tasks, error = [], "property not found"
-        for prop_key, prop_val in prop_params_to_try:
-            t, e, status_code = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", {**params, prop_key: prop_val})
-            if status_code == 200:
-                tasks, error = t, ""
-                break
-            if "403" in e or "access" in e.lower():
-                return "Task data requires elevated API access on your Breezeway plan."
-            error = e
+            tasks, error = [], "property not found"
+            for prop_key in order:
+                t, e, status_code = _fetch_bw_endpoint(
+                    tok, "/public/inventory/v1/task/", {**params, prop_key: key_opts[prop_key]})
+                if status_code == 200:
+                    tasks, error = t, ""
+                    _bw_endpoint_key_cache[pid] = prop_key
+                    break
+                if "403" in e or "access" in e.lower():
+                    return "Task data requires elevated API access on your Breezeway plan."
+                error = e
 
-        if error and not tasks:
-            return f"Could not fetch tasks: {error}"
+            if error and not tasks:
+                return f"Could not fetch tasks: {error}"
+            _bw_task_cache[task_cache_key] = (_time.time(), list(tasks))
 
         def _task_status(t):
             for key in ("type_task_status", "status", "state"):
@@ -461,11 +554,14 @@ def chatbot_chat():
         return "\n".join(lines)
 
     def _execute_fetch_tasks_multi(start_str, end_str, property_names, status_filter=None):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FTimeout
         if not property_names:
             return "No property names provided."
-        results = {}
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        results  = {}
+        deadline = _time.time() + _BW_FANOUT_DEADLINE
+        # One wave instead of three: cap at 16 so 23 properties don't queue behind 8 workers.
+        workers  = max(1, min(len(property_names), 16))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(_execute_fetch_tasks, start_str, end_str, name, status_filter): name
                 for name in property_names
@@ -476,9 +572,37 @@ def chatbot_chat():
                     results[name] = future.result()
                 except Exception as ex:
                     results[name] = f"Error fetching tasks: {ex}"
-        return "\n\n".join(
-            f"=== {n} ===\n{results.get(n, 'No data returned.')}" for n in property_names
+                # Stop collecting before the gunicorn worker is killed at 120 s — anything
+                # still outstanding is reported as NOT CHECKED rather than silently dropped.
+                if _time.time() > deadline:
+                    break
+
+        # Classify each property's outcome so failures are surfaced loudly, never buried.
+        def _failed(text):
+            if not isinstance(text, str):
+                return False
+            low = text.lower()
+            return ("could not fetch" in low or "error fetching" in low
+                    or "timed out" in low or "property cache is empty" in low)
+
+        not_checked = [n for n in property_names if n not in results]
+        errored     = [n for n in property_names if n in results and _failed(results[n])]
+        degraded    = not_checked + errored
+
+        body = "\n\n".join(
+            f"=== {n} ===\n{results.get(n, 'NOT CHECKED — fetch did not complete before the time budget.')}"
+            for n in property_names
         )
+        if degraded:
+            header = (
+                f"⚠ INCOMPLETE FETCH: {len(degraded)} of {len(property_names)} properties did NOT return "
+                f"clean data (timeouts/errors/not-reached): {', '.join(degraded)}.\n"
+                "You MUST tell the user these properties were not fully checked and were left out or are "
+                "uncertain. Do NOT present the results below as a complete answer. Offer to retry the "
+                "failed ones.\n\n"
+            )
+            return header + body
+        return body
 
     def generate():
         def sse(obj):
@@ -491,25 +615,39 @@ def chatbot_chat():
         max_date     = capped_dates[-1]
         date_set     = set(capped_dates)
 
-        cache_key = f"{min_date}:{max_date}"
-        cached    = _bw_ctx_cache.get(cache_key)
+        cache_key    = f"{min_date}:{max_date}"
+        cached       = _bw_ctx_cache.get(cache_key)
+        ctx_degraded = ""
         if cached and _time.time() - cached[0] < _BW_CTX_TTL:
             all_checkins, all_checkouts = cached[1], cached[2]
         else:
+            from routes.briefing import _get_bw_resv_last_error
+            ctx_ok = False
             try:
                 token = _get_breezeway_token()
                 if token:
                     all_checkins  = _fetch_bw_reservations(token, {
                         "checkin_date_ge": min_date, "checkin_date_le": max_date,
                     })
+                    err1 = _get_bw_resv_last_error()
                     all_checkouts = _fetch_bw_reservations(token, {
                         "checkout_date_ge": min_date, "checkout_date_le": max_date,
                     })
+                    err2 = _get_bw_resv_last_error()
+                    if err1 or err2:
+                        ctx_degraded = f"arrival/departure data may be incomplete ({err1 or err2})"
+                    else:
+                        ctx_ok = True
                 else:
                     all_checkins = all_checkouts = []
-            except Exception:
+                    ctx_degraded = "Breezeway token unavailable — arrival/departure context not loaded"
+            except Exception as _ctx_ex:
                 all_checkins = all_checkouts = []
-            _bw_ctx_cache[cache_key] = (_time.time(), all_checkins, all_checkouts)
+                ctx_degraded = f"arrival/departure context failed to load ({_ctx_ex})"
+            # Cache ONLY a clean load. Caching an empty/partial result on error is what made
+            # the bot confidently report "no arrivals" for 10 minutes after a transient timeout.
+            if ctx_ok:
+                _bw_ctx_cache[cache_key] = (_time.time(), all_checkins, all_checkouts)
 
         checkins_by_date  = {}
         checkouts_by_date = {}
@@ -524,6 +662,12 @@ def chatbot_chat():
 
         context_blocks  = []
         context_summary = []
+        if ctx_degraded:
+            context_blocks.append(
+                f"⚠ DATA WARNING: {ctx_degraded}. The arrivals/departures below may be missing "
+                "entries — if the user asks about arrivals/departures, tell them this context is "
+                "degraded and offer to reload rather than answering as if it's complete."
+            )
         for date_str in capped_dates:
             try:
                 routes    = _fetch_todays_routes(date_str)
@@ -634,18 +778,27 @@ def chatbot_chat():
             "- NEVER TRUNCATE. Output the complete list no matter how long. "
             "NEVER use '---' anywhere in your response — not as a divider, separator, or section break. "
             "NEVER use '...' to cut off a list. If the user wants to stop reading they will click stop.\n"
-            "- NEVER REPORT EMPTY RESULTS without trying a wider date range first. If a task type "
-            "is not found in the requested range, silently expand to ±30 days and try again before "
-            "telling the user nothing was found. Only report 'none found' after the wider search also returns nothing.\n"
+            "- REPORT WHAT YOU FOUND IN THE REQUESTED RANGE. If a task type isn't found in the range "
+            "the user asked about, say so plainly, then OFFER to search a wider range — do NOT silently "
+            "expand the dates and fetch again on your own (that is a new fetch scope and needs confirmation "
+            "just like any other; see SCOPE CONFIRMATION below).\n"
+            "- SCOPE CONFIRMATION — CRITICAL: The fetch tools only have your pre-loaded schedule data for "
+            "free. ANY live fetch (fetch_task_data, fetch_tasks_multi, fetch_reservation_data) will return "
+            "'SCOPE_CONFIRM_REQUIRED' on the first call. When you get that, DO NOT retry the fetch. Instead, "
+            "tell the user in plain language exactly what you're about to pull (which properties, what date "
+            "range, the rough time cost), then STOP and wait for their reply. Only after they say yes in a "
+            "new message may you call the same tool again with confirmed=true. NEVER set confirmed=true "
+            "yourself, and never re-issue the same fetch with confirmed=true in the same turn you were asked "
+            "to confirm — the user has to answer first. This exists so a single question never silently "
+            "kicks off a huge, slow, expensive fetch the user didn't ask for.\n"
             "- When staff asks you to take a write action (save a note, flag a property, mark something complete), "
             "respond with a line starting exactly with 'CONFIRM_ACTION:' followed by a short description. "
             "Do not consider the action done until confirmed.\n"
-            "- SCOPE BEFORE FETCHING: Before calling any fetch tool for a date range longer than 7 days, "
-            "confirm the exact range with the user unless they stated it explicitly. "
-            "For ranges ≤7 days or when the user named specific dates, fetch immediately without asking.\n"
             "- PROPERTY SCOPE: If the user asks about tasks at all properties or doesn't name one, "
-            "call list_properties first to get the full list, then use fetch_tasks_multi — "
-            "do NOT ask the user to name the properties.\n"
+            "call list_properties first (that's free and needs no confirmation) to get the full list. "
+            "Then, before the actual fetch, follow SCOPE CONFIRMATION above: propose the fetch "
+            "(e.g. 'all 23 properties over the last 30 days') and wait for the user's go-ahead. "
+            "Do NOT ask the user to name the properties — you name them; you just confirm the pull.\n"
             "- TOOL USAGE: When the user asks about tasks at 2+ properties, ALWAYS use fetch_tasks_multi "
             "(not multiple fetch_task_data calls) — it fetches all properties in parallel in one shot.\n"
             "- TASK FILTERING — CRITICAL: This is an OPERATIONS bot, not a housekeeping bot. "
@@ -684,18 +837,24 @@ def chatbot_chat():
             "for any other date range the user asks about."
         )
 
-        def _trunc_for_history(content, limit=800):
+        def _trunc_for_history(content, limit=6000):
+            # Was 800 — far too small for a multi-property task result, so the model lost the
+            # data it had just fetched and re-fetched it every turn. Keep enough that answers
+            # survive across turns; a re-fetch now costs a scope confirmation, so avoid forcing it.
             if not isinstance(content, str) or len(content) <= limit:
                 return content
             cut = content[:limit].rfind('\n')
             if cut < limit // 2:
                 cut = limit
-            return content[:cut] + "\n[…truncated — bot will re-fetch if needed]"
+            return content[:cut] + "\n[…older detail trimmed — do not re-fetch; ask the user if you need it again]"
 
         ai_client         = anthropic.Anthropic(api_key=key)
         trimmed           = _safe_trim(messages, 12)
         history_additions = []
         reply_text        = ""
+        # Scope signatures we've already challenged this request. A confirmed=true that reuses
+        # one is the model self-approving without a fresh user reply — we re-challenge it.
+        pending_confirm   = set()
 
         try:
             for _turn in range(6):
@@ -736,6 +895,25 @@ def chatbot_chat():
                         if block.type == "tool_use":
                             tool_idx += 1
                             counter  = f" ({tool_idx}/{tool_total})" if tool_total > 1 else ""
+
+                            # SCOPE GATE: any live fetch beyond pre-loaded data must be
+                            # confirmed by the user first. The tool is refused (sentinel)
+                            # until confirmed=true arrives on a genuinely new user reply.
+                            if block.name in ("fetch_reservation_data", "fetch_task_data", "fetch_tasks_multi"):
+                                sig       = _scope_signature(block.name, block.input)
+                                confirmed = bool(block.input.get("confirmed"))
+                                if not confirmed or sig in pending_confirm:
+                                    pending_confirm.add(sig)
+                                    sentinel = _scope_confirm_message(block.name, block.input)
+                                    yield sse({"type": "status", "text": "Needs your OK before fetching…"})
+                                    tool_results.append({
+                                        "type": "tool_result", "tool_use_id": block.id, "content": sentinel,
+                                    })
+                                    tool_results_history.append({
+                                        "type": "tool_result", "tool_use_id": block.id, "content": sentinel,
+                                    })
+                                    continue
+
                             if block.name == "fetch_reservation_data":
                                 yield sse({"type": "status", "text": f"Fetching reservation data{counter}…"})
                                 result = _execute_fetch(

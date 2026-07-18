@@ -81,8 +81,23 @@ def _get_breezeway_token() -> str | None:
 
 # ── Breezeway data fetchers ───────────────────────────────────────
 
+_bw_resv_last_error: str = ""   # last error from _fetch_bw_reservations, for degradation signaling
+
+
+def _get_bw_resv_last_error() -> str:
+    """Return (and represents) the last error _fetch_bw_reservations swallowed, if any."""
+    return _bw_resv_last_error
+
+
 def _fetch_bw_reservations(token: str, params: dict) -> list:
-    """Paginate through all Breezeway reservations matching params."""
+    """Paginate through all Breezeway reservations matching params.
+
+    Note: a mid-pagination failure returns the pages fetched so far. Callers that
+    need to know the result may be partial should check _get_bw_resv_last_error()
+    immediately after — it is set to a non-empty string when this call errored.
+    """
+    global _bw_resv_last_error
+    _bw_resv_last_error = ""
     all_results = []
     page, limit = 1, 100
     try:
@@ -100,8 +115,13 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
             if len(page_results) < limit:
                 break
             page += 1
-    except Exception:
-        pass
+    except Exception as ex:
+        # Don't silently swallow: record the failure so callers can flag partial data.
+        _bw_resv_last_error = str(ex) or ex.__class__.__name__
+        try:
+            print(f"[briefing] _fetch_bw_reservations partial/failed after page {page}: {ex}")
+        except Exception:
+            pass
     return all_results
 
 
@@ -956,13 +976,18 @@ def _is_owner_cleaned_title(title: str) -> bool:
     return t in ("owner clean", "owner cleaned")
 
 
-def _is_cleaning_dept(task: dict) -> bool:
-    """True when a Breezeway task belongs to the cleaning/housekeeping department.
-    Same normalization group_assign / assignee_monitor use."""
+def _task_dept_str(task: dict) -> str:
+    """Raw department label for a task (for diagnostics/logging)."""
     dept = task.get("type_department")
     if isinstance(dept, dict):
         dept = dept.get("code") or dept.get("name") or ""
-    dl = str(dept).strip().lower()
+    return str(dept)
+
+
+def _is_cleaning_dept(task: dict) -> bool:
+    """True when a Breezeway task belongs to the cleaning/housekeeping department.
+    Same normalization group_assign / assignee_monitor use."""
+    dl = _task_dept_str(task).strip().lower()
     return "clean" in dl or "housekeep" in dl
 
 
@@ -987,7 +1012,7 @@ def _robust_property_tasks_window(token, ref_id, start_str, end_str):
     return ([], False)
 
 
-def _last_clean_is_owner(tasks: list, arrival_date) -> bool:
+def _last_clean_is_owner(tasks: list, arrival_date, trace=None) -> bool:
     """Given a property's tasks and its arrival date, decide whether the LAST clean
     on or before arrival was an 'Owner Cleaned' task.
 
@@ -995,7 +1020,10 @@ def _last_clean_is_owner(tasks: list, arrival_date) -> bool:
     3 days up to arrival, then 7, then the full 14 — the first tier that contains
     any cleaning task wins. Within that tier the LATEST scheduled date is 'the last
     clean'. Flag only when that date's cleaning tasks are owner-cleaned AND carry no
-    competing staff clean (a same-day staff clean supersedes the owner one)."""
+    competing staff clean (a same-day staff clean supersedes the owner one).
+
+    If `trace` (a dict) is passed, it's filled with the diagnostic breakdown that
+    drove the decision — used by the endpoint's debug=1 mode, no behavior change."""
     # Keep only cleaning-department tasks scheduled on/before the arrival day,
     # tagged with their parsed date.
     dated = []
@@ -1010,7 +1038,14 @@ def _last_clean_is_owner(tasks: list, arrival_date) -> bool:
         if d > arrival_date:
             continue
         dated.append((d, t))
+    if trace is not None:
+        trace["cleaning_tasks"] = sorted(
+            ({"date": d.isoformat(), "title": _get_task_title(t),
+              "dept": _task_dept_str(t)} for d, t in dated),
+            key=lambda x: x["date"])
     if not dated:
+        if trace is not None:
+            trace["decision"] = "no cleaning tasks in 14-day window"
         return False
 
     for window in (3, 7, 14):
@@ -1022,6 +1057,16 @@ def _last_clean_is_owner(tasks: list, arrival_date) -> bool:
         latest_tasks = [t for d, t in tier if d == latest]
         owner = any(_is_owner_cleaned_title(_get_task_title(t)) for t in latest_tasks)
         other = any(not _is_owner_cleaned_title(_get_task_title(t)) for t in latest_tasks)
+        if trace is not None:
+            trace["window_used"]  = window
+            trace["latest_clean"] = latest.isoformat()
+            trace["latest_tasks"] = [
+                {"title": _get_task_title(t), "dept": _task_dept_str(t),
+                 "is_owner_cleaned": _is_owner_cleaned_title(_get_task_title(t))}
+                for t in latest_tasks]
+            trace["owner"] = owner
+            trace["other"] = other
+            trace["flagged"] = owner and not other
         return owner and not other
     return False
 
@@ -1047,7 +1092,8 @@ def owner_cleaned_check():
     from concurrent.futures import ThreadPoolExecutor
 
     date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
-    force    = request.args.get("refresh") == "1"
+    debug    = request.args.get("debug") == "1"
+    force    = request.args.get("refresh") == "1" or debug
 
     cached = _owner_cleaned_cache.get(date_str)
     if cached and not force and (time.time() - cached[0]) < 600:
@@ -1089,16 +1135,21 @@ def owner_cleaned_check():
         ref = ref_cache.get(pid) or str(pid)
         tasks, ok = _robust_property_tasks_window(token, ref, start_str, date_str)
         if not ok:
-            return (pid, None)   # None == load failed, distinct from False (loaded, not flagged)
-        return (pid, _last_clean_is_owner(tasks, arrival_date))
+            return (pid, None, None)   # None == load failed, distinct from False (loaded, not flagged)
+        tr = {} if debug else None
+        return (pid, _last_clean_is_owner(tasks, arrival_date, trace=tr), tr)
 
-    flagged, failed = [], 0
+    flagged, failed, debug_details = [], 0, []
     with ThreadPoolExecutor(max_workers=32) as ex:
-        for pid, result in ex.map(_job, list(arriving.keys())):
+        for pid, result, tr in ex.map(_job, list(arriving.keys())):
             if result is None:
                 failed += 1
             elif result:
                 flagged.append({"property_id": pid, "name": arriving[pid]})
+            # Debug: surface only houses that HAD a cleaning task suppressed by a
+            # same-day non-owner task (owner present but not flagged) — the suspects.
+            if debug and tr is not None and tr.get("owner") and not tr.get("flagged"):
+                debug_details.append({"property_id": pid, "name": arriving[pid], **tr})
 
     payload = {
         "date":              date_str,
@@ -1106,9 +1157,12 @@ def owner_cleaned_check():
         "scanned":           len(arriving),
         "failed_properties": failed,
     }
+    if debug:
+        payload["debug_suppressed"] = debug_details
     # Only cache a clean scan — a run with failed properties may be missing flags,
     # so let the next load retry rather than serving an incomplete result for 10 min.
-    if not failed:
+    # Never cache a debug run (it forces fresh and carries extra payload).
+    if not failed and not debug:
         _owner_cleaned_cache[date_str] = (time.time(), payload)
     return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
 

@@ -143,7 +143,10 @@
       try {
         const res  = await fetch("/api/pri-alerts");
         const data = await res.json();
-        const alerts = data.alerts || [];
+        // Only alert on "Add Owner Next tag" cases. Vacancy PRIs (no upcoming
+        // booking → "Create vacancy PRI manually") are not actioned anymore, so
+        // they're dropped entirely — both from the rows and the header count.
+        const alerts = (data.alerts || []).filter(a => a.alert_type === "needs_owner_next");
         if (!alerts.length) return;
         const banner = document.getElementById("priAlertBanner");
         banner.innerHTML = "";
@@ -243,6 +246,62 @@
       });
       rowEl.remove();
       const banner = document.getElementById("asanaBanner");
+      if (!banner.querySelector("button")) banner.classList.add("hidden");
+    }
+    </script>
+    {% endif %}
+
+    {% if current_user.is_authenticated %}
+    <!-- Breezeway @mention banner — per-user; shows comments that matched your
+         name/handle or the schedule/logistics keyword rules. -->
+    <div id="bwMentionBanner" class="hidden border-b border-indigo-200 bg-indigo-50 px-6 py-3 space-y-1.5"></div>
+    <script>
+    (async function loadBwMentions() {
+      try {
+        const res  = await fetch("/api/bw-mentions");
+        const data = await res.json();
+        const items = data.mentions || [];
+        if (!items.length) return;
+        const banner = document.getElementById("bwMentionBanner");
+        banner.innerHTML = "";
+        const header = document.createElement("div");
+        header.className = "flex items-center justify-between";
+        header.innerHTML = `
+          <span class="text-sm font-semibold text-indigo-800">
+            🔔 Breezeway comments for you (${items.length})
+          </span>`;
+        banner.appendChild(header);
+        items.forEach(m => {
+          const row = document.createElement("div");
+          row.className = "flex items-center justify-between gap-4 text-xs text-indigo-700 pl-1";
+          const when = m.bw_created_at
+            ? new Date(m.bw_created_at).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
+            : "";
+          const text = (m.comment_text || "");
+          const snippet = text.slice(0,140) + (text.length > 140 ? "…" : "");
+          const taskLink = m.task_id && m.task_id !== "0"
+            ? ` · <a href="https://app.breezeway.io/task/${encodeURIComponent(m.task_id)}" target="_blank" rel="noopener" class="underline hover:text-indigo-900">open task ↗</a>`
+            : "";
+          const tag = m.matched_term ? `<span class="text-indigo-400">[${m.matched_term}]</span> ` : "";
+          row.innerHTML = `
+            <span>${tag}<strong>${m.commenter || "Someone"}</strong>${when ? " · " + when : ""}: ${snippet}${taskLink}</span>
+            <button onclick="dismissBwMention('${m.item_key}', this.closest('div'))"
+                    class="flex-shrink-0 text-indigo-400 hover:text-indigo-700 font-bold text-base leading-none px-1"
+                    title="Dismiss">✕</button>`;
+          banner.appendChild(row);
+        });
+        banner.classList.remove("hidden");
+      } catch {}
+    })();
+
+    async function dismissBwMention(key, rowEl) {
+      rowEl.style.opacity = "0.4";
+      await fetch("/api/bw-mention/dismiss", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({key}),
+      });
+      rowEl.remove();
+      const banner = document.getElementById("bwMentionBanner");
       if (!banner.querySelector("button")) banner.classList.add("hidden");
     }
     </script>

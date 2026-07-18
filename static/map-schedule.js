@@ -637,6 +637,11 @@ function renderSchedule() {
       badge += `<span class="late-badge">LATE</span>`;
     else if (stop.arrival)
       badge += `<span class="checkin-badge">CHECK-IN</span>`;
+    // VIP is INDEPENDENT of the check-in/PCI chain above (not an else-if): a house can be
+    // both, and both banners must show — a PCI house that's also VIP reads "⚡ PCI — ARRIVE
+    // BY NOON  ⭐ VIP". _stopHasVip lives in map-search.js; guard for pages without it.
+    if (typeof _stopHasVip === "function" && _stopHasVip(stop.name) && window.NLD)
+      badge += NLD.vipBannerHtml();
 
     // Always render BOTH toggles (active or muted) so every card has the same
     // controls in the same place — no content-driven wrapping between cards.

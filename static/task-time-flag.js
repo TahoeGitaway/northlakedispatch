@@ -106,6 +106,16 @@
     return '<span data-vip-badge="1" title="VIP task" style="' + VIP_STYLE + '">⭐ VIP</span>';
   };
 
+  // House-level banner. Same gold family as the task pill, but sized/weighted to
+  // match the PCI banner on the schedule card so a VIP house reads at the same
+  // glance-distance as a by-noon check-in.
+  window.NLD.vipBannerHtml = function () {
+    return '<span data-vip-banner="1" title="VIP house — a task here is flagged VIP" ' +
+      'style="display:inline-block;background:#facc15;color:#713f12;font-weight:800;' +
+      'font-size:0.72rem;padding:3px 10px;border-radius:6px;letter-spacing:0.03em;' +
+      'box-shadow:0 0 0 2px #fef08a;">⭐ VIP</span>';
+  };
+
   window.NLD.makeVipBadge = function () {
     const b = document.createElement("span");
     b.dataset.vipBadge = "1";
@@ -136,6 +146,9 @@
         // typeof-guard: these page globals don't exist on every page.
         try { if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule(); } catch (e) {}
         try { if (typeof renderScan === "function") renderScan(); } catch (e) {}
+        // Schedule cards carry the house-level VIP banner, which is derived from these
+        // dismissals too — re-render them or a dismissed VIP house keeps its banner.
+        try { if (typeof isOptimized !== "undefined" && isOptimized && typeof renderSchedule === "function") renderSchedule(); } catch (e) {}
       })
       .catch(() => {});
   };

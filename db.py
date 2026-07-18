@@ -263,6 +263,37 @@ def init_db():
         value        TEXT NOT NULL
     )""")
 
+    # Breezeway task-comment @mention alerts. Fed by the 'task' webhook (see
+    # routes/bw_comments.py), NOT by polling. One row per (comment, recipient)
+    # so each user dismisses independently. item_key = "<comment_id>::<user_id>"
+    # dedupes Breezeway's re-delivery of the whole task on every comment event —
+    # ON CONFLICT DO NOTHING keeps a dismissed row dismissed (never resurrected).
+    cur.execute("""CREATE TABLE IF NOT EXISTS bw_comment_alerts (
+        id                SERIAL PRIMARY KEY,
+        item_key          TEXT NOT NULL UNIQUE,
+        task_id           TEXT NOT NULL DEFAULT '',
+        comment_id        TEXT NOT NULL DEFAULT '',
+        recipient_user_id INTEGER REFERENCES users(id),
+        commenter         TEXT NOT NULL DEFAULT '',
+        comment_text      TEXT NOT NULL DEFAULT '',
+        matched_term      TEXT NOT NULL DEFAULT '',
+        bw_created_at     TEXT,
+        created_at        TEXT NOT NULL,
+        dismissed_at      TEXT
+    )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS bw_comment_alerts_recipient_idx "
+                "ON bw_comment_alerts (recipient_user_id, dismissed_at)")
+
+    # Raw webhook payload capture (capped to the newest ~100 rows). The exact
+    # task-comment-created envelope isn't documented with a real example, so we
+    # keep the raw bodies to inspect real shapes and tighten extraction/matching.
+    cur.execute("""CREATE TABLE IF NOT EXISTS bw_comment_webhook_log (
+        id          SERIAL PRIMARY KEY,
+        received_at TEXT NOT NULL,
+        event_type  TEXT DEFAULT '',
+        payload     TEXT NOT NULL DEFAULT ''
+    )""")
+
     # Temporary VIP reservation tracker — checklist + notes per reservation.
     cur.execute("""CREATE TABLE IF NOT EXISTS vip_tracker (
         id          SERIAL PRIMARY KEY,

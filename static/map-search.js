@@ -1091,6 +1091,18 @@ function _bwTaskLabel(taskId, text, className) {
   return span;
 }
 
+// A task title as an HTML STRING, for the string-built CHANGES-vs-Breezeway panel —
+// the counterpart of _bwTaskLabel(), which builds DOM nodes for the stop list. Same
+// deal: an <a> straight to the task in Breezeway when we have its id, else a plain
+// <span>, so every task title in the sidebar is clickable the same way.
+function _bwTaskLinkHtml(taskId, text, className) {
+  const cls = className || "";
+  if (taskId == null || taskId === "") return `<span class="${cls}">${_escHtml(text)}</span>`;
+  return `<a href="https://app.breezeway.io/task/${encodeURIComponent(taskId)}"`
+       + ` target="_blank" rel="noopener" title="Open this task in Breezeway"`
+       + ` class="${cls} hover:underline">${_escHtml(text)}</a>`;
+}
+
 // 📅 link (as an HTML string) to a property's Breezeway calendar, for the string-built
 // CHANGES-vs-Breezeway panel. Lets her open a changed/removed house's calendar to see
 // what happened. Returns "" when we don't have the property id. Style matches the sidebar.
@@ -1368,6 +1380,32 @@ function _tasksForStop(name) {
   return hit ? hit.tasks : null;
 }
 
+// Does this house have a live VIP task? True when ANY of its tasks has a VIP title
+// and that task's flag hasn't been dismissed — so dismissing the last VIP task's ✕
+// clears the house flag too. Reads both task sources: the BW-tasks payload and the
+// discrepancy-scan payload (daily-routes mode), since only one is populated at a time.
+// Shared by both sidebars so they can never disagree about which house is VIP.
+function _stopHasVip(name) {
+  if (!window.NLD) return false;
+  const vip = (title, id) => NLD.isVipTitle(title) && !NLD.isFlagDismissed(id);
+
+  const bw = _bwTasksByPropName[name] || [];
+  if (bw.some(t => vip(t.task_name, t.task_id))) return true;
+
+  const scan = _tasksForStop(name) || [];
+  return scan.some(t => (t && typeof t === "object")
+    ? vip(t.name, t.id)
+    : vip(t, null));
+}
+
+// After a task's ✕ dismissal, re-render BOTH sidebars: the task list here AND the
+// schedule cards, whose house-level VIP banner is derived from these same flags and
+// would otherwise sit stale until the next optimize.
+function _afterFlagDismiss() {
+  _syncSidebarToSchedule();
+  try { if (isOptimized && typeof renderSchedule === "function") renderSchedule(); } catch (e) {}
+}
+
 // Live same-day arrival flag from the latest scan — so a check-in that moved to today
 // lights up the sidebar badge even though the SAVED route (s.arrival) predates the move.
 function _arrivalForStop(name) {
@@ -1456,9 +1494,13 @@ function _renderChangesHtml(d) {
       // house header AND a highlighted, badged line for each PCI task.
       // `a.pci` already requires a same-day arrival; a next-day PCI stays unflagged.
       const propPci = byProp[prop].some(a => a.pci);
+      // VIP is independent of PCI — a house that's both gets BOTH badges.
+      const propVip = !!(window.NLD && byProp[prop].some(
+        a => NLD.isVipTitle(a.task_name) && !NLD.isFlagDismissed(a.task_id)));
       h += `<div class="mb-1.5 leading-snug">`;
       h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}${_bwCalLinkHtml(byProp[prop][0].property_id, prop)}`
          + (propPci ? ` <span class="inline-block align-middle bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">⚡ PRIORITY CHECK-IN</span>` : "")
+         + (propVip ? ` ${NLD.vipBadgeHtml()}` : "")
          + `</div>`;
       for (const a of byProp[prop]) {
         const isPci = !!a.pci;
@@ -1478,7 +1520,12 @@ function _renderChangesHtml(d) {
         const lineCls = isPci
           ? "text-[11px] text-violet-900 font-semibold bg-violet-50 border-l-2 border-violet-500 rounded-r pl-2 pr-1 py-0.5 leading-snug"
           : "text-[11px] text-gray-500 pl-3 leading-snug";
-        h += `<div class="${lineCls}">• ${_escHtml(a.task_name)}${pciBadge}${note}</div>`;
+        const vipBadge = (window.NLD && NLD.isVipTitle(a.task_name) && !NLD.isFlagDismissed(a.task_id))
+          ? ` ${NLD.vipBadgeHtml()}` : "";
+        // Title links to the task in Breezeway, same as every other task line in this
+        // sidebar. Inherits lineCls so the PCI highlight styling is unchanged.
+        h += `<div class="${lineCls}">• ${_bwTaskLinkHtml(a.task_id, a.task_name, "")}`
+           + `${pciBadge}${vipBadge}${note}</div>`;
       }
       h += `</div>`;
     }
@@ -1701,6 +1748,11 @@ function _syncSidebarToSchedule() {
         badge.textContent = "CHECK-IN";
         row.appendChild(badge);
       }
+      if (_stopHasVip(s.name)) {                               // gold flag on the house itself
+        const vb = NLD.makeVipBadge(); vb.classList.add("shrink-0"); vb.style.marginTop = "1px";
+        vb.title = "VIP house — a task here is flagged VIP";
+        row.appendChild(vb);
+      }
       const occB = _occupancyBadge(_bwPropIdByName[s.name]);   // who's in the house that day
       if (occB) { occB.classList.add("mt-px"); row.appendChild(occB); }
       card.appendChild(row);
@@ -1722,7 +1774,7 @@ function _syncSidebarToSchedule() {
           if (vipHere) { const vb = NLD.makeVipBadge(); vb.style.marginLeft = "5px"; line.appendChild(vb); }
           if (lbl.dataset.timeFlag && window.NLD) NLD.markTimeFlagRow(line, 6);
           if ((lbl.dataset.timeFlag || vipHere) && tid != null && tid !== "" && window.NLD) {
-            line.appendChild(NLD.makeFlagRemoveX(tid, _syncSidebarToSchedule));
+            line.appendChild(NLD.makeFlagRemoveX(tid, _afterFlagDismiss));
           }
           tl.appendChild(line);
         }
@@ -1757,6 +1809,12 @@ function _syncSidebarToSchedule() {
     propName.appendChild(propNameText);
     const cal = _bwCalendarLink(s.name);
     if (cal) { cal.classList.add("align-middle"); propName.appendChild(cal); }
+    if (_stopHasVip(s.name)) {                              // gold flag on the house itself
+      const vb = NLD.makeVipBadge();
+      vb.classList.add("align-middle"); vb.style.marginLeft = "5px";
+      vb.title = "VIP house — a task here is flagged VIP";
+      propName.appendChild(vb);
+    }
     const occB = _occupancyBadge(_bwPropIdByName[s.name]);   // who's in the house that day
     if (occB) { occB.classList.add("align-middle"); occB.style.marginLeft = "5px"; propName.appendChild(occB); }
     body.appendChild(propName);
@@ -1771,7 +1829,7 @@ function _syncSidebarToSchedule() {
       if (vipHere) { const vb = NLD.makeVipBadge(); vb.style.marginLeft = "4px"; taskRow.appendChild(vb); }
       if (tLbl.dataset.timeFlag && window.NLD) NLD.markTimeFlagRow(taskRow, 6);
       if ((tLbl.dataset.timeFlag || vipHere) && t.task_id != null && t.task_id !== "" && window.NLD) {
-        taskRow.appendChild(NLD.makeFlagRemoveX(t.task_id, _syncSidebarToSchedule));
+        taskRow.appendChild(NLD.makeFlagRemoveX(t.task_id, _afterFlagDismiss));
       }
       if (t.assignees && t.assignees.length) {
         const asgn = document.createElement("span");
