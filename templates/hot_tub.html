@@ -14,6 +14,7 @@
     </div>
     <div class="flex gap-2 items-center">
       <button onclick="clearHandled()"
+              title="Un-hide every property you've marked handled. Handled items also come back on their own 24 hours after you mark them."
               class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
         Clear checkoffs
       </button>
@@ -62,18 +63,37 @@
 </div>
 
 <script>
-const SESSION_KEY = 'hot_tub_handled';
+// "Handled" checkoffs auto-expire 24 h after they're marked, so an overdue
+// service can never stay silently hidden past a day. Stored as { propName: markedAtMs }
+// in localStorage (survives reloads/restarts within that 24 h window, unlike the old
+// per-tab sessionStorage). Expiry is evaluated on every read, so a stale checkoff is
+// gone the next time the page is loaded or re-scanned.
+const HANDLED_KEY    = 'hot_tub_handled';
+const HANDLED_TTL_MS = 24 * 60 * 60 * 1000;   // 24 hours
 
-function _getHandled() {
-  try { return new Set(JSON.parse(sessionStorage.getItem(SESSION_KEY) || '[]')); }
-  catch { return new Set(); }
+// Read the map, dropping (and pruning) anything older than 24 h or malformed.
+function _readHandledMap() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HANDLED_KEY) || '{}');
+    const now = Date.now();
+    const fresh = {};
+    let changed = false;
+    for (const [name, ts] of Object.entries(raw || {})) {
+      if (typeof ts === 'number' && (now - ts) < HANDLED_TTL_MS) fresh[name] = ts;
+      else changed = true;
+    }
+    if (changed) localStorage.setItem(HANDLED_KEY, JSON.stringify(fresh));
+    return fresh;
+  } catch { return {}; }
 }
-function _setHandled(s) {
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify([...s]));
+
+// Names still handled (i.e. within the 24 h window). Render code stays a Set lookup.
+function _getHandled() {
+  return new Set(Object.keys(_readHandledMap()));
 }
 
 function clearHandled() {
-  sessionStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(HANDLED_KEY);
   document.querySelectorAll('.ht-card').forEach(c => _applyHandled(c, false));
 }
 
@@ -91,16 +111,16 @@ function _applyHandled(card, handled) {
 
 function toggleHandled(btn) {
   const propName = btn.dataset.prop;
-  const handled = _getHandled();
-  const card    = btn.closest('.ht-card');
-  if (handled.has(propName)) {
-    handled.delete(propName);
+  const map      = _readHandledMap();
+  const card     = btn.closest('.ht-card');
+  if (map[propName]) {
+    delete map[propName];                 // un-handle
     _applyHandled(card, false);
   } else {
-    handled.add(propName);
+    map[propName] = Date.now();           // stamp so it expires 24 h from now
     _applyHandled(card, true);
   }
-  _setHandled(handled);
+  localStorage.setItem(HANDLED_KEY, JSON.stringify(map));
 }
 
 function _fmtDate(ds) {
