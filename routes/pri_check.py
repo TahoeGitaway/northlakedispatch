@@ -10,6 +10,7 @@ Endpoints:
 """
 
 import os
+import time
 from datetime import date as date_cls, datetime, timedelta
 
 from flask import Blueprint, jsonify, request
@@ -19,12 +20,23 @@ from db import get_db, get_cursor
 
 pri_bp = Blueprint("pri", __name__)
 
+# ── Short-lived reservation snapshot cache ────────────────────────────────
+# The scan pulls the full reservation set (thousands of rows) LIVE on every
+# click, which is slow enough to hit per-page timeouts (→ silent partial data →
+# false vacancies) and makes two devices disagree. Cache the raw pull briefly so
+# repeat scans are instant, deterministic across devices, and don't re-risk the
+# fetch. ONLY complete pulls are cached — a partial pull is never stored, so a
+# retry can still reach the full set. Pass ?refresh=1 to force a live re-pull.
+_RESO_CACHE_TTL = 600  # seconds (10 min)
+_reso_cache: dict = {}  # {cache_key: (fetched_at_epoch, raw_checkouts, raw_upcoming)}
+
 
 def _shared():
     """Lazy import shared Breezeway helpers from briefing to avoid circular imports."""
     from routes.briefing import (
         _get_breezeway_token,
         _fetch_bw_reservations,
+        _fetch_bw_reservations_checked,
         _classify_reservation,
         _extract_str,
         _get_property_name,
@@ -32,6 +44,7 @@ def _shared():
     return (
         _get_breezeway_token,
         _fetch_bw_reservations,
+        _fetch_bw_reservations_checked,
         _classify_reservation,
         _extract_str,
         _get_property_name,
@@ -49,7 +62,8 @@ def pri_check():
       - OR there is no upcoming reservation within 60 days of that checkout date
         → vacancy PRI must be created manually by ops
     """
-    _get_breezeway_token, _fetch_bw_reservations, _classify_reservation, _extract_str, _get_property_name = _shared()
+    (_get_breezeway_token, _fetch_bw_reservations, _fetch_bw_reservations_checked,
+     _classify_reservation, _extract_str, _get_property_name) = _shared()
 
     today = date_cls.today()
 
@@ -87,14 +101,34 @@ def pri_check():
     report_end_str     = report_end.isoformat()
     far_end_str        = far_end.isoformat()
 
-    raw_checkouts = _fetch_bw_reservations(token, {
-        "checkout_date_ge": co_fetch_start_str,
-        "checkout_date_le": report_end_str,
-    })
-    raw_upcoming = _fetch_bw_reservations(token, {
-        "checkin_date_ge": reso_lookback_str,
-        "checkin_date_le": far_end_str,
-    })
+    # Serve from the short-lived snapshot cache unless the caller forces a live
+    # re-pull (Refresh button → ?refresh=1). `data_complete` tells the frontend
+    # whether the vacancy ("no upcoming booking") flags can be trusted — those
+    # are the only ones a partial pull can fabricate, so we withhold them below
+    # rather than show a house as vacant when its bookings just didn't load.
+    force_refresh = request.args.get("refresh") == "1"
+    cache_key     = (co_fetch_start_str, report_end_str, reso_lookback_str, far_end_str)
+    now_ts        = time.time()
+    cached        = _reso_cache.get(cache_key)
+
+    if cached and not force_refresh and (now_ts - cached[0]) < _RESO_CACHE_TTL:
+        fetched_at, raw_checkouts, raw_upcoming = cached
+        data_complete = True  # only complete pulls are ever cached
+    else:
+        raw_checkouts, co_complete = _fetch_bw_reservations_checked(token, {
+            "checkout_date_ge": co_fetch_start_str,
+            "checkout_date_le": report_end_str,
+        })
+        raw_upcoming, up_complete = _fetch_bw_reservations_checked(token, {
+            "checkin_date_ge": reso_lookback_str,
+            "checkin_date_le": far_end_str,
+        })
+        data_complete = co_complete and up_complete
+        fetched_at    = now_ts
+        # Never cache a partial pull — a later retry must be able to reach the
+        # full set instead of being pinned to truncated data for 10 minutes.
+        if data_complete:
+            _reso_cache[cache_key] = (fetched_at, raw_checkouts, raw_upcoming)
 
     checkouts = [
         r for r in raw_checkouts
@@ -144,7 +178,12 @@ def pri_check():
         in_window = win_start <= co_date <= win_end
         vacancy_cutoff = co_date + timedelta(days=60)
         if not next_r or not next_ci_date or next_ci_date > vacancy_cutoff:
-            if in_window:
+            # A vacancy is inferred from the ABSENCE of a booking — so it is only
+            # trustworthy when the reservation pull was complete. On a partial
+            # pull we suppress these entirely (the frontend shows a retry notice)
+            # rather than fabricate "no upcoming booking" for a house whose
+            # bookings simply didn't load.
+            if in_window and data_complete:
                 no_booking.append({
                     "property":      prop_name,
                     "checkout_date": co_date_str,
@@ -182,6 +221,15 @@ def pri_check():
         "no_booking":      no_booking,
         "scanned_from":    win_start.isoformat(),
         "scanned_through": report_end_str,
+        # Reliability metadata for the frontend:
+        #   data_complete — False if the reservation pull was truncated; owner-next
+        #                   flags still stand, but vacancy flags are withheld.
+        #   as_of_epoch   — when this snapshot was fetched (for the "as of" label).
+        #   from_cache    — served from the 10-min snapshot cache vs a live pull.
+        "data_complete":   data_complete,
+        "as_of_epoch":     fetched_at,
+        "from_cache":      bool(cached and not force_refresh
+                                and (now_ts - cached[0]) < _RESO_CACHE_TTL),
     })
 
 
@@ -190,7 +238,8 @@ def refresh_pri_banner_alerts(alert_days=3):
     Called daily by the scheduler and on-demand via admin route.
     Preserves dismissed status — only upserts metadata, never clears dismissed_at.
     """
-    _get_breezeway_token, _fetch_bw_reservations, _classify_reservation, _extract_str, _get_property_name = _shared()
+    (_get_breezeway_token, _fetch_bw_reservations, _fetch_bw_reservations_checked,
+     _classify_reservation, _extract_str, _get_property_name) = _shared()
 
     token = _get_breezeway_token()
     if not token:
@@ -206,14 +255,23 @@ def refresh_pri_banner_alerts(alert_days=3):
     today_str      = today.isoformat()
     window_end_str = window_end.isoformat()
 
-    raw_checkouts = _fetch_bw_reservations(token, {
+    raw_checkouts, co_complete = _fetch_bw_reservations_checked(token, {
         "checkout_date_ge": lookback.isoformat(),
         "checkout_date_le": window_end_str,
     })
-    raw_upcoming = _fetch_bw_reservations(token, {
+    raw_upcoming, up_complete = _fetch_bw_reservations_checked(token, {
         "checkin_date_ge": lookback.isoformat(),
         "checkin_date_le": far_end.isoformat(),
     })
+    # If either pull was truncated, do NOT rewrite the banner — a partial set
+    # would drop valid alerts and invent vacancy alerts. Leave the last good
+    # state in place; the next scheduled/manual run retries.
+    if not (co_complete and up_complete):
+        try:
+            print("[pri] banner refresh skipped — reservation pull incomplete")
+        except Exception:
+            pass
+        return
 
     checkouts = [
         r for r in raw_checkouts

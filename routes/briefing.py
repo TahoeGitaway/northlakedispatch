@@ -125,6 +125,56 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
     return all_results
 
 
+def _fetch_bw_reservations_checked(token: str, params: dict,
+                                   retries: int = 2, backoff: float = 1.5) -> tuple:
+    """Like _fetch_bw_reservations, but hardened for callers that must NOT draw
+    conclusions from a half-loaded page set (e.g. the PRI vacancy check, which
+    infers "no upcoming booking" from absence — a truncated fetch fabricates
+    false vacancies).
+
+    Differences:
+      - A page that times out / errors is retried up to `retries` times with a
+        linear backoff before the fetch is abandoned.
+      - Returns (results, complete). `complete` is False iff a page ultimately
+        failed after all retries; in that case `results` holds only the pages
+        fetched so far and the caller should refuse to treat it as the whole set.
+    """
+    all_results = []
+    page, limit = 1, 100
+    while True:
+        page_results = None
+        last_exc = None
+        for attempt in range(retries + 1):
+            try:
+                resp = requests.get(
+                    "https://api.breezeway.io/public/inventory/v1/reservation",
+                    headers={"Authorization": f"JWT {token}"},
+                    params={**params, "limit": limit, "page": page},
+                    timeout=15,
+                )
+                data = resp.json()
+                page_results = (data.get("results", data.get("data", [])) or []) \
+                               if isinstance(data, dict) else (data or [])
+                break  # this page succeeded
+            except Exception as ex:
+                last_exc = ex
+                if attempt < retries:
+                    time.sleep(backoff * (attempt + 1))
+        if page_results is None:
+            # every attempt for this page failed — data is INCOMPLETE, say so
+            try:
+                print(f"[briefing] reservations INCOMPLETE at page {page} "
+                      f"({len(all_results)} rows so far): {last_exc}")
+            except Exception:
+                pass
+            return all_results, False
+        all_results.extend(page_results)
+        if len(page_results) < limit:
+            break
+        page += 1
+    return all_results, True
+
+
 def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     """Generic paginated GET for any Breezeway endpoint.
     Returns (results_list, error_string, http_status).

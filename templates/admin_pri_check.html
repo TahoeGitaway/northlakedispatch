@@ -28,8 +28,9 @@
       </p>
     </div>
     <div class="flex items-center gap-3">
-      <button onclick="reload()"
-              class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1">
+      <button onclick="loadForce()"
+              class="text-sm text-indigo-500 hover:text-indigo-700 font-medium flex items-center gap-1"
+              title="Force a fresh live pull from Breezeway (bypass the 10-min cache)">
         ↺ Refresh
       </button>
       <button id="runNowBtn" onclick="runAlertRefresh()"
@@ -90,14 +91,19 @@
 </div>
 
 <script>
-let _dismissedKeys = new Set();  // loaded from server on each page load
+// ✓ Done is a TEMPORARY, in-memory hide for the current page load only — it is
+// NOT written to the server and is NOT permanent. A full browser reload clears
+// it and every item comes back. (In-page Scan/Refresh keep it so the view stays
+// stable while you work.) It is unrelated to the red nav banner, which has its
+// own ✕ 1-day snooze.
+let _dismissedKeys = new Set();  // in-memory only; reset by a real page reload
 
 function _isoDate(d) { return d.toISOString().slice(0, 10); }
 
 function _vacancyKey(p)   { return `${p.property}::${p.checkout_date}`; }
 function _ownerNextKey(p) { return `${p.property}::${p.checkout_date}::on`; }
 
-async function _dismissCard(key, cardEl, badgeId) {
+function _dismissCard(key, cardEl, badgeId) {
   _dismissedKeys.add(key);
   cardEl.style.transition = "opacity 0.25s";
   cardEl.style.opacity    = "0";
@@ -105,29 +111,20 @@ async function _dismissCard(key, cardEl, badgeId) {
   const badge = document.getElementById(badgeId);
   if (badge) {
     const count = [..._dismissedKeys].filter(k => badgeId.includes("ownerNext") ? k.endsWith("::on") : !k.endsWith("::on")).length;
-    badge.textContent = count + " dismissed";
+    badge.textContent = count + " hidden";
   }
-  await fetch("/admin/pri-dismissal", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ key }),
-  });
+  // No server write — Done is intentionally session-only now.
 }
 
 function dismissVacancy(key, cardEl)   { _dismissCard(key, cardEl, "vacancyDismissedBadge"); }
 function dismissOwnerNext(key, cardEl) { _dismissCard(key, cardEl, "ownerNextDismissedBadge"); }
 
-async function clearAllDismissed() {
-  await fetch("/admin/pri-dismissals/clear", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ type: "vacancy" }),
-  });
+function clearAllDismissed() {
+  [..._dismissedKeys].filter(k => !k.endsWith("::on")).forEach(k => _dismissedKeys.delete(k));
   load();
 }
-async function clearAllOwnerNextDismissed() {
-  await fetch("/admin/pri-dismissals/clear", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ type: "owner_next" }),
-  });
+function clearAllOwnerNextDismissed() {
+  [..._dismissedKeys].filter(k => k.endsWith("::on")).forEach(k => _dismissedKeys.delete(k));
   load();
 }
 
@@ -307,7 +304,9 @@ function greenCard(p) {
   `);
 }
 
-async function load() {
+function loadForce() { load(true); }   // Refresh / Retry → force a live re-pull
+
+async function load(force) {
   document.getElementById("scanPrompt")?.classList.add("hidden");
   document.getElementById("loading").classList.remove("hidden");
   document.getElementById("errorBox").classList.add("hidden");
@@ -320,13 +319,15 @@ async function load() {
     const endV   = document.getElementById("endDate").value;
     if (startV) params.set("start_date", startV);
     if (endV)   params.set("end_date", endV);
+    if (force)  params.set("refresh", "1");   // bypass the 10-min snapshot cache
 
-    const [res, dismissRes, snoozeRes] = await Promise.all([
+    // Note: _dismissedKeys (✓ Done) is deliberately NOT re-fetched — it lives in
+    // memory for this page load only. Only snoozes (💤, 1 wk) are server-backed.
+    const [res, snoozeRes] = await Promise.all([
       fetch(`/briefing/pri-check?${params.toString()}`),
-      fetch("/admin/pri-dismissals"),
       fetch("/admin/pri-snoozes"),
     ]);
-    const [rawBody, dismissRaw, snoozeRaw] = await Promise.all([res.text(), dismissRes.text(), snoozeRes.text()]);
+    const [rawBody, snoozeRaw] = await Promise.all([res.text(), snoozeRes.text()]);
     document.getElementById("loading").classList.add("hidden");
 
     let data;
@@ -344,11 +345,6 @@ async function load() {
       eb.classList.remove("hidden");
       return;
     }
-    // Dismissals are a quick DB read; if they hiccup, just treat as none rather than failing the whole view.
-    let dismissData = {};
-    try { dismissData = JSON.parse(dismissRaw); } catch (_) { dismissData = {}; }
-    _dismissedKeys = new Set(dismissData.keys || []);
-
     let snoozeData = {};
     try { snoozeData = JSON.parse(snoozeRaw); } catch (_) { snoozeData = {}; }
     _snoozedKeys = new Set(snoozeData.keys || []);
@@ -376,15 +372,42 @@ async function load() {
 
     const total = allNeeds.length + done.length + allVacant.length;
 
+    let asOf = "";
+    if (data.as_of_epoch) {
+      const t = new Date(data.as_of_epoch * 1000)
+        .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      asOf = ` · data as of ${t}${data.from_cache ? " (cached)" : ""}`;
+    }
     document.getElementById("subtitle").textContent =
-      `${data.scanned_from || ""} → ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged`;
+      `${data.scanned_from || ""} → ${data.scanned_through || ""} · ${total} propert${total === 1 ? "y" : "ies"} flagged${asOf}`;
 
     const resultsEl = document.getElementById("results");
     resultsEl.innerHTML = "";
 
+    // Partial-data safety notice. Owner-next flags are still trustworthy (they
+    // assert a booking EXISTS); vacancy flags are withheld server-side because a
+    // truncated pull would fabricate "no upcoming booking". Never show a fake
+    // vacancy — offer a live retry instead.
+    if (data.data_complete === false) {
+      const warn = document.createElement("div");
+      warn.style.cssText = "border-radius:10px;padding:12px 15px;margin-bottom:14px;" +
+        "background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:0.8rem;line-height:1.5;";
+      warn.innerHTML =
+        `⚠️ <strong>Breezeway data loaded only partially</strong>, so “no upcoming booking” ` +
+        `flags are hidden to avoid false vacancies. Owner-next flags below are still accurate. ` +
+        `<button onclick="loadForce()" style="margin-left:6px;color:#b45309;font-weight:700;` +
+        `background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:2px 10px;cursor:pointer;">` +
+        `↻ Retry live pull</button>`;
+      resultsEl.appendChild(warn);
+    }
+
     if (!total) {
-      resultsEl.innerHTML = `<div class="text-center text-gray-400 text-sm py-12 italic">
-        No PRIs flagged in this window.</div>`;
+      const empty = document.createElement("div");
+      empty.className = "text-center text-gray-400 text-sm py-12 italic";
+      empty.textContent = data.data_complete === false
+        ? "No owner-next PRIs in this window. (Vacancy check unavailable — see above.)"
+        : "No PRIs flagged in this window.";
+      resultsEl.appendChild(empty);
     } else {
       const s1 = buildSection("🔴 Needs Owner Next tag", "#ef4444", needs, redCard);
       const s2 = buildSection("🟠 No upcoming booking",  "#f97316", vacant, orangeCard, true);
@@ -393,7 +416,7 @@ async function load() {
       if (hiddenOnCt > 0) {
         const note = document.createElement("div");
         note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-top:-2px;margin-bottom:14px;";
-        note.innerHTML = `<span id="ownerNextDismissedBadge">${hiddenOnCt} dismissed</span> ·
+        note.innerHTML = `<span id="ownerNextDismissedBadge">${hiddenOnCt} hidden</span> ·
           <button onclick="clearAllOwnerNextDismissed()"
                   style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
             Show all
@@ -415,7 +438,7 @@ async function load() {
         if (hiddenCt > 0) {
           const note = document.createElement("div");
           note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-top:-2px;margin-bottom:14px;";
-          note.innerHTML = `<span id="vacancyDismissedBadge">${hiddenCt} dismissed</span> ·
+          note.innerHTML = `<span id="vacancyDismissedBadge">${hiddenCt} hidden</span> ·
             <button onclick="clearAllDismissed()"
                     style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
               Show all
@@ -426,7 +449,7 @@ async function load() {
         // All vacancies dismissed — show a note even with no section header
         const note = document.createElement("div");
         note.style.cssText = "font-size:0.72rem;color:#9ca3af;margin-bottom:14px;";
-        note.innerHTML = `${hiddenCt} no-booking flag${hiddenCt === 1 ? "" : "s"} dismissed ·
+        note.innerHTML = `${hiddenCt} no-booking flag${hiddenCt === 1 ? "" : "s"} hidden ·
           <button onclick="clearAllDismissed()"
                   style="color:#6366f1;font-weight:600;background:none;border:none;cursor:pointer;padding:0;">
             Show all
