@@ -28,10 +28,10 @@ function hhmmToMinutes(hhmm) {
 }
 
 function generateTimeOptions(selected) {
-  let html = `<option value="5" ${5===selected?"selected":""}>5 min</option>`;
-  for (let m = 15; m <= 240; m += 15)
-    html += `<option value="${m}" ${m===selected?"selected":""}>${m} min</option>`;
-  return html;
+  // Fine-grained short-stop options (5/15/20/25), then 15-min steps up to 4 hours.
+  const vals = [5, 15, 20, 25];
+  for (let m = 30; m <= 240; m += 15) vals.push(m);
+  return vals.map(m => `<option value="${m}" ${m===selected?"selected":""}>${m} min</option>`).join("");
 }
 
 function makeIcon(color) {
