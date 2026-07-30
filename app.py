@@ -68,6 +68,7 @@ from routes.hot_tub_billing     import hot_tub_billing_bp
 from routes.occupancy_check      import occupancy_bp
 from routes.assignee_monitor      import assignee_monitor_bp
 from routes.bw_comments           import bw_comments_bp
+from routes.bw_probe              import bw_probe_bp   # admin-only Breezeway capability probe
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
@@ -95,6 +96,7 @@ app.register_blueprint(hot_tub_billing_bp)
 app.register_blueprint(occupancy_bp)
 app.register_blueprint(assignee_monitor_bp)
 app.register_blueprint(bw_comments_bp)
+app.register_blueprint(bw_probe_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():
