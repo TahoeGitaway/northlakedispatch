@@ -1178,6 +1178,25 @@ function _markDateFailed(taskId) {
   const mb = row.querySelector('.moved-badge'); if (mb) mb.remove();
 }
 
+// Copy the scan's diagnostics to the clipboard. The upstream error bodies and the
+// rate gate's state are already in the payload; this just makes them reportable
+// without opening devtools.
+async function copyScanDiagnostics(btn) {
+  if (!SCAN || !SCAN.diagnostics) return;
+  const text = JSON.stringify(SCAN.diagnostics, null, 2);
+  const done = (msg) => { const o = btn.textContent; btn.textContent = msg;
+                          setTimeout(() => { btn.textContent = o; }, 1800); };
+  try {
+    await navigator.clipboard.writeText(text);
+    done('Copied ✓');
+  } catch (e) {
+    // Clipboard API needs a secure context and can be blocked outright — fall
+    // back to a selectable prompt so the text is still obtainable.
+    window.prompt('Copy the diagnostics below:', text);
+    done('Copied ✓');
+  }
+}
+
 // ── Shared (used by BOTH tabs) ───────────────────────────────────────
 // The person dropdown + Breezeway load-warnings are the same whichever tab
 // you're on, so they live here and each tab's renderer calls them.
@@ -1185,6 +1204,7 @@ function _renderWarnings() {
   const wb = document.getElementById('warnBox');
   if (!SCAN) { wb.classList.add('hidden'); return; }
   const _rescanBtn = (label) => `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">${label}</button>`;
+  const _copyDiagBtn = () => `<button onclick="copyScanDiagnostics(this)" style="text-decoration:underline;color:#78716c;background:none;border:none;cursor:pointer;padding:0;font-size:11px;">Copy error details</button>`;
   const warnings = [];
   if (SCAN.failed_properties) {
     // bwFailureCause (static/bw-failure.js) names what Breezeway actually returned.
@@ -1198,7 +1218,10 @@ function _renderWarnings() {
     warnings.push(`${headline}, so some tasks may be missing.`
       + (f.retry
           ? ` ` + _rescanBtn('Force a fresh rescan') + `.`
-          : ` Rescanning won't help — this needs a fix in Breezeway or the app's configuration.`));
+          : ` Rescanning won't help — this needs a fix in Breezeway or the app's configuration.`)
+      // Raw upstream errors and rate-gate state, so a report can be pasted to a
+      // developer instead of described. A count is not a bug report.
+      + (SCAN.diagnostics ? ` ` + _copyDiagBtn() : ``));
   }
   // A house with no Breezeway reference id can't be queried — its tasks silently
   // never appear. This is a data-side cause, distinct from a throttled load above.

@@ -59,6 +59,35 @@ def _is_blocked_assignee(name: str) -> bool:
     return any(t in _BLOCKED_ASSIGNEE_NAMES for t in toks)
 
 
+def _diagnostics_blob(date_str: str, scanned: int, failed: int,
+                      failure_statuses: dict, failure_samples: list) -> dict:
+    """One copy-pasteable object with the context a developer actually needs.
+
+    Without this the UI reports a count, and the raw upstream error — which
+    _fetch_bw_endpoint already produces — is discarded by every caller. A user
+    can now paste real detail instead of describing a number."""
+    from datetime import datetime, timezone
+    try:
+        from routes.bw_ratelimit import gate
+        gate_state = gate.snapshot()
+    except Exception as ex:                      # never let diagnostics break a scan
+        gate_state = {"error": f"gate unavailable: {ex}"}
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "scan_date":        date_str,
+        "endpoint":         "/public/inventory/v1/task",
+        "scanned_properties": scanned,
+        "failed_properties":  failed,
+        "failure_statuses":   failure_statuses,
+        # Distinct raw bodies only — N copies of the same 429 help nobody.
+        "raw_error_samples":  failure_samples,
+        # What the app's own limiter was doing at the time. A high gave_up_waiting
+        # means WE shed the requests (598), not Breezeway.
+        "rate_gate":          gate_state,
+        "worker_pool":        {"max_workers": 16, "retries_per_property": 3},
+    }
+
+
 def _candidate_names() -> list:
     """The editable assignment allow-list (display names), alphabetical."""
     from db import get_db, get_cursor
@@ -263,27 +292,29 @@ def _scan_inner():
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
     def _tasks_for_ref(ref_id):
-        """Return (tasks, ok, status). ok=False means we could NOT load this property
-        — so its tasks must NOT be silently treated as 'none'. `status` is the HTTP
-        status of the final failed attempt (None = no response/timeout), kept so the
-        UI can name the actual cause instead of assuming throttling."""
-        status = None
+        """Return (tasks, ok, status, err). ok=False means we could NOT load this
+        property — so its tasks must NOT be silently treated as 'none'. `status` is
+        the HTTP status of the final failed attempt (None = no response/timeout) and
+        `err` is Breezeway's raw response body, both kept so the UI can name the
+        actual cause and hand a developer something copy-pasteable instead of a
+        count."""
+        status, err = None, ""
         for attempt in range(3):
-            r, _, status = _fetch_bw_endpoint(
+            r, err, status = _fetch_bw_endpoint(
                 token, "/public/inventory/v1/task",
                 {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
             if status == 200:
-                return (r or [], True, status)
+                return (r or [], True, status, "")
             # Throttle / transient server error / no response → back off and retry.
             if status is None or status == 429 or status >= 500:
                 time.sleep(0.3 * (attempt + 1))
                 continue
             # Other non-200 (e.g. 400) → try the alternate date param once, else fail.
-            r2, _, st2 = _fetch_bw_endpoint(
+            r2, err2, st2 = _fetch_bw_endpoint(
                 token, "/public/inventory/v1/task",
                 {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
-            return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
-        return ([], False, status)
+            return (r2 or [], True, st2, "") if st2 == 200 else ([], False, st2, err2)
+        return ([], False, status, err)
 
     # Moderate concurrency + the retry/backoff above so the sweep doesn't trip
     # Breezeway rate limits, which would silently drop a property's whole list.
@@ -292,13 +323,28 @@ def _scan_inner():
     # throttling for all of them.
     all_tasks, failed_props = [], 0
     failure_statuses: dict = {}     # "429" | "401" | "timeout" -> count
+    # A handful of RAW Breezeway error bodies, keyed by status, so a user can copy
+    # real detail to a developer instead of "242 properties failed". Capped: 156
+    # identical 429 bodies help nobody, and the payload has to stay small.
+    failure_samples: list = []
+    _seen_sample_keys = set()
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, ok, status in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+        for ref_id, (tasks, ok, status, err) in zip(
+                list(pid_candidates.keys()),
+                ex.map(_tasks_for_ref, list(pid_candidates.keys()))):
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
                 key = "timeout" if status is None else str(status)
                 failure_statuses[key] = failure_statuses.get(key, 0) + 1
+                if key not in _seen_sample_keys and len(failure_samples) < 5:
+                    _seen_sample_keys.add(key)
+                    failure_samples.append({
+                        "reference_property_id": str(ref_id),
+                        "property": _get_property_name(pid_candidates.get(ref_id)),
+                        "status": status,
+                        "raw_error": (err or "")[:500],
+                    })
 
     # Guest/owner/lease arrivals that day → BW property ids (for the CHECK-IN badge),
     # plus a by-type tally of the arrivals THEMSELVES (every check-in reservation that
@@ -437,6 +483,12 @@ def _scan_inner():
         # properties that failed, so the warning can state the cause rather than
         # assume a rate limit.
         "failure_statuses": failure_statuses,
+        # Everything a developer would otherwise have to ask for: raw upstream
+        # error bodies, the rate gate's live state, and enough context to know
+        # WHICH scan produced them. Surfaced as one copy-pasteable blob because
+        # "242 properties failed" is not a bug report.
+        "diagnostics": _diagnostics_blob(date_str, len(pid_candidates), failed_props,
+                                         failure_statuses, failure_samples),
         # Houses with no Breezeway reference_property_id — their tasks can't be
         # fetched and silently won't appear. Surfaced as a warning in the UI.
         "no_ref_id_properties": len(no_ref_id_pids),
