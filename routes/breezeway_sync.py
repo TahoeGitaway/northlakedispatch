@@ -8,6 +8,8 @@ on the route date, and PATCHes their start_time to match the route ETA.
 Never creates tasks. Only updates tasks that already exist.
 """
 
+import time
+
 import requests
 from flask import Blueprint, request, jsonify
 from flask_login import login_required
@@ -89,27 +91,53 @@ def _task_matches_assignee(task: dict, assignee_lower: str) -> bool:
     return False
 
 
-def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> list:
-    """Fetch existing Breezeway tasks for one property on one date."""
-    for params in [
-        {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"},
-        {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str},
-        {"reference_property_id": ref_id, "date": date_str},
-    ]:
-        try:
-            r = requests.get(
-                f"{BW_BASE}/public/inventory/v1/task",
-                headers={"Authorization": f"JWT {token}"},
-                params={**params, "limit": 50},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                results = data.get("results", data.get("data", data if isinstance(data, list) else []))
-                return results or []
-        except Exception:
-            pass
-    return []
+def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> tuple:
+    """Fetch existing Breezeway tasks for one property on one date.
+
+    Returns (tasks, ok, detail). ok=False means the lookup FAILED — which is not
+    the same as a property having no tasks, though this used to return [] for
+    both. The caller reported that as "no tasks found for this property on that
+    date", so a throttled lookup silently skipped the stop and the route's times
+    were never written, with nothing in the UI to say so.
+
+    Retries throttles and transient server errors, and paces through the shared
+    rate gate so this path can't blow the budget the read-side scans depend on."""
+    from routes.bw_ratelimit import gate
+
+    last_detail = "no response"
+    for attempt in range(3):
+        for params in [
+            {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"},
+            {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str},
+            {"reference_property_id": ref_id, "date": date_str},
+        ]:
+            if not gate.acquire():
+                last_detail = "held back by this app's rate limiter"
+                continue
+            try:
+                r = requests.get(
+                    f"{BW_BASE}/public/inventory/v1/task",
+                    headers={"Authorization": f"JWT {token}"},
+                    params={**params, "limit": 50},
+                    timeout=15,
+                )
+                gate.on_response(r.status_code)
+                if r.status_code == 200:
+                    data = r.json()
+                    results = data.get("results", data.get("data", data if isinstance(data, list) else []))
+                    return (results or [], True, "")
+                last_detail = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
+                # A throttle or server error is worth another attempt; a 4xx that
+                # isn't 429 means this param shape is wrong, so try the next one.
+                if r.status_code == 429 or r.status_code >= 500:
+                    break
+            except requests.exceptions.Timeout:
+                last_detail = "timed out after 15 s"
+                break
+            except Exception as ex:
+                last_detail = f"{type(ex).__name__}: {ex}"[:200]
+        time.sleep(0.4 * (attempt + 1))
+    return ([], False, last_detail)
 
 
 def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: str) -> tuple[bool, str]:
@@ -118,11 +146,18 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
     url     = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     dt      = f"{date_str}T{start_time_hhmm}"  # e.g. "2026-05-17T11:29:00"
 
+    from routes.bw_ratelimit import gate
+
     for payload in [
         {"scheduled_time": start_time_hhmm},
     ]:
         try:
+            # Writes share the same rate limit as reads — pace them too, or a sync
+            # can exhaust the budget the scans depend on.
+            if not gate.acquire():
+                return False, "held back by this app's rate limiter — not sent"
             r = requests.patch(url, headers=headers, json=payload, timeout=15)
+            gate.on_response(r.status_code)
             try:
                 body = r.json()
                 got_start  = body.get("scheduled_start") or body.get("start_time") or "?"
@@ -197,7 +232,15 @@ def bw_sync_times():
         ref_id = ref_cache.get(bw_pid) or str(bw_pid)
 
         # Step 2: find existing tasks for this property on this date
-        tasks = _fetch_tasks_for_property(token, ref_id, date_str)
+        tasks, lookup_ok, lookup_detail = _fetch_tasks_for_property(token, ref_id, date_str)
+        if not lookup_ok:
+            # Could NOT read this property's tasks — its time was not written. This
+            # is a failure, not a skip: reporting it as "no tasks found" is what
+            # made a throttled sync look like a successful no-op.
+            results.append({"name": name, "status": "failed", "time": start_time,
+                            "reason": f"couldn't load this property's tasks — {lookup_detail}",
+                            "detail": lookup_detail})
+            continue
         if not tasks:
             results.append({"name": name, "status": "skipped",
                             "reason": "no tasks found for this property on that date"})
@@ -235,8 +278,24 @@ def bw_sync_times():
     updated = sum(1 for r in results if r["status"] == "updated")
     skipped = sum(1 for r in results if r["status"] == "skipped")
     failed  = sum(1 for r in results if r["status"] == "failed")
+    partial = sum(1 for r in results if r["status"] == "partial")
 
+    # Anything that did NOT get its time written, so the UI can be loud about it.
+    # A sync that silently applied nothing is the failure mode being fixed here.
+    not_applied = [
+        {"name": r["name"], "status": r["status"], "reason": r.get("reason") or ""}
+        for r in results if r["status"] in ("failed", "partial")
+    ]
     return jsonify({
         "results": results,
-        "summary": {"updated": updated, "skipped": skipped, "failed": failed},
+        "summary": {"updated": updated, "skipped": skipped,
+                    "failed": failed, "partial": partial},
+        "not_applied": not_applied,
+        "all_applied": not not_applied,
+        "diagnostics": {
+            "date": date_str,
+            "stops_submitted": len(stops),
+            "rate_gate": (lambda: __import__("routes.bw_ratelimit",
+                                             fromlist=["gate"]).gate.snapshot())(),
+        },
     })
