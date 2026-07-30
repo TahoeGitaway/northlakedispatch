@@ -54,7 +54,7 @@ def _interesting_headers(h) -> dict:
             if any(hint in k.lower() for hint in _RATE_HEADER_HINTS)}
 
 
-def _probe_once(token: str, path: str, params: dict) -> dict:
+def _probe_once(token: str, path: str, params: dict, timeout: float = 20.0) -> dict:
     """ONE request, ONE page. Never paginates — this is a capability check, not a
     data pull, and it must not add meaningful load to an already-throttled API."""
     t0 = time.time()
@@ -63,7 +63,7 @@ def _probe_once(token: str, path: str, params: dict) -> dict:
             f"https://api.breezeway.io{path}",
             headers={"Authorization": f"JWT {token}"},
             params={**params, "limit": 100, "page": 1},
-            timeout=20,
+            timeout=timeout,
         )
     except requests.exceptions.Timeout:
         return {"status": None, "error": "timed out after 20 s", "elapsed_s": round(time.time() - t0, 2)}
@@ -106,6 +106,32 @@ def _probe_once(token: str, path: str, params: dict) -> dict:
     return out
 
 
+def _wait_for_clear(token: str, day: str, budget_s: float = 10.0) -> dict:
+    """Breezeway exposes NO rate-limit headers, so the only way to learn how long
+    the limiter stays hot is to measure it. Poll one cheap request until it stops
+    returning 429, and report how long that took.
+
+    Budget is deliberately small: this app already loses long requests to a gateway
+    timeout ("upstream error"), so the whole pre-flight — wait plus the final
+    request — must stay well inside it. A 429 comes back fast, so a short per-call
+    timeout costs nothing here."""
+    t0, waited, tries = time.time(), [], 0
+    while time.time() - t0 < budget_s:
+        tries += 1
+        res = _probe_once(token, _CANDIDATE_PATHS[0], {"scheduled_date": f"{day},{day}"},
+                          timeout=6.0)
+        if res.get("status") != 429:
+            return {"cleared": True, "seconds_until_clear": round(time.time() - t0, 1),
+                    "polls": tries, "first_ok_result": res}
+        nap = min(4.0, 1.5 * tries)          # gentle ramp; never hammer a hot limiter
+        waited.append(nap)
+        time.sleep(nap)
+    return {"cleared": False, "waited_s": round(time.time() - t0, 1), "polls": tries,
+            "note": "Still 429 after the wait budget — the limiter stays hot for "
+                    "longer than this request can safely block. Retry when the app "
+                    "has been idle for a few minutes."}
+
+
 @bw_probe_bp.route("/admin/bw-probe")
 @login_required
 @admin_required
@@ -114,7 +140,7 @@ def bw_probe():
 
     GET /admin/bw-probe?date=YYYY-MM-DD   (defaults to today)
     Returns JSON. Read-only; makes at most len(paths) * len(param_sets) requests,
-    one page each.
+    one page each, plus a short pre-flight wait if the limiter is currently hot.
     """
     from routes.briefing import _get_breezeway_token
     from datetime import date as _date
@@ -124,6 +150,21 @@ def bw_probe():
         return jsonify({"error": "Breezeway is not configured (no token)."}), 502
 
     day = (request.args.get("date") or _date.today().isoformat())[:10]
+
+    # Pre-flight: a probe run started while throttled reports a false "unsupported",
+    # so wait for a clear window first — and record how long that took, since with
+    # no rate-limit headers that recovery time is the only signal we have.
+    preflight = _wait_for_clear(token, day)
+    if not preflight.get("cleared"):
+        return jsonify({
+            "date": day,
+            "verdict": {"supported": None,
+                        "reason": "Breezeway stayed rate-limited for the whole pre-flight "
+                                  "wait, so the capability question is still unanswered."},
+            "preflight": preflight,
+            "rate_limit_headers_seen": {},
+            "attempts": [],
+        })
 
     attempts = []
     verdict  = None
@@ -167,6 +208,9 @@ def bw_probe():
     return jsonify({
         "date": day,
         "verdict": verdict,
+        "preflight": preflight,
+        # Empty here is itself a finding: Breezeway advertises no budget, so any
+        # pacing has to be derived by measurement rather than read off a header.
         "rate_limit_headers_seen": seen_headers,
         "attempts": attempts,
     })
