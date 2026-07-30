@@ -214,3 +214,103 @@ def bw_probe():
         "rate_limit_headers_seen": seen_headers,
         "attempts": attempts,
     })
+
+
+# ── Batching probe ────────────────────────────────────────────────
+# The capability probe showed reference_property_id is mandatory, so a
+# company-wide query is out. But it also showed scheduled_date must be a
+# COMMA-SEPARATED PAIR ("Length must be 2"), i.e. this API does use delimited
+# multi-value params. If reference_property_id accepts a list too, 442 calls
+# become ~9 at 50 ids each — which solves the rate limiting outright rather
+# than pacing around it. That is worth ruling in or out before building a
+# throttle.
+
+def _batch_shapes(ref_ids: list, day: str) -> list:
+    """Ways an API might accept several property ids in one call. requests encodes
+    a list value as repeated ?k=v1&k=v2, which is the other common convention."""
+    csv_ids = ",".join(ref_ids)
+    return [
+        {"label": "reference_property_id=a,b,c (comma)",   "params": {"reference_property_id": csv_ids}},
+        {"label": "reference_property_id repeated",        "params": {"reference_property_id": ref_ids}},
+        {"label": "reference_property_ids=a,b,c (plural)", "params": {"reference_property_ids": csv_ids}},
+        {"label": "property_id=a,b,c",                     "params": {"property_id": csv_ids}},
+        {"label": "home_id=a,b,c",                         "params": {"home_id": csv_ids}},
+    ]
+
+
+@bw_probe_bp.route("/admin/bw-probe-batch")
+@login_required
+@admin_required
+def bw_probe_batch():
+    """Can one call cover several properties?
+
+    GET /admin/bw-probe-batch?date=YYYY-MM-DD&n=5
+    Read-only. Sends at most len(shapes) + 1 requests, one page each.
+    """
+    from routes.briefing import (_get_breezeway_token, _ensure_property_cache,
+                                 _get_live_ref_cache)
+    from datetime import date as _date
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"error": "Breezeway is not configured (no token)."}), 502
+
+    day = (request.args.get("date") or _date.today().isoformat())[:10]
+    try:
+        n = max(2, min(20, int(request.args.get("n") or 5)))
+    except (TypeError, ValueError):
+        n = 5
+
+    _ensure_property_cache()
+    ref_ids = [r for r in (_get_live_ref_cache() or {}).values() if r][:n]
+    if len(ref_ids) < 2:
+        return jsonify({"error": "Need at least 2 reference property ids in the cache."}), 502
+
+    date_params = {"scheduled_date": f"{day},{day}"}
+
+    # Baseline: ONE property, so we can tell "batching worked" from "the filter was
+    # ignored and it returned everything" — both look like a big number otherwise.
+    base = _probe_once(token, _CANDIDATE_PATHS[0],
+                       {**date_params, "reference_property_id": ref_ids[0]}, timeout=15.0)
+
+    results, winner = [], None
+    for shape in _batch_shapes(ref_ids, day):
+        res = _probe_once(token, _CANDIDATE_PATHS[0], {**date_params, **shape["params"]},
+                          timeout=15.0)
+        entry = {"shape": shape["label"], **res}
+        # Success = accepted AND covering more than the one baseline property.
+        # A 200 alone proves nothing: an ignored filter also returns 200.
+        if res.get("status") == 200 and (res.get("distinct_properties") or 0) > 1:
+            entry["verdict"] = "ACCEPTED — covers multiple properties"
+            winner = winner or {"shape": shape["label"], "params_form": shape["label"],
+                                "distinct_properties": res.get("distinct_properties"),
+                                "rows_first_page": res.get("rows_first_page"),
+                                "ids_sent": len(ref_ids)}
+        elif res.get("status") == 200:
+            entry["verdict"] = ("200 but only one property — the extra ids were likely "
+                                "ignored rather than honoured")
+        elif res.get("status") == 429:
+            entry["verdict"] = "429 — rate limited, inconclusive for this shape"
+        else:
+            entry["verdict"] = "rejected"
+        results.append(entry)
+        if winner:
+            break
+
+    return jsonify({
+        "date": day,
+        "ids_tested": len(ref_ids),
+        "baseline_single_property": {
+            "status": base.get("status"),
+            "rows_first_page": base.get("rows_first_page"),
+            "distinct_properties": base.get("distinct_properties"),
+        },
+        "verdict": (
+            {"batching_supported": True, **winner} if winner else
+            {"batching_supported": False,
+             "reason": "No tested shape returned tasks for more than one property. "
+                       "Note this covers the common conventions, not every possible "
+                       "one — Breezeway support could still confirm a documented form."}
+        ),
+        "attempts": results,
+    })
