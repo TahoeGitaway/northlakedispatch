@@ -58,6 +58,26 @@ _property_cache_ts:   float = 0
 # ── Breezeway auth ────────────────────────────────────────────────
 
 _bw_token_last_error: str = ""   # why the last token fetch failed, for the UI
+_bw_auth_retry_at: float = 0.0   # epoch; don't call auth again before this
+
+
+def _parse_retry_after(payload: dict) -> float:
+    """Breezeway's auth 429 carries the reset time in the BODY, not a header:
+        {"details": {"retry_after": "2026-07-30T21:41:58"}}
+    Return it as an epoch, or 0 if absent/unparseable. Naive timestamps are read
+    as UTC, which matches the observed values."""
+    try:
+        raw = ((payload or {}).get("details") or {}).get("retry_after")
+        if not raw:
+            return 0.0
+        from datetime import datetime as _dt, timezone as _tz
+        ts = _dt.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        # Clamp: a malformed far-future value must not lock the app out for hours.
+        return min(ts.timestamp(), time.time() + 3600)
+    except Exception:
+        return 0.0
 
 
 def _get_bw_token_last_error() -> str:
@@ -70,7 +90,7 @@ def _get_bw_token_last_error() -> str:
 
 def _get_breezeway_token() -> str | None:
     """Return a valid Breezeway JWT, fetching a new one only when stale."""
-    global _bw_token_last_error
+    global _bw_token_last_error, _bw_auth_retry_at
     if not BREEZEWAY_CLIENT_ID or not BREEZEWAY_CLIENT_SECRET:
         _bw_token_last_error = ("BREEZEWAY_CLIENT_ID / BREEZEWAY_CLIENT_SECRET are "
                                 "not set on the server")
@@ -78,6 +98,17 @@ def _get_breezeway_token() -> str | None:
     now = time.time()
     if _bw_token["value"] and now < _bw_token["expires_at"] - 60:
         return _bw_token["value"]
+    # Auth is rate-limited SEPARATELY from the data endpoints, and a failure leaves
+    # no cached token — so every later request retried auth, each one earning another
+    # 429 and pushing the reset further out. That is self-sustaining: it does not
+    # recover no matter how long you wait. Honour the reset time Breezeway gives us
+    # and simply don't call until then.
+    if now < _bw_auth_retry_at:
+        wait = int(_bw_auth_retry_at - now)
+        _bw_token_last_error = (f"auth is rate-limited; Breezeway asked us to wait "
+                                f"until {time.strftime('%H:%M:%S', time.localtime(_bw_auth_retry_at))} "
+                                f"({wait}s away). Not retrying before then.")
+        return None
     try:
         resp = requests.post(
             "https://api.breezeway.io/public/auth/v1/",
@@ -102,6 +133,16 @@ def _get_breezeway_token() -> str | None:
             body = str(data) if data else (resp.text or "")[:300]
         except Exception:
             pass
+        if resp.status_code == 429:
+            # The reset time lives in the body. Respect it: retrying sooner is what
+            # kept the limit permanently exhausted.
+            retry_at = _parse_retry_after(data)
+            _bw_auth_retry_at = retry_at or (time.time() + 60)
+            _bw_token_last_error = (
+                f"auth rate-limited (HTTP 429). Breezeway asks us to wait until "
+                f"{time.strftime('%H:%M:%S', time.localtime(_bw_auth_retry_at))}. "
+                f"Raw: {body}")[:400]
+            return None
         _bw_token_last_error = f"auth returned HTTP {resp.status_code}: {body}"[:400]
         return None
     except requests.exceptions.Timeout:
