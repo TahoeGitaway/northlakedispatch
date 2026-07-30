@@ -767,7 +767,21 @@ async function runBwImport() {
       return;
     }
 
-    if (data.error)   { _bwImportMsg(data.error,   "red");  return; }
+    // A server-reported error is still a failure worth reporting — route it through
+    // the same path so it gets a Copy button. This is the COMMON case (auth
+    // failures, misconfiguration) and it was the one left without any detail.
+    if (data.error) {
+      _bwImportFail({
+        ..._reqCtx(),
+        failure:            "server returned an error",
+        http_status:        res.status,
+        server_error:       data.error,
+        failure_statuses:   data.failure_statuses || null,
+        failed_properties:  (data.failed_properties ?? null),
+        server_diagnostics: data.diagnostics || null,
+      }, data.error);
+      return;
+    }
     if (data.message) { _bwImportMsg(data.message, "gray"); return; }
 
     {  // single employee

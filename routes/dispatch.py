@@ -1327,7 +1327,16 @@ def bw_import():
 
     token = _get_breezeway_token()
     if not token:
-        return jsonify({"error": "Could not authenticate with Breezeway"}), 503
+        # Say WHY. "Could not authenticate" alone can't distinguish missing
+        # credentials from a rejected secret from the auth endpoint being
+        # rate-limited, and those need completely different responses.
+        from routes.briefing import _get_bw_token_last_error
+        why = _get_bw_token_last_error()
+        return jsonify({
+            "error": "Could not authenticate with Breezeway"
+                     + (f" — {why}" if why else ""),
+            "diagnostics": {"stage": "breezeway_auth", "reason": why or "unknown"},
+        }), 503
 
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()

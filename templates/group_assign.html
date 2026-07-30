@@ -757,7 +757,7 @@ function saveViewFromEditor(id) {
   renderScan();
 }
 
-async function runScan(force) {
+async function runScan(force, retryFailed) {
   const date = document.getElementById('theDate').value;
   SCAN = null;
   document.getElementById('loading').classList.remove('hidden');
@@ -770,7 +770,7 @@ async function runScan(force) {
   try {
     const resp = await fetch('/admin/group-assign/scan', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ date, force: !!force }),
+      body: JSON.stringify({ date, force: !!force, retry_failed: !!retryFailed }),
     });
     const raw = await resp.text();
     let data;
@@ -1204,6 +1204,9 @@ function _renderWarnings() {
   const wb = document.getElementById('warnBox');
   if (!SCAN) { wb.classList.add('hidden'); return; }
   const _rescanBtn = (label) => `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">${label}</button>`;
+  // Retries ONLY the houses that failed, not all 442 — a full re-sweep is what
+  // provokes the throttling in the first place.
+  const _retryBtn = (n) => `<button onclick="runScan(false, true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">Try the missing ${n} again</button>`;
   const _copyDiagBtn = () => `<button onclick="copyScanDiagnostics(this)" style="text-decoration:underline;color:#78716c;background:none;border:none;cursor:pointer;padding:0;font-size:11px;">Copy error details</button>`;
   const warnings = [];
   if (SCAN.failed_properties) {
@@ -1217,11 +1220,14 @@ function _renderWarnings() {
       (_m, n) => `⚠ <b>${n}</b> of ${SCAN.scanned_properties} properties`);
     warnings.push(`${headline}, so some tasks may be missing.`
       + (f.retry
-          ? ` ` + _rescanBtn('Force a fresh rescan') + `.`
-          : ` Rescanning won't help — this needs a fix in Breezeway or the app's configuration.`)
+          // Retrying just the gaps is both faster and far likelier to work than a
+          // full re-sweep, so lead with it and keep the blunt option as a fallback.
+          ? ` ` + _retryBtn(SCAN.failed_properties) + ` &nbsp;·&nbsp; `
+                + _rescanBtn('Or reload everything')
+          : ` Retrying won't help — this needs a fix in Breezeway or the app's settings.`)
       // Raw upstream errors and rate-gate state, so a report can be pasted to a
       // developer instead of described. A count is not a bug report.
-      + (SCAN.diagnostics ? ` ` + _copyDiagBtn() : ``));
+      + (SCAN.diagnostics ? ` &nbsp;·&nbsp; ` + _copyDiagBtn() : ``));
   }
   // A house with no Breezeway reference id can't be queried — its tasks silently
   // never appear. This is a data-side cause, distinct from a throttled load above.

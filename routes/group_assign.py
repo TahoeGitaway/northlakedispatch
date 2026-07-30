@@ -48,6 +48,8 @@ _SCAN_TTL            = 180   # 3 min for a COMPLETE sweep. Each miss costs ~442
                              # Mutations clear the cache explicitly and Force
                              # refresh bypasses it, so this never hides a user's
                              # own change.
+_scan_partial: dict  = {}    # date_str -> (ts, tasks_collected, refs_that_failed)
+_PARTIAL_RETRY_WINDOW = 900  # 15 min; after that a retry just re-sweeps everything
 _PARTIAL_SCAN_TTL    = 15    # A sweep that lost properties to throttling must NOT
                              # be pinned: "Scan again" would replay the same gaps
                              # for the whole window instead of retrying them. Short
@@ -273,6 +275,10 @@ def _scan_inner():
     payload  = request.get_json(silent=True) or {}
     date_str = (payload.get("date") or date.today().isoformat())[:10]
     force    = bool(payload.get("force"))
+    # "Retry the ones that failed" — refetch only the gaps, not all 442 houses.
+    retry_failed = bool(payload.get("retry_failed"))
+    if retry_failed:
+        force = True          # never serve the gappy cached copy back to a retry
 
     # Serve a fresh cached result instantly (also rescues a prior proxy timeout) —
     # UNLESS the caller forced a fresh sweep (e.g. tasks were still loading in BW).
@@ -336,8 +342,23 @@ def _scan_inner():
     # Tally the failure statuses: a 401 (bad credentials), a 429 (genuine throttle)
     # and a timeout are very different problems, and the banner used to blame
     # throttling for all of them.
-    all_tasks, failed_props = [], 0
+    # Retry-only-the-gaps. A full re-sweep spends 442 calls to recover a handful of
+    # properties, and those 389 extra requests are themselves what provokes the
+    # throttling being retried. When the caller asks to fill gaps, re-fetch ONLY the
+    # refs that failed last time and reuse the tasks already collected.
+    prior_tasks, retry_keys = [], None
+    if retry_failed:
+        part = _scan_partial.get(date_str)
+        if part and time.time() - part[0] < _PARTIAL_RETRY_WINDOW:
+            prior_tasks = part[1]
+            # Ignore stale refs — the property list can change between attempts.
+            retry_keys = [k for k in part[2] if k in pid_candidates]
+
+    scan_keys = retry_keys if retry_keys else list(pid_candidates.keys())
+
+    all_tasks, failed_props = list(prior_tasks), 0
     failure_statuses: dict = {}     # "429" | "401" | "timeout" -> count
+    failed_refs: list = []          # refs to retry next time
     # A handful of RAW Breezeway error bodies, keyed by status, so a user can copy
     # real detail to a developer instead of "242 properties failed". Capped: 156
     # identical 429 bodies help nobody, and the payload has to stay small.
@@ -345,11 +366,11 @@ def _scan_inner():
     _seen_sample_keys = set()
     with ThreadPoolExecutor(max_workers=16) as ex:
         for ref_id, (tasks, ok, status, err) in zip(
-                list(pid_candidates.keys()),
-                ex.map(_tasks_for_ref, list(pid_candidates.keys()))):
+                scan_keys, ex.map(_tasks_for_ref, scan_keys)):
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
+                failed_refs.append(ref_id)
                 key = "timeout" if status is None else str(status)
                 failure_statuses[key] = failure_statuses.get(key, 0) + 1
                 if key not in _seen_sample_keys and len(failure_samples) < 5:
@@ -517,6 +538,12 @@ def _scan_inner():
     # same missing properties for the whole window rather than retrying them.
     _scan_cache[date_str] = (time.time(), result,
                              _SCAN_TTL if not failed_props else _PARTIAL_SCAN_TTL)
+    # Keep what we managed to collect plus the refs that failed, so "retry the ones
+    # that failed" can fetch just those instead of sweeping all 442 again.
+    if failed_props:
+        _scan_partial[date_str] = (time.time(), all_tasks, failed_refs)
+    else:
+        _scan_partial.pop(date_str, None)
     return jsonify(result)
 
 

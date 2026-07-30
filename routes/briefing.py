@@ -57,9 +57,23 @@ _property_cache_ts:   float = 0
 
 # ── Breezeway auth ────────────────────────────────────────────────
 
+_bw_token_last_error: str = ""   # why the last token fetch failed, for the UI
+
+
+def _get_bw_token_last_error() -> str:
+    """Why the most recent token fetch failed. Every failure used to collapse to
+    None and surface as "Could not authenticate with Breezeway", which hides the
+    difference between missing credentials, a rejected secret, a timeout, and the
+    auth endpoint itself being rate-limited."""
+    return _bw_token_last_error
+
+
 def _get_breezeway_token() -> str | None:
     """Return a valid Breezeway JWT, fetching a new one only when stale."""
+    global _bw_token_last_error
     if not BREEZEWAY_CLIENT_ID or not BREEZEWAY_CLIENT_SECRET:
+        _bw_token_last_error = ("BREEZEWAY_CLIENT_ID / BREEZEWAY_CLIENT_SECRET are "
+                                "not set on the server")
         return None
     now = time.time()
     if _bw_token["value"] and now < _bw_token["expires_at"] - 60:
@@ -70,13 +84,31 @@ def _get_breezeway_token() -> str | None:
             json={"client_id": BREEZEWAY_CLIENT_ID, "client_secret": BREEZEWAY_CLIENT_SECRET},
             timeout=10,
         )
-        data  = resp.json()
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
         token = data.get("access_token")
         if token:
             _bw_token["value"]      = token
             _bw_token["expires_at"] = now + 23 * 3600
-        return token
-    except Exception:
+            _bw_token_last_error    = ""
+            return token
+        # 200 without a token, or any non-200 — keep the status and body. A 429
+        # here means the AUTH endpoint is throttled, which is a very different
+        # problem from a bad secret and used to look identical.
+        body = ""
+        try:
+            body = str(data) if data else (resp.text or "")[:300]
+        except Exception:
+            pass
+        _bw_token_last_error = f"auth returned HTTP {resp.status_code}: {body}"[:400]
+        return None
+    except requests.exceptions.Timeout:
+        _bw_token_last_error = "auth request timed out after 10 s"
+        return None
+    except Exception as ex:
+        _bw_token_last_error = f"{type(ex).__name__}: {ex}"[:400]
         return None
 
 
