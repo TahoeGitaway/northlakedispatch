@@ -1380,7 +1380,8 @@ def bw_import():
     # rather than presenting partial data as complete.
     _cached = _bw_day_cache.get(date_str)
     _cached_ttl = _BW_DAY_TTL if (_cached and not _cached[2]) else _BW_DAY_PARTIAL_TTL
-    if _cached and time.time() - _cached[0] < _cached_ttl:
+    # NB: this module imports time as _dt_time — there is no bare `time` name here.
+    if _cached and _dt_time.time() - _cached[0] < _cached_ttl:
         all_results, failed_props, failure_statuses = _cached[1], _cached[2], dict(_cached[3])
     else:
         all_results, failed_props = [], 0
@@ -1394,7 +1395,7 @@ def bw_import():
                     failed_props += 1
                     k = _failure_key(status)
                     failure_statuses[k] = failure_statuses.get(k, 0) + 1
-        _bw_day_cache[date_str] = (time.time(), all_results, failed_props,
+        _bw_day_cache[date_str] = (_dt_time.time(), all_results, failed_props,
                                    dict(failure_statuses))
 
     if not all_results:

@@ -102,6 +102,50 @@ app.register_blueprint(bw_probe_bp)
 with app.app_context():
     init_db()
 
+
+# ── Unhandled errors on JSON endpoints ────────────────────────────
+@app.errorhandler(Exception)
+def _json_errors(e):
+    """An unhandled exception on an API route returned Flask's HTML error page.
+    The browser then failed to parse it as JSON, so the actual fault — the
+    exception type, message and location — was lost, and the user could only
+    report "500 Internal Server Error".
+
+    Return the detail as JSON for API routes so it lands in the Copy-error blob.
+    HTML pages keep Flask's normal error page.
+    """
+    from werkzeug.exceptions import HTTPException
+    from flask import request as _rq, jsonify as _js
+    import traceback
+
+    # Real HTTP errors (404, 403, …) already carry a sensible status/body.
+    if isinstance(e, HTTPException):
+        return e
+
+    app.logger.exception("Unhandled error on %s", _rq.path)
+
+    wants_json = (_rq.path.startswith("/api/")
+                  or "application/json" in (_rq.headers.get("Accept") or "")
+                  or _rq.is_json)
+    if not wants_json:
+        raise e
+
+    tb = traceback.extract_tb(e.__traceback__)
+    where = ""
+    if tb:
+        last = tb[-1]
+        where = f"{last.filename.split('/')[-1]}:{last.lineno} in {last.name}"
+    return _js({
+        "error": f"Server error: {type(e).__name__}: {e}",
+        "diagnostics": {
+            "stage": "unhandled_exception",
+            "exception": type(e).__name__,
+            "message": str(e)[:500],
+            "where": where,
+            "endpoint": _rq.path,
+        },
+    }), 500
+
 # ── Template context ──────────────────────────────────────────────
 @app.context_processor
 def inject_globals():
