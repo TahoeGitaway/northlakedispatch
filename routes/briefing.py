@@ -47,7 +47,10 @@ CALENDAR_CACHE_TTL = 30 * 60   # 30 minutes for calendar activity
 _briefing_cache:      dict  = {}   # {cache_key: (timestamp, payload)}
 _calendar_cache:      dict  = {}   # {(year, month): (timestamp, activity_dict)}
 _day_summary_cache:   dict  = {}   # {date_str: (timestamp, payload)}
-_owner_cleaned_cache: dict  = {}   # {date_str: (timestamp, payload)} — owner-cleaned arrival flags
+_owner_cleaned_cache: dict  = {}   # {date_str: (ts, payload, ttl)} — owner-cleaned arrival flags
+_OWNER_CLEAN_TTL         = 600     # complete scan
+_OWNER_CLEAN_PARTIAL_TTL = 45      # incomplete scan: absorbs clicking between days
+                                   # without pinning missing flags for long
 _prop_status_cache:   dict  = {}   # {property_id: (timestamp, payload)}
 _PROP_STATUS_TTL            = 20 * 60   # 20 minutes per property
 _bw_token:            dict  = {"value": None, "expires_at": 0}
@@ -1250,9 +1253,13 @@ def owner_cleaned_check():
     debug    = request.args.get("debug") == "1"
     force    = request.args.get("refresh") == "1" or debug
 
+    # Entries carry their own TTL — a complete scan is worth holding for 10 minutes,
+    # an incomplete one only briefly (see the write site below).
     cached = _owner_cleaned_cache.get(date_str)
-    if cached and not force and (time.time() - cached[0]) < 600:
-        return jsonify({**cached[1], "cached_at": _fmt_pacific(cached[0])})
+    if cached and not force:
+        _ttl = cached[2] if len(cached) > 2 else _OWNER_CLEAN_TTL
+        if (time.time() - cached[0]) < _ttl:
+            return jsonify({**cached[1], "cached_at": _fmt_pacific(cached[0])})
 
     try:
         arrival_date = date_cls.fromisoformat(date_str)
@@ -1279,8 +1286,9 @@ def owner_cleaned_check():
             arriving[pid] = _get_property_name(pid)
 
     if not arriving:
+        # No arrivals is a complete answer, not a partial one — full TTL.
         payload = {"date": date_str, "flagged": [], "scanned": 0, "failed_properties": 0}
-        _owner_cleaned_cache[date_str] = (time.time(), payload)
+        _owner_cleaned_cache[date_str] = (time.time(), payload, _OWNER_CLEAN_TTL)
         return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
 
     ref_cache = _get_live_ref_cache()
@@ -1320,11 +1328,18 @@ def owner_cleaned_check():
     }
     if debug:
         payload["debug_suppressed"] = debug_details
-    # Only cache a clean scan — a run with failed properties may be missing flags,
-    # so let the next load retry rather than serving an incomplete result for 10 min.
+    # A clean scan is worth holding for 10 minutes. An incomplete one used to be
+    # discarded entirely — correct in spirit (don't pin missing flags) but it meant
+    # that while Breezeway is throttling, when this scan ALWAYS has failures, every
+    # day-click re-ran the full ~47-call fan-out. Clicking through five days cost
+    # ~250 requests against the budget that was causing the failures.
+    # Hold a partial result just long enough to absorb clicking around, not long
+    # enough to hide a gap from someone who comes back to check.
     # Never cache a debug run (it forces fresh and carries extra payload).
-    if not failed and not debug:
-        _owner_cleaned_cache[date_str] = (time.time(), payload)
+    if not debug:
+        _owner_cleaned_cache[date_str] = (
+            time.time(), payload,
+            _OWNER_CLEAN_TTL if not failed else _OWNER_CLEAN_PARTIAL_TTL)
     return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
 
 
