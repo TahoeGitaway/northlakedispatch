@@ -260,6 +260,11 @@ def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None)
         if status == 403:
             return [], ("Task data requires elevated API access on your Breezeway plan. "
                         "Contact Breezeway support to request task API access.")
+        if status == 429:
+            # Being throttled says nothing about which PATH is right, so walking the
+            # remaining candidates cannot help — it just spends more of a budget we
+            # have already exhausted. Stop and report the throttle honestly.
+            return [], (err or "HTTP 429: rate limited by Breezeway")
         if status and status not in (200, 422):
             last_err = err or f"HTTP {status}"
             continue
