@@ -4,6 +4,9 @@
                durationMatrix, startLocation (globals)
 ================================================================ */
 
+/* bwFailureCause() / bwFailureCauseShort() come from static/bw-failure.js,
+   loaded globally in base.html so every page words these warnings identically. */
+
 /* ── MAIN SEARCH BOX ── */
 const searchBox   = document.getElementById("searchBox");
 const suggestions = document.getElementById("suggestions");
@@ -760,7 +763,10 @@ async function runBwImport() {
         color = added > 0 ? "amber" : "red";
       }
       if (data.failed_properties) {
-        msg  += ` ⚠ ${data.failed_properties} propert${data.failed_properties === 1 ? "y" : "ies"} couldn't be loaded from Breezeway — re-import to retry so no tasks are missed.`;
+        const f = bwFailureCause(data);
+        msg  += ` ${f.text}${f.retry
+                  ? ` — re-import to retry so no tasks are missed.`
+                  : ` — re-importing won't help; this needs a fix in Breezeway or the app's configuration.`}`;
         color = "amber";
       }
       _bwImportMsg(msg, color);
@@ -1457,8 +1463,12 @@ function _renderChangesHtml(d) {
   // Loud, non-silent warning when Breezeway dropped some houses — the comparison
   // (and the auto-loaded task titles) are then incomplete, so don't trust "no changes".
   if (d.failed_properties) {
+    const f = bwFailureCause(d);
     h += `<div class="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-snug">`
-       + `⚠ ${d.failed_properties} propert${d.failed_properties === 1 ? "y" : "ies"} couldn't be loaded from Breezeway — some tasks may be missing. Click ↻ Recheck to retry.`
+       + `${f.text} — some tasks may be missing.`
+       + (f.retry
+            ? ` Click ↻ Recheck to retry.`
+            : ` Rechecking won't help; this needs a fix in Breezeway or the app's configuration.`)
        + `</div>`;
   }
 

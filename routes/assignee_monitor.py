@@ -121,21 +121,22 @@ def _dept_of(task: dict) -> str:
 
 def _sweep_tasks(token, date_str: str):
     """Fetch every active property's tasks for the date. Returns (all_tasks, failed,
-    scanned). Mirrors the batcher's retry/backoff so a throttled property is reported,
-    never silently dropped."""
+    scanned, failure_statuses). Mirrors the batcher's retry/backoff so a throttled
+    property is reported, never silently dropped. failure_statuses tallies WHY the
+    failures happened ({"429": 240, "timeout": 2}) so the UI can name the cause
+    rather than assume a rate limit."""
     from routes.briefing import (_fetch_bw_endpoint, _ensure_property_cache,
                                  _get_live_property_cache, _get_live_ref_cache)
 
     cached = _sweep_cache.get(date_str)
     if cached and time.time() - cached[0] < _SWEEP_TTL:
-        all_tasks, failed, scanned = cached[1]
-        return all_tasks, failed, scanned
+        return cached[1]
 
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
     ref_cache  = _get_live_ref_cache()
     if not prop_cache:
-        return None, 0, 0  # signal: cache empty
+        return None, 0, 0, {}  # signal: cache empty
 
     pid_candidates = {}
     for bw_pid in prop_cache:
@@ -143,31 +144,37 @@ def _sweep_tasks(token, date_str: str):
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
     def _tasks_for_ref(ref_id):
+        """Return (tasks, ok, status); status is the HTTP status of the final
+        failed attempt (None = no response/timeout)."""
+        status = None
         for attempt in range(3):
             r, _, status = _fetch_bw_endpoint(
                 token, "/public/inventory/v1/task",
                 {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
             if status == 200:
-                return (r or [], True)
+                return (r or [], True, status)
             if status is None or status == 429 or status >= 500:
                 time.sleep(0.3 * (attempt + 1))
                 continue
             r2, _, st2 = _fetch_bw_endpoint(
                 token, "/public/inventory/v1/task",
                 {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
-            return (r2 or [], True) if st2 == 200 else ([], False)
-        return ([], False)
+            return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
+        return ([], False, status)
 
     all_tasks, failed = [], 0
+    failure_statuses: dict = {}
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, ok in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+        for tasks, ok, status in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
             all_tasks.extend(tasks)
             if not ok:
                 failed += 1
+                k = "timeout" if status is None else str(status)
+                failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
     scanned = len(pid_candidates)
-    _sweep_cache[date_str] = (time.time(), (all_tasks, failed, scanned))
-    return all_tasks, failed, scanned
+    _sweep_cache[date_str] = (time.time(), (all_tasks, failed, scanned, failure_statuses))
+    return all_tasks, failed, scanned, failure_statuses
 
 
 @assignee_monitor_bp.route("/admin/assignee-monitor")
@@ -191,7 +198,7 @@ def assignee_monitor_scan():
     payload  = request.get_json(silent=True) or {}
     date_str = (payload.get("date") or date.today().isoformat())[:10]
 
-    all_tasks, failed, scanned = _sweep_tasks(token, date_str)
+    all_tasks, failed, scanned, failure_statuses = _sweep_tasks(token, date_str)
     if all_tasks is None:
         return jsonify({"error": "Breezeway property cache is empty — try again in a moment."}), 502
 
@@ -260,6 +267,7 @@ def assignee_monitor_scan():
         "known_count":    len(ignored_ids),
         "failed_properties":  failed,
         "scanned_properties": scanned,
+        "failure_statuses":   failure_statuses,
     })
 
 

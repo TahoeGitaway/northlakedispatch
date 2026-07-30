@@ -23,6 +23,9 @@
 
     <!-- Shared matcher: flags time/date-sensitive task titles purple (Group Assign + map sidebar) -->
     <script src="{{ url_for('static', filename='task-time-flag.js') }}"></script>
+    <!-- Shared wording for "couldn't load from Breezeway" warnings, so every page
+         names the same cause (429 vs 401 vs timeout) instead of assuming a throttle -->
+    <script src="{{ url_for('static', filename='bw-failure.js') }}"></script>
 </head>
 
 <body class="bg-gray-100">

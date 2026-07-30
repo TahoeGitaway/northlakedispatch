@@ -1188,43 +1188,16 @@ function _renderWarnings() {
   const _rescanBtn = (label) => `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;color:#b45309;background:none;border:none;cursor:pointer;padding:0;">${label}</button>`;
   const warnings = [];
   if (SCAN.failed_properties) {
-    // Name what Breezeway actually returned. A 401 and a 429 need completely
-    // different responses from the user, and rescanning only helps for the
+    // bwFailureCause (static/bw-failure.js) names what Breezeway actually returned.
+    // A 401 and a 429 need opposite responses, and a rescan only helps for the
     // transient ones — so don't offer it when it cannot possibly work.
-    const STATUS_INFO = {
-      '429':     { label: 'rate-limited the request (HTTP 429)',            retry: true  },
-      '401':     { label: 'rejected the credentials (HTTP 401)',            retry: false },
-      '403':     { label: 'refused access to these properties (HTTP 403)',  retry: false },
-      '404':     { label: 'did not recognise the property id (HTTP 404)',   retry: false },
-      '400':     { label: 'rejected the query as malformed (HTTP 400)',     retry: false },
-      'timeout': { label: 'did not respond within 15 s',                    retry: true  },
-    };
-    const _info = (code) => STATUS_INFO[code]
-      || { label: `returned HTTP ${code}`, retry: Number(code) >= 500 };
-
-    const counts  = SCAN.failure_statuses || {};
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-
-    let msg, canRetry;
-    if (!entries.length) {
-      // Older cached scan with no per-status detail — stay vague rather than guess.
-      msg = `couldn't be loaded from Breezeway, so some tasks may be missing.`;
-      canRetry = true;
-    } else {
-      const [topCode, topN] = entries[0];
-      const top = _info(topCode);
-      // Rescanning is worth offering if ANY failure class is transient.
-      canRetry = entries.some(([c]) => _info(c).retry);
-      const breakdown = entries.length > 1
-        ? ` (${entries.map(([c, n]) => `${n}×${c === 'timeout' ? 'timeout' : 'HTTP ' + c}`).join(', ')})`
-        : ``;
-      msg = entries.length === 1 || topN === SCAN.failed_properties
-        ? `couldn't be loaded — Breezeway ${top.label}. Some tasks may be missing.`
-        : `couldn't be loaded from Breezeway${breakdown}. Mostly: it ${top.label}. Some tasks may be missing.`;
-    }
-
-    warnings.push(`⚠ <b>${SCAN.failed_properties}</b> of ${SCAN.scanned_properties} properties ${msg}`
-      + (canRetry
+    const f = bwFailureCause(SCAN);
+    // Bold the count and show the denominator, which the shared formatter omits.
+    // Always "properties" here — "1 of 442 property" is wrong even when one failed.
+    const headline = f.text.replace(/^⚠ (\d+) propert(?:y|ies)/,
+      (_m, n) => `⚠ <b>${n}</b> of ${SCAN.scanned_properties} properties`);
+    warnings.push(`${headline}, so some tasks may be missing.`
+      + (f.retry
           ? ` ` + _rescanBtn('Force a fresh rescan') + `.`
           : ` Rescanning won't help — this needs a fix in Breezeway or the app's configuration.`));
   }

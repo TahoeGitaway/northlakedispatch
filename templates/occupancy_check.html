@@ -228,7 +228,11 @@ function renderFromScan() {
     (checked.size === 0 ? " · unassigned only" : ` · filtered to ${checked.size} of ${total_p} people`);
   let sub = `${_fmtDate(data.date)} · ${data.occupied_properties || 0} occupied propert${(data.occupied_properties === 1) ? "y" : "ies"} · ${total_t} task${total_t === 1 ? "" : "s"} during a stay${whoLabel}`;
   if (data.failed_properties) {
-    sub += ` · ⚠ ${data.failed_properties} couldn’t load (retry)`;
+    // Name the cause, and don't say "retry" when retrying can't work (401/404).
+    const f = bwFailureCauseShort(data);
+    sub += ` · ⚠ ${data.failed_properties} couldn’t load`
+         + (f.text ? ` (${f.text})` : ``)
+         + (f.retry ? ` — retry` : ` — needs a fix, not a retry`);
   }
   document.getElementById("subtitle").textContent = sub;
 

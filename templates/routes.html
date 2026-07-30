@@ -666,8 +666,11 @@ async function decorateOwnerCleaned(ds, force = false) {
     if (failed > 0) {
       // Never imply "all clear" when some houses couldn't be checked.
       const found = n ? `🧹 ${n} owner-cleaned · ` : "";
+      // Say WHY they failed, and only offer Refresh when a retry could work.
+      const f = bwFailureCause(data);
       setOcStatus("warn", `${found}⚠ ${failed} couldn't be checked`,
-                  `${failed} house${failed === 1 ? "" : "s"} failed to load from Breezeway — hit Refresh to retry.`);
+                  (f.text ? f.text.replace(/^⚠ /, "") : `${failed} house${failed === 1 ? "" : "s"} failed to load from Breezeway`)
+                  + (f.retry ? ` — hit Refresh to retry.` : ` — Refresh won't help; this needs a fix in Breezeway or the app's configuration.`));
     } else if (n > 0) {
       setOcStatus("found", `🧹 ${n} owner-cleaned`,
                   "These arrivals' last clean was owner-handled — schedule their Walk Thrus early.");

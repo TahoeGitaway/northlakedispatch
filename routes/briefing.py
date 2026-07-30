@@ -1045,21 +1045,24 @@ def _robust_property_tasks_window(token, ref_id, start_str, end_str):
     """Fetch ONE property's tasks over a date window with retry/backoff, mirroring
     occupancy_check's single-day fetcher so a momentary Breezeway throttle
     (429 / 5xx) doesn't silently drop the property.
-    Returns (tasks, ok); ok=False means it genuinely couldn't be loaded."""
+    Returns (tasks, ok, status); ok=False means it genuinely couldn't be loaded,
+    and `status` is the HTTP status of the final failed attempt (None = no
+    response/timeout) so the UI can name the cause instead of assuming a throttle."""
+    status = None
     for attempt in range(3):
         r, _, status = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
             {"reference_property_id": ref_id, "scheduled_date": f"{start_str},{end_str}"})
         if status == 200:
-            return (r or [], True)
+            return (r or [], True, status)
         if status is None or status == 429 or status >= 500:
             time.sleep(0.3 * (attempt + 1))
             continue
         r2, _, st2 = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
             {"reference_property_id": ref_id, "start_date": start_str, "end_date": end_str})
-        return (r2 or [], True) if st2 == 200 else ([], False)
-    return ([], False)
+        return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
+    return ([], False, status)
 
 
 def _last_clean_is_owner(tasks: list, arrival_date, trace=None) -> bool:
@@ -1183,17 +1186,22 @@ def owner_cleaned_check():
 
     def _job(pid):
         ref = ref_cache.get(pid) or str(pid)
-        tasks, ok = _robust_property_tasks_window(token, ref, start_str, date_str)
+        tasks, ok, status = _robust_property_tasks_window(token, ref, start_str, date_str)
         if not ok:
-            return (pid, None, None)   # None == load failed, distinct from False (loaded, not flagged)
+            # None == load failed, distinct from False (loaded, not flagged).
+            # Carry the status so the caller can tally WHY it failed.
+            return (pid, None, None, status)
         tr = {} if debug else None
-        return (pid, _last_clean_is_owner(tasks, arrival_date, trace=tr), tr)
+        return (pid, _last_clean_is_owner(tasks, arrival_date, trace=tr), tr, status)
 
     flagged, failed, debug_details = [], 0, []
+    failure_statuses: dict = {}
     with ThreadPoolExecutor(max_workers=32) as ex:
-        for pid, result, tr in ex.map(_job, list(arriving.keys())):
+        for pid, result, tr, status in ex.map(_job, list(arriving.keys())):
             if result is None:
                 failed += 1
+                k = "timeout" if status is None else str(status)
+                failure_statuses[k] = failure_statuses.get(k, 0) + 1
             elif result:
                 flagged.append({"property_id": pid, "name": arriving[pid]})
             # Debug: surface only houses that HAD a cleaning task suppressed by a
@@ -1206,6 +1214,7 @@ def owner_cleaned_check():
         "flagged":           flagged,
         "scanned":           len(arriving),
         "failed_properties": failed,
+        "failure_statuses":  failure_statuses,
     }
     if debug:
         payload["debug_suppressed"] = debug_details

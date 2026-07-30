@@ -140,7 +140,13 @@ async function load(){
 function renderResults(data){
   const v = data.violations || [];
   let sub = `${_fmtDate(data.date)} · ${data.checked_tasks} task${data.checked_tasks===1?'':'s'} checked`;
-  if (data.failed_properties) sub += ` · ⚠ ${data.failed_properties} propert${data.failed_properties===1?'y':'ies'} couldn't load (rescan)`;
+  if (data.failed_properties) {
+    // Name the cause, and don't invite a rescan that cannot succeed (401/404).
+    const f = bwFailureCauseShort(data);
+    sub += ` · ⚠ ${data.failed_properties} propert${data.failed_properties===1?'y':'ies'} couldn't load`
+         + (f.text ? ` (${f.text})` : ``)
+         + (f.retry ? ` — rescan` : ` — needs a fix, not a rescan`);
+  }
   document.getElementById('subtitle').textContent = sub;
 
   // Reflect the ticked count in the panel badge even before it's opened.

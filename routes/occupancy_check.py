@@ -136,22 +136,25 @@ def _task_assignee_ids(t: dict) -> list:
 def _robust_property_tasks(token, ref_id, date_str):
     """Fetch ONE property's tasks for a single day with retry/backoff, so a
     momentary Breezeway throttle (429 / 5xx) doesn't silently drop the property.
-    Returns (tasks, ok); ok=False means it genuinely couldn't be loaded."""
+    Returns (tasks, ok, status); ok=False means it genuinely couldn't be loaded,
+    and `status` is the HTTP status of the final failed attempt (None = no
+    response/timeout) so the UI can name the cause instead of assuming a throttle."""
     from routes.briefing import _fetch_bw_endpoint
+    status = None
     for attempt in range(3):
         r, _, status = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
             {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
         if status == 200:
-            return (r or [], True)
+            return (r or [], True, status)
         if status is None or status == 429 or status >= 500:
             _time.sleep(0.3 * (attempt + 1))
             continue
         r2, _, st2 = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
             {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
-        return (r2 or [], True) if st2 == 200 else ([], False)
-    return ([], False)
+        return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
+    return ([], False, status)
 
 
 @occupancy_bp.route("/briefing/occupancy-check")
@@ -230,18 +233,21 @@ def occupancy_check():
 
     def _job(pid):
         ref = ref_cache.get(pid) or str(pid)
-        tasks, ok = _robust_property_tasks(token, ref, day_str)
-        return pid, tasks, ok
+        tasks, ok, status = _robust_property_tasks(token, ref, day_str)
+        return pid, tasks, ok, status
 
     failed   = 0
+    failure_statuses: dict = {}   # "429" | "401" | "timeout" -> count, for the UI
     overlaps = []
     # Breezeway's task API has no company-wide day query — it requires a
     # reference_property_id per call — so we fan out one call per occupied house.
     # 32 workers is the sweet spot here (48 just starts drawing 429s).
     with ThreadPoolExecutor(max_workers=32) as ex:
-        for pid, tasks, ok in ex.map(_job, list(occupied.keys())):
+        for pid, tasks, ok, status in ex.map(_job, list(occupied.keys())):
             if not ok:
                 failed += 1
+                k = "timeout" if status is None else str(status)
+                failure_statuses[k] = failure_statuses.get(k, 0) + 1
                 continue
             stay      = occupied[pid]
             prop_name = _get_property_name(pid)
@@ -275,6 +281,7 @@ def occupancy_check():
         "expected":            [o for o in overlaps if o["expected"]],
         "occupied_properties": len(occupied),
         "failed_properties":   failed,
+        "failure_statuses":    failure_statuses,
         "people":              _people_roster(),
     })
 

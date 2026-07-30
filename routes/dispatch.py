@@ -1269,16 +1269,20 @@ _ROUTE_DISC_TTL = 120
 def _robust_property_tasks(token, ref_id, date_str):
     """Fetch ONE property's tasks for a date with retry/backoff, so a momentary
     Breezeway throttle (429 / 5xx) doesn't SILENTLY drop the whole property's
-    tasks. Returns (tasks, ok); ok=False means it genuinely couldn't be loaded.
-    Shared by the import, the discrepancy check, and clear-times."""
+    tasks. Returns (tasks, ok, status); ok=False means it genuinely couldn't be
+    loaded, and `status` is the HTTP status of the final failed attempt
+    (None = no response/timeout) so callers can name the real cause instead of
+    assuming a throttle. Shared by the import, the discrepancy check, and
+    clear-times."""
     from routes.briefing import _fetch_bw_endpoint
     import time as _time
+    status = None
     for attempt in range(3):
         r, _, status = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
             {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
         if status == 200:
-            return (r or [], True)
+            return (r or [], True, status)
         if status is None or status == 429 or status >= 500:
             _time.sleep(0.3 * (attempt + 1))
             continue
@@ -1286,8 +1290,14 @@ def _robust_property_tasks(token, ref_id, date_str):
         r2, _, st2 = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
             {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
-        return (r2 or [], True) if st2 == 200 else ([], False)
-    return ([], False)
+        return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
+    return ([], False, status)
+
+
+def _failure_key(status):
+    """Bucket a failed fetch's status for the UI tally: 'timeout' when there was
+    no response at all, otherwise the HTTP status as a string."""
+    return "timeout" if status is None else str(status)
 
 
 @dispatch_bp.route("/api/bw-import", methods=["POST"])
@@ -1336,16 +1346,20 @@ def bw_import():
     # Fetch tasks per property in parallel — retry/backoff so a throttled house
     # isn't silently dropped (which made the sidebar show fewer tasks than reality).
     all_results, failed_props = [], 0
+    failure_statuses: dict = {}
     with ThreadPoolExecutor(max_workers=16) as executor:
-        for tasks, ok in executor.map(
+        for tasks, ok, status in executor.map(
                 lambda ref: _robust_property_tasks(token, ref, date_str),
                 list(pid_candidates.keys())):
             all_results.extend(tasks)
             if not ok:
                 failed_props += 1
+                k = _failure_key(status)
+                failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
     if not all_results:
         return jsonify({"matched": [], "unmatched": [], "failed_properties": failed_props,
+                        "failure_statuses": failure_statuses,
                         "message": "No Breezeway tasks found for that date."
                                    + (f" (⚠ {failed_props} properties couldn't be loaded — retry.)" if failed_props else "")})
 
@@ -1481,15 +1495,18 @@ def bw_import():
         for asgn in assignees:
             matched, uncertain, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
             by_assignee[asgn] = {"matched": matched, "uncertain": uncertain, "unmatched": unmatched}
-        return jsonify({"by_assignee": by_assignee, "failed_properties": failed_props})
+        return jsonify({"by_assignee": by_assignee, "failed_properties": failed_props,
+                        "failure_statuses": failure_statuses})
 
     subset = _filter_by_assignee(all_results, assignees[0].lower()) if assignees else all_results
     matched, uncertain, unmatched = _matched_for(subset)
     if not matched and not uncertain and not unmatched:
         return jsonify({"matched": [], "uncertain": [], "unmatched": [], "failed_properties": failed_props,
+                        "failure_statuses": failure_statuses,
                         "message": "No Breezeway tasks found for that date/assignee."})
     return jsonify({"matched": matched, "uncertain": uncertain, "unmatched": unmatched,
-                    "failed_properties": failed_props})
+                    "failed_properties": failed_props,
+                    "failure_statuses": failure_statuses})
 
 
 # ── Route discrepancy check ───────────────────────────────────────
@@ -1647,12 +1664,15 @@ def route_discrepancies():
     # sidebar can warn instead of quietly showing fewer tasks than really exist.
     all_tasks = []
     failed_props = 0
+    failure_statuses: dict = {}
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, ok in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
+        for tasks, ok, status in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
                                  list(pid_candidates.keys())):
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
+                k = _failure_key(status)
+                failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
     asgn_lower = assignee.lower()
     seen_ids, mine = set(), []
@@ -1802,6 +1822,7 @@ def route_discrepancies():
         "current_tasks": current_tasks,
         "history_available": any(a["history"].get("available") for a in added),
         "failed_properties": failed_props,
+        "failure_statuses": failure_statuses,
         "summary": {"added": len(added), "removed": len(removed),
                     "moved": len(moved), "new_checkin": len(new_checkin)},
     }
@@ -2202,7 +2223,7 @@ def clear_task_times():
     # isn't silently dropped — same fix as the import.
     all_tasks = []
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, _ok in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
+        for tasks, _ok, _status in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
                                  list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 
