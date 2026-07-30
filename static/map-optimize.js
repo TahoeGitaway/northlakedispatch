@@ -281,19 +281,52 @@ function _watchBwSync() {
     }
     if (/contacting breezeway/i.test(txt) || !txt) return;   // still in progress
     obs.disconnect();
-    if (/took longer|timed out|upstream error/i.test(txt)) {
-      // Proxy/gateway timeout — not a real failure; the sync likely finished. Amber, not red.
-      const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
-      _showBwSyncBanner("warn", summary);
-      setTimeout(_goToSavedRoutes, 1500);   // sync's done — send them back to the all-routes list
-    } else if (/^error/i.test(txt) && !/updated/i.test(txt)) {
-      // Hard failure — stay on this route page so they can read it and retry.
-      _showBwSyncBanner("error", "Breezeway sync failed — " + txt.slice(0, 160));
-    } else {
-      const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
-      _showBwSyncBanner(/failed/i.test(summary) ? "warn" : "ok", "Breezeway sync done — " + summary);
-      setTimeout(_goToSavedRoutes, 1500);   // sync's done — send them back to the all-routes list
+
+    // Only leave the page when EVERY stop's time was actually written. This used
+    // to be inferred by regex over the result text, so a sync that reported
+    // failures still coloured the banner amber and then navigated away 1.5s later
+    // — the failure was on screen for barely a moment before the route list
+    // replaced it, which is indistinguishable from it having worked.
+    const outcome = window.__bwSyncOutcome;
+    const summary = (src.querySelector("div")?.textContent || txt).split("\n")[0].trim();
+
+    if (outcome && outcome.hardError) {
+      _showBwSyncBanner("error", "Breezeway sync failed — " + String(outcome.hardError).slice(0, 160));
+      return;                                     // stay put
     }
+    if (outcome && outcome.unresolved) {
+      // Gateway timed out: we genuinely don't know whether the times were written.
+      // Staying lets them re-sync and confirm rather than assuming it worked.
+      _showBwSyncBanner("warn", "Sync result unconfirmed — re-run it to check. Staying on this route.");
+      return;
+    }
+    if (outcome && outcome.allApplied === false) {
+      const n     = (outcome.notApplied || []).length;
+      const names = (outcome.notApplied || []).slice(0, 3).map(x => x.name).join(", ");
+      _showBwSyncBanner("error",
+        `${n || "Some"} stop${n === 1 ? "" : "s"} did NOT get a time in Breezeway`
+        + (names ? ` — ${names}${n > 3 ? "…" : ""}` : "")
+        + ". Details below; staying on this route so you can retry.");
+      return;                                     // stay put
+    }
+
+    // Fall back to the old text checks only when the server told us nothing.
+    if (!outcome && /took longer|timed out|upstream error/i.test(txt)) {
+      _showBwSyncBanner("warn", summary);
+      return;                                     // unconfirmed — don't navigate
+    }
+    if (!outcome && /^error/i.test(txt) && !/updated/i.test(txt)) {
+      _showBwSyncBanner("error", "Breezeway sync failed — " + txt.slice(0, 160));
+      return;
+    }
+    if (!outcome && /failed/i.test(summary)) {
+      _showBwSyncBanner("error", "Breezeway sync reported failures — " + summary);
+      return;
+    }
+
+    // Everything applied — safe to go back to the route list.
+    _showBwSyncBanner("ok", "Breezeway sync done — " + summary);
+    setTimeout(_goToSavedRoutes, 1500);
   });
   obs.observe(src, { childList: true, subtree: true, characterData: true });
   setTimeout(() => obs.disconnect(), 5 * 60 * 1000);   // safety stop

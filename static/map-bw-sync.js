@@ -37,6 +37,9 @@ function bwSyncTimes() {
   btn.textContent = "Syncing…";
   resultDiv.classList.remove("hidden");
   resultDiv.innerHTML = '<span class="text-gray-500">Contacting Breezeway…</span>';
+  // Clear last run's verdict — a stale "all applied" must never let this run
+  // navigate away, and every exit path below sets a fresh one.
+  window.__bwSyncOutcome = null;
 
   fetch("/api/bw-sync-times", {
     method:  "POST",
@@ -51,7 +54,10 @@ function bwSyncTimes() {
       } catch (_) {
         // Non-JSON body (the hosting proxy's plain-text "upstream error") = the sync
         // ran longer than the gateway waits, so it returned its own error instead of
-        // our JSON. The work most likely still finished in the background.
+        // our JSON. The work most likely still finished — but "most likely" is not
+        // confirmation, so treat it as unresolved and don't navigate away.
+        window.__bwSyncOutcome = { allApplied: false, notApplied: [], summary: {},
+                                   unresolved: true };
         resultDiv.innerHTML =
           `<div class="text-amber-700 font-semibold">⏳ The sync took longer than the server waits — it most likely still went through.</div>`
           + `<div class="text-gray-600 text-xs mt-1">This usually means a lot of tasks/stops in one sync, or Breezeway being busy or lagging behind. `
@@ -59,9 +65,21 @@ function bwSyncTimes() {
         return;
       }
       if (data.error) {
+        window.__bwSyncOutcome = { allApplied: false, notApplied: [], summary: {},
+                                   hardError: data.error };
         resultDiv.innerHTML = `<span class="text-red-600">Error: ${data.error}</span>`;
         return;
       }
+      // Record the OUTCOME for the banner/redirect watcher. It used to infer this
+      // by regex-scraping this box's text, which is why a partial sync could read
+      // as "done" and navigate away. all_applied comes straight from the server.
+      window.__bwSyncOutcome = {
+        allApplied:  data.all_applied !== false,
+        notApplied:  data.not_applied || [],
+        summary:     data.summary || {},
+        diagnostics: data.diagnostics || null,
+      };
+
       const s  = data.summary || {};
       let html = `<div class="font-semibold mb-1">`;
       html += `${s.updated || 0} updated &nbsp;·&nbsp; ${s.skipped || 0} skipped`;
@@ -92,6 +110,8 @@ function bwSyncTimes() {
       resultDiv.innerHTML = html;
     })
     .catch(e => {
+      window.__bwSyncOutcome = { allApplied: false, notApplied: [], summary: {},
+                                 hardError: e && e.message ? e.message : String(e) };
       resultDiv.innerHTML = `<span class="text-red-600">Error: ${e.message}</span>`;
     })
     .finally(() => {
