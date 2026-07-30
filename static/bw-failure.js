@@ -26,6 +26,12 @@
     '404':     { label: 'Breezeway did not recognise the property id (HTTP 404)',  short: 'HTTP 404 — unknown id',     retry: false },
     '400':     { label: 'Breezeway rejected the query as malformed (HTTP 400)',    short: 'HTTP 400 — bad query',      retry: false },
     'timeout': { label: 'Breezeway did not respond within 15 s',                   short: 'no response (timeout)',     retry: true  },
+    // 598 is ours, not Breezeway's: the app's own rate limiter declined to send
+    // rather than pile onto an API that was already refusing us. Naming it
+    // separately matters — reporting it as "Breezeway rate-limited us" would
+    // blame the vendor for our own back-pressure.
+    '598':     { label: "held back by this app's rate limiter — not sent to Breezeway",
+                 short: 'held back locally', retry: true },
   };
 
   function info(code) {

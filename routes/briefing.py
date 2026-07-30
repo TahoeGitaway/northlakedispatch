@@ -23,6 +23,7 @@ from flask_login import login_required, current_user
 
 from db import get_db, get_cursor
 from routes.auth import admin_required
+from routes.bw_ratelimit import LOCAL_THROTTLE_STATUS as _LOCAL_THROTTLE
 
 briefing_bp = Blueprint("briefing", __name__)
 
@@ -185,7 +186,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     seven per-property fan-outs share one budget instead of 25 thread pools each
     retrying into the same wall.
     """
-    from routes.bw_ratelimit import gate
+    from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
 
     all_results = []
     page, limit = 1, 100
@@ -197,8 +198,8 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
             # long requests to a gateway timeout, and callers now surface a
             # throttled property honestly instead of silently showing no tasks.
             if not gate.acquire():
-                return [], ("Rate limited — held back locally to avoid overloading "
-                            "the Breezeway API"), 429
+                return [], ("Held back by this app's rate limiter — not sent to "
+                            "Breezeway"), LOCAL_THROTTLE_STATUS
 
             resp = requests.get(
                 f"https://api.breezeway.io{path}",
@@ -260,11 +261,12 @@ def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None)
         if status == 403:
             return [], ("Task data requires elevated API access on your Breezeway plan. "
                         "Contact Breezeway support to request task API access.")
-        if status == 429:
+        if status in (429, _LOCAL_THROTTLE):
             # Being throttled says nothing about which PATH is right, so walking the
             # remaining candidates cannot help — it just spends more of a budget we
-            # have already exhausted. Stop and report the throttle honestly.
-            return [], (err or "HTTP 429: rate limited by Breezeway")
+            # have already exhausted. Same for a locally-shed request, which was
+            # never sent at all. Stop and report it honestly.
+            return [], (err or f"HTTP {status}: rate limited")
         if status and status not in (200, 422):
             last_err = err or f"HTTP {status}"
             continue

@@ -49,6 +49,13 @@ _RELAX_AFTER  = 25     # consecutive successes before easing off
 _RELAX_FACTOR = 0.70   # how much to ease by
 _MAX_GATE_WAIT = 8.0   # never block a request longer than this
 
+# Status used when THIS APP declines to send, rather than Breezeway refusing.
+# Reporting both as 429 makes the UI blame Breezeway for our own shedding, which
+# is the same class of mistake the failure-cause work set out to fix. Chosen in
+# the 5xx range deliberately: existing callers already retry `status >= 500`, so
+# local shedding stays retryable without touching a single call site.
+LOCAL_THROTTLE_STATUS = 598
+
 
 class _BreezewayGate:
     def __init__(self):
