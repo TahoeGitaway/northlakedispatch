@@ -179,12 +179,27 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     """Generic paginated GET for any Breezeway endpoint.
     Returns (results_list, error_string, http_status).
     Tries the path exactly as given — caller decides what to do with 404/403.
+
+    Every Breezeway call in the app funnels through here, so this is where the
+    process-wide rate gate lives (routes/bw_ratelimit.py). Pacing here means all
+    seven per-property fan-outs share one budget instead of 25 thread pools each
+    retrying into the same wall.
     """
+    from routes.bw_ratelimit import gate
+
     all_results = []
     page, limit = 1, 100
     last_status = None
     try:
         while True:
+            # Hold until the gate allows a send. If it can't grant one quickly,
+            # report a synthetic 429 rather than blocking: this app already loses
+            # long requests to a gateway timeout, and callers now surface a
+            # throttled property honestly instead of silently showing no tasks.
+            if not gate.acquire():
+                return [], ("Rate limited — held back locally to avoid overloading "
+                            "the Breezeway API"), 429
+
             resp = requests.get(
                 f"https://api.breezeway.io{path}",
                 headers={"Authorization": f"JWT {token}"},
@@ -192,6 +207,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 timeout=15,
             )
             last_status = resp.status_code
+            gate.on_response(last_status)
             if not resp.ok:
                 try:
                     detail = resp.json()
@@ -217,10 +233,16 @@ def _fetch_bw_tasks(token: str, base_params: dict, date_param_sets: list = None)
     Tries known task endpoint paths, then multiple date-param conventions.
     Returns (results, error_message).
     """
+    # Working path FIRST. /admin/bw-probe confirmed the other three return 404 on
+    # this Breezeway plan, and this function is called per-property by spi.py — so
+    # with the old ordering every call burned two guaranteed-404 requests before
+    # reaching the one that works, tripling the request count against an API that
+    # is already rate-limiting us. Kept as fallbacks in case the plan changes, but
+    # they now cost nothing on the happy path.
     candidate_paths = [
+        "/public/inventory/v1/task",
         "/public/work/v1/task",
         "/public/work/v2/task",
-        "/public/inventory/v1/task",
         "/public/v1/task",
     ]
     # Date filter conventions to try in order

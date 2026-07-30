@@ -216,6 +216,36 @@ def bw_probe():
     })
 
 
+@bw_probe_bp.route("/admin/bw-gate")
+@login_required
+@admin_required
+def bw_gate_status():
+    """Live state of the process-wide Breezeway rate gate.
+
+    GET /admin/bw-gate          — current pacing, cooldown and counters
+    GET /admin/bw-gate?reset=1  — clear learned state (diagnostics only)
+
+    Breezeway publishes no rate-limit headers, so the gate learns the budget by
+    watching 429s. This makes what it learned visible instead of guesswork.
+    """
+    from routes.bw_ratelimit import gate
+
+    if request.args.get("reset"):
+        gate.reset()
+        return jsonify({"reset": True, "gate": gate.snapshot()})
+
+    snap = gate.snapshot()
+    c    = snap["counters"]
+    total = c["ok"] + c["throttled_429"]
+    snap["throttle_rate"] = f"{(100.0 * c['throttled_429'] / total):.1f}%" if total else "n/a"
+    snap["reading"] = (
+        "interval_s 0 means the gate has seen no throttling and is not pacing. "
+        "A rising interval_s means it is backing off; a high gave_up_waiting count "
+        "means requests are being refused locally to protect the gateway timeout."
+    )
+    return jsonify(snap)
+
+
 # ── Batching probe ────────────────────────────────────────────────
 # The capability probe showed reference_property_id is mandatory, so a
 # company-wide query is out. But it also showed scheduled_date must be a
