@@ -42,7 +42,11 @@ _group_ts:      float = 0.0
 # even though the backend finishes — caching the result means the retry returns
 # instantly. Cleared whenever an assignment is written.
 _scan_cache:   dict  = {}   # date_str -> (timestamp, result_dict)
-_SCAN_TTL            = 60
+_SCAN_TTL            = 180   # 3 min. A sweep is ~442 Breezeway calls, so serving
+                             # a repeat view from cache is the cheapest way to stay
+                             # under the rate limit. Mutations below clear the cache
+                             # explicitly, and Force refresh always bypasses it, so
+                             # a longer window doesn't hide the user's own changes.
 
 # Staff roster cache (fetched on every scan otherwise).
 _people_cache: dict  = {"ts": 0.0, "data": []}
