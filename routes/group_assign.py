@@ -263,14 +263,17 @@ def _scan_inner():
         pid_candidates.setdefault(ref_id if ref_id else str(bw_pid), bw_pid)
 
     def _tasks_for_ref(ref_id):
-        """Return (tasks, ok). ok=False means we could NOT load this property
-        (throttled / errored) — so its tasks must NOT be silently treated as 'none'."""
+        """Return (tasks, ok, status). ok=False means we could NOT load this property
+        — so its tasks must NOT be silently treated as 'none'. `status` is the HTTP
+        status of the final failed attempt (None = no response/timeout), kept so the
+        UI can name the actual cause instead of assuming throttling."""
+        status = None
         for attempt in range(3):
             r, _, status = _fetch_bw_endpoint(
                 token, "/public/inventory/v1/task",
                 {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
             if status == 200:
-                return (r or [], True)
+                return (r or [], True, status)
             # Throttle / transient server error / no response → back off and retry.
             if status is None or status == 429 or status >= 500:
                 time.sleep(0.3 * (attempt + 1))
@@ -279,17 +282,23 @@ def _scan_inner():
             r2, _, st2 = _fetch_bw_endpoint(
                 token, "/public/inventory/v1/task",
                 {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
-            return (r2 or [], True) if st2 == 200 else ([], False)
-        return ([], False)
+            return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
+        return ([], False, status)
 
     # Moderate concurrency + the retry/backoff above so the sweep doesn't trip
     # Breezeway rate limits, which would silently drop a property's whole list.
+    # Tally the failure statuses: a 401 (bad credentials), a 429 (genuine throttle)
+    # and a timeout are very different problems, and the banner used to blame
+    # throttling for all of them.
     all_tasks, failed_props = [], 0
+    failure_statuses: dict = {}     # "429" | "401" | "timeout" -> count
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, ok in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
+        for tasks, ok, status in ex.map(_tasks_for_ref, list(pid_candidates.keys())):
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
+                key = "timeout" if status is None else str(status)
+                failure_statuses[key] = failure_statuses.get(key, 0) + 1
 
     # Guest/owner/lease arrivals that day → BW property ids (for the CHECK-IN badge),
     # plus a by-type tally of the arrivals THEMSELVES (every check-in reservation that
@@ -424,6 +433,10 @@ def _scan_inner():
         "dept_counts": dept_counts,
         "failed_properties": failed_props,
         "scanned_properties": len(pid_candidates),
+        # {"429": 240, "timeout": 2} — what Breezeway actually returned for the
+        # properties that failed, so the warning can state the cause rather than
+        # assume a rate limit.
+        "failure_statuses": failure_statuses,
         # Houses with no Breezeway reference_property_id — their tasks can't be
         # fetched and silently won't appear. Surfaced as a warning in the UI.
         "no_ref_id_properties": len(no_ref_id_pids),
