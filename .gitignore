@@ -22,3 +22,6 @@ reports/
 venv/
 .venv/
 tailwindcss.exe
+
+# Node dependencies — regenerate with `npm install`
+node_modules/
