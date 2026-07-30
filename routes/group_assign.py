@@ -42,11 +42,18 @@ _group_ts:      float = 0.0
 # even though the backend finishes — caching the result means the retry returns
 # instantly. Cleared whenever an assignment is written.
 _scan_cache:   dict  = {}   # date_str -> (timestamp, result_dict)
-_SCAN_TTL            = 180   # 3 min. A sweep is ~442 Breezeway calls, so serving
-                             # a repeat view from cache is the cheapest way to stay
-                             # under the rate limit. Mutations below clear the cache
-                             # explicitly, and Force refresh always bypasses it, so
-                             # a longer window doesn't hide the user's own changes.
+_SCAN_TTL            = 180   # 3 min for a COMPLETE sweep. Each miss costs ~442
+                             # Breezeway calls, so serving repeat views from cache
+                             # is the cheapest way to stay under the rate limit.
+                             # Mutations clear the cache explicitly and Force
+                             # refresh bypasses it, so this never hides a user's
+                             # own change.
+_PARTIAL_SCAN_TTL    = 15    # A sweep that lost properties to throttling must NOT
+                             # be pinned: "Scan again" would replay the same gaps
+                             # for the whole window instead of retrying them. Short
+                             # enough that a retry really retries, long enough to
+                             # absorb a double-click. (briefing.py takes the same
+                             # position by refusing to cache an incomplete run.)
 
 # Staff roster cache (fetched on every scan otherwise).
 _people_cache: dict  = {"ts": 0.0, "data": []}
@@ -270,8 +277,12 @@ def _scan_inner():
     # Serve a fresh cached result instantly (also rescues a prior proxy timeout) —
     # UNLESS the caller forced a fresh sweep (e.g. tasks were still loading in BW).
     cached = _scan_cache.get(date_str)
-    if cached and not force and time.time() - cached[0] < _SCAN_TTL:
-        return jsonify(cached[1])
+    # Entries carry their own TTL: a complete sweep is worth pinning, an incomplete
+    # one is not (see _PARTIAL_SCAN_TTL). Tolerate 2-tuples from a previous build.
+    if cached and not force:
+        _ttl = cached[2] if len(cached) > 2 else _SCAN_TTL
+        if time.time() - cached[0] < _ttl:
+            return jsonify(cached[1])
 
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
@@ -501,8 +512,11 @@ def _scan_inner():
         "arriving_houses":  len(arrival_pids),              # distinct houses with an arrival (any type)
     }
     # Cache before returning — so even if the proxy already timed out, the retry
-    # gets this result instantly instead of re-running the whole sweep.
-    _scan_cache[date_str] = (time.time(), result)
+    # gets this result instantly instead of re-running the whole sweep. But only
+    # pin a COMPLETE sweep: caching a throttled run made "Scan again" replay the
+    # same missing properties for the whole window rather than retrying them.
+    _scan_cache[date_str] = (time.time(), result,
+                             _SCAN_TTL if not failed_props else _PARTIAL_SCAN_TTL)
     return jsonify(result)
 
 

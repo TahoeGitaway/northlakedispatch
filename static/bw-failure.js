@@ -88,6 +88,27 @@
     return { text: text, retry: retry };
   }
 
+  /* Copy a diagnostics object to the clipboard, with a visible confirmation on the
+     button. Falls back to prompt() because the clipboard API needs a secure context
+     and can be blocked outright — the text must stay obtainable either way. */
+  function bwCopyDiagnostics(obj, btn) {
+    var text = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    var restore = btn ? btn.textContent : null;
+    var done = function (msg) {
+      if (!btn) return;
+      btn.textContent = msg;
+      setTimeout(function () { btn.textContent = restore; }, 1800);
+    };
+    if (global.navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done('Copied ✓'); },
+                                              function () { global.prompt('Copy the details below:', text); done('Copied ✓'); });
+    } else {
+      global.prompt('Copy the details below:', text);
+      done('Copied ✓');
+    }
+  }
+
   global.bwFailureCause      = bwFailureCause;
   global.bwFailureCauseShort = bwFailureCauseShort;
+  global.bwCopyDiagnostics   = bwCopyDiagnostics;
 })(window);

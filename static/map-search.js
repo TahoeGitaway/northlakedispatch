@@ -727,13 +727,45 @@ async function runBwImport() {
   const uncertainBox = document.getElementById("bwImportUncertain");
   if (uncertainBox) { uncertainBox.innerHTML = ""; uncertainBox.classList.add("hidden"); }
 
+  // Capture enough context to report a failure. A gateway timeout returns an HTML
+  // error page, so res.json() throws and the real detail (status, body, how long it
+  // took) is exactly what a developer needs — and exactly what used to be discarded.
+  const _t0 = (window.performance && performance.now) ? performance.now() : Date.now();
+  const _reqCtx = () => ({
+    when_utc:   new Date().toISOString(),
+    endpoint:   "/api/bw-import",
+    request:    {date, assignee: assignees[0] || ""},
+    elapsed_ms: Math.round(((window.performance && performance.now) ? performance.now() : Date.now()) - _t0),
+    page_url:   location.pathname,
+  });
+
   try {
     const res  = await fetch("/api/bw-import", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
       body:    JSON.stringify({date, assignee: assignees[0] || ""}),
     });
-    const data = await res.json();
+
+    // Read as TEXT first. A 502/504 from the platform gateway is an HTML page, and
+    // res.json() would throw away the status and body along with the exception.
+    const bodyText = await res.text();
+    let data;
+    try {
+      data = JSON.parse(bodyText);
+    } catch (parseErr) {
+      _bwImportFail({
+        ..._reqCtx(),
+        failure: res.ok ? "server returned a non-JSON body"
+                        : `server returned HTTP ${res.status}`,
+        http_status: res.status,
+        http_status_text: res.statusText,
+        response_body: (bodyText || "").slice(0, 800),
+        parse_error: String(parseErr),
+      }, res.status === 502 || res.status === 504
+           ? "The server took too long and the gateway gave up. The scan may still be running — try again in a moment."
+           : `The server returned HTTP ${res.status} instead of data.`);
+      return;
+    }
 
     if (data.error)   { _bwImportMsg(data.error,   "red");  return; }
     if (data.message) { _bwImportMsg(data.message, "gray"); return; }
@@ -777,13 +809,46 @@ async function runBwImport() {
       document.getElementById("assignedToField").value = assignees[0] || "";
       if (typeof updateRouteMapOverlay === "function") updateRouteMapOverlay();
     }
-  } catch (_) {
-    _bwImportMsg("Network error — could not reach server.", "red");
+  } catch (err) {
+    // Was `catch (_)`, which threw the exception away and replaced it with a fixed
+    // string — leaving nothing to report. Keep it.
+    _bwImportFail({
+      ..._reqCtx(),
+      failure:    "request never completed",
+      error_name: err && err.name,
+      error_msg:  String(err && err.message || err),
+    }, "Couldn't reach the server. It may have timed out mid-request.");
   } finally {
     btn.disabled      = false;
     btn.textContent   = "Import Stops";
     btn.style.cssText = "";
   }
+}
+
+/* Show a human message AND keep the technical detail reachable. Previously an
+   import failure printed a fixed string and dropped everything else, so there was
+   nothing to send anyone — the user could only describe what they saw. */
+let _bwLastImportError = null;
+function _bwImportFail(diag, humanMsg) {
+  _bwLastImportError = diag;
+  const el = document.getElementById("bwImportResult");
+  el.style.cssText = "background:#fef2f2; color:#b91c1c;";
+  el.innerHTML = "";
+
+  const p = document.createElement("div");
+  p.textContent = humanMsg || "The import failed.";
+  el.appendChild(p);
+
+  const btn = document.createElement("button");
+  btn.textContent = "Copy error details";
+  btn.style.cssText = "margin-top:4px;text-decoration:underline;background:none;"
+                    + "border:none;padding:0;cursor:pointer;color:#7f1d1d;font-size:11px;";
+  btn.onclick = () => bwCopyDiagnostics(_bwLastImportError, btn);
+  el.appendChild(btn);
+
+  el.classList.remove("hidden");
+  // Also log it, so it's recoverable from the console even if the box is dismissed.
+  console.error("[bw-import] failed", diag);
 }
 
 function _bwImportMsg(text, color) {
