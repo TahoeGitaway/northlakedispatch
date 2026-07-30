@@ -1265,6 +1265,17 @@ import time as _dt_time
 _route_disc_cache: dict[int, dict] = {}   # route_id -> {"ts": float, "data": dict}
 _ROUTE_DISC_TTL = 120
 
+# One day's raw Breezeway tasks, keyed by date and shared across imports.
+# date_str -> (ts, all_results, failed_props, failure_statuses)
+# Importing several employees opens a window each, and each window ran its own
+# ~442-call sweep of the SAME day. Assignee filtering happens after the fetch, so
+# one sweep serves them all.
+_bw_day_cache: dict = {}
+_BW_DAY_TTL = 180          # complete sweep — safe to hold
+_BW_DAY_PARTIAL_TTL = 45   # gappy sweep — long enough to cover the cascade of
+                           # windows one multi-employee import opens, short enough
+                           # that a later retry genuinely retries
+
 
 def _robust_property_tasks(token, ref_id, date_str):
     """Fetch ONE property's tasks for a date with retry/backoff, so a momentary
@@ -1354,17 +1365,37 @@ def bw_import():
 
     # Fetch tasks per property in parallel — retry/backoff so a throttled house
     # isn't silently dropped (which made the sidebar show fewer tasks than reality).
-    all_results, failed_props = [], 0
-    failure_statuses: dict = {}
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        for tasks, ok, status in executor.map(
-                lambda ref: _robust_property_tasks(token, ref, date_str),
-                list(pid_candidates.keys())):
-            all_results.extend(tasks)
-            if not ok:
-                failed_props += 1
-                k = _failure_key(status)
-                failure_statuses[k] = failure_statuses.get(k, 0) + 1
+    #
+    # Cached per DATE, before any assignee filtering. Importing for several people
+    # opens one window each, and every window used to run its own full ~442-call
+    # sweep for the same day's tasks — two employees cost 884 calls to produce data
+    # one sweep already contains, with the second import failing worse because the
+    # first had just drained the rate-limit budget. The filtering happens further
+    # down, so a single sweep serves every assignee and every repeat import.
+    # A COMPLETE sweep is worth holding for the full window. An incomplete one is
+    # still worth holding briefly: the second window opening moments later would
+    # otherwise re-run 442 calls that are just as likely to come back gappy, while
+    # spending the very budget that caused the gaps. Its warning is carried along
+    # with it, so the second import reports the same missing properties honestly
+    # rather than presenting partial data as complete.
+    _cached = _bw_day_cache.get(date_str)
+    _cached_ttl = _BW_DAY_TTL if (_cached and not _cached[2]) else _BW_DAY_PARTIAL_TTL
+    if _cached and time.time() - _cached[0] < _cached_ttl:
+        all_results, failed_props, failure_statuses = _cached[1], _cached[2], dict(_cached[3])
+    else:
+        all_results, failed_props = [], 0
+        failure_statuses: dict = {}
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            for tasks, ok, status in executor.map(
+                    lambda ref: _robust_property_tasks(token, ref, date_str),
+                    list(pid_candidates.keys())):
+                all_results.extend(tasks)
+                if not ok:
+                    failed_props += 1
+                    k = _failure_key(status)
+                    failure_statuses[k] = failure_statuses.get(k, 0) + 1
+        _bw_day_cache[date_str] = (time.time(), all_results, failed_props,
+                                   dict(failure_statuses))
 
     if not all_results:
         return jsonify({"matched": [], "unmatched": [], "failed_properties": failed_props,
