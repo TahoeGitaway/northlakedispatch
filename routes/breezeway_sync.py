@@ -91,7 +91,8 @@ def _task_matches_assignee(task: dict, assignee_lower: str) -> bool:
     return False
 
 
-def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> tuple:
+def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str,
+                              deadline: float = 0.0) -> tuple:
     """Fetch existing Breezeway tasks for one property on one date.
 
     Returns (tasks, ok, detail). ok=False means the lookup FAILED — which is not
@@ -104,13 +105,25 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> tuple:
     rate gate so this path can't blow the budget the read-side scans depend on."""
     from routes.bw_ratelimit import gate
 
+    # The caller iterates stops SEQUENTIALLY, so every second spent here is paid
+    # once per stop. Retries plus a gate that can block for seconds each turned an
+    # 8-stop sync into minutes of apparent hanging. Bound the whole thing: two
+    # attempts, alternate param shapes only on the first pass, and a hard deadline
+    # shared across the sync so it always returns something.
     last_detail = "no response"
-    for attempt in range(3):
-        for params in [
-            {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"},
-            {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str},
-            {"reference_property_id": ref_id, "date": date_str},
-        ]:
+    shapes = [
+        {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"},
+        {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str},
+        {"reference_property_id": ref_id, "date": date_str},
+    ]
+    for attempt in range(2):
+        if deadline and time.monotonic() > deadline:
+            return ([], False, "ran out of time before this property could be checked")
+        # Only hunt alternate param shapes on the first pass — if shape 1 worked
+        # before, a retry is about throttling, not about the query being wrong.
+        for params in (shapes if attempt == 0 else shapes[:1]):
+            if deadline and time.monotonic() > deadline:
+                return ([], False, "ran out of time before this property could be checked")
             if not gate.acquire():
                 last_detail = "held back by this app's rate limiter"
                 continue
@@ -136,7 +149,8 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str) -> tuple:
                 break
             except Exception as ex:
                 last_detail = f"{type(ex).__name__}: {ex}"[:200]
-        time.sleep(0.4 * (attempt + 1))
+        if attempt == 0:          # no point sleeping after the final attempt
+            time.sleep(0.4)
     return ([], False, last_detail)
 
 
@@ -212,12 +226,27 @@ def bw_sync_times():
         return jsonify({"error": "Breezeway property cache empty — try again in a moment"}), 502
 
     results = []
+    # Whole-sync budget. Stops are processed one after another, so without a shared
+    # ceiling a throttled run just keeps going and the user watches a spinner with
+    # no idea whether anything is happening. Better to return a partial result that
+    # says exactly which stops weren't reached. Sits under the platform's gateway
+    # timeout so the response is actually delivered rather than cut off.
+    _sync_deadline = time.monotonic() + 40.0
 
     for stop in stops:
         name        = (stop.get("name") or "").strip()
         eta_minutes = stop.get("eta_minutes")
 
         if not name or eta_minutes is None:
+            continue
+
+        # Out of time — record the remaining stops honestly instead of pressing on
+        # past the gateway timeout and returning nothing at all.
+        if time.monotonic() > _sync_deadline:
+            results.append({"name": name, "status": "failed",
+                            "time": _minutes_to_hhmm(int(eta_minutes)),
+                            "reason": "sync ran out of time before reaching this stop — "
+                                      "run it again to finish the rest"})
             continue
 
         start_time = _minutes_to_hhmm(int(eta_minutes))
@@ -232,7 +261,8 @@ def bw_sync_times():
         ref_id = ref_cache.get(bw_pid) or str(bw_pid)
 
         # Step 2: find existing tasks for this property on this date
-        tasks, lookup_ok, lookup_detail = _fetch_tasks_for_property(token, ref_id, date_str)
+        tasks, lookup_ok, lookup_detail = _fetch_tasks_for_property(
+            token, ref_id, date_str, deadline=_sync_deadline)
         if not lookup_ok:
             # Could NOT read this property's tasks — its time was not written. This
             # is a failure, not a skip: reporting it as "no tasks found" is what
