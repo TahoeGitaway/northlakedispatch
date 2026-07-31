@@ -1821,9 +1821,19 @@ def route_discrepancies():
         pid = _pid_of(canon)
         entry = {"property": info["name"],
                  "property_id": int(pid) if pid and pid.isdigit() else None}
+
         if pid is not None and pid in unverified_pids:
-            unverified.append(entry)     # couldn't check — never propose removing it
+            # We tried this exact house and Breezeway refused. Definitely unknown.
+            unverified.append(entry)
+        elif pid is None and failed_props:
+            # Keyed by NAME because the house isn't linked to a Breezeway id, so it
+            # can't be matched against the set that failed. During an incomplete
+            # sweep there is no way to tell "no task" from "never checked" — and
+            # guessing here would drop a real stop.
+            unverified.append(entry)
         else:
+            # Either the sweep was complete, or this house's own fetch succeeded
+            # and genuinely returned no task for this person. Safe to report.
             removed.append(entry)
 
     # NEW CHECK-IN — a house already ON the route that became a same-day arrival since the
