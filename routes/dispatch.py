@@ -1275,6 +1275,8 @@ _BW_DAY_TTL = 180          # complete sweep — safe to hold
 _BW_DAY_PARTIAL_TTL = 45   # gappy sweep — long enough to cover the cascade of
                            # windows one multi-employee import opens, short enough
                            # that a later retry genuinely retries
+_BW_RETRY_WINDOW = 900     # 15 min to "try the missing N again" before a retry
+                           # falls back to sweeping everything
 
 
 def _robust_property_tasks(token, ref_id, date_str):
@@ -1332,6 +1334,8 @@ def bw_import():
     if not raw and body.get("assignee"):
         raw = [body["assignee"]]
     assignees = [a.strip() for a in raw if a.strip()]
+    # "Try the missing N again" — refetch only the properties that failed last time.
+    retry_failed = bool(body.get("retry_failed"))
 
     if not date_str:
         return jsonify({"error": "date is required"}), 400
@@ -1381,22 +1385,45 @@ def bw_import():
     _cached = _bw_day_cache.get(date_str)
     _cached_ttl = _BW_DAY_TTL if (_cached and not _cached[2]) else _BW_DAY_PARTIAL_TTL
     # NB: this module imports time as _dt_time — there is no bare `time` name here.
-    if _cached and _dt_time.time() - _cached[0] < _cached_ttl:
+    _cached_fresh = bool(_cached) and _dt_time.time() - _cached[0] < _cached_ttl
+
+    # Retry ONLY the properties that failed. "Re-import to retry" re-ran all ~442
+    # calls to recover a handful of houses, and those hundreds of extra requests
+    # are themselves what provokes the throttling being retried. Entries carry the
+    # refs that failed so a retry can refetch just those and merge them in.
+    _retry_refs = None
+    if retry_failed and _cached and len(_cached) > 4:
+        if _dt_time.time() - _cached[0] < _BW_RETRY_WINDOW:
+            _retry_refs = [r for r in _cached[4] if r in pid_candidates]
+
+    def _sweep(keys, seed_results):
+        """Fetch `keys`, appending onto `seed_results`. Returns
+        (results, failed_count, status_tally, refs_that_failed)."""
+        out, nfail, tally, refs = list(seed_results), 0, {}, []
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            for ref_id, (tasks, ok, status) in zip(
+                    keys,
+                    executor.map(lambda ref: _robust_property_tasks(token, ref, date_str), keys)):
+                out.extend(tasks)
+                if not ok:
+                    nfail += 1
+                    refs.append(ref_id)
+                    k = _failure_key(status)
+                    tally[k] = tally.get(k, 0) + 1
+        return out, nfail, tally, refs
+
+    if _retry_refs:
+        # Merge the retried houses into what already loaded — don't refetch the rest.
+        all_results, failed_props, failure_statuses, failed_refs = _sweep(_retry_refs, _cached[1])
+        _bw_day_cache[date_str] = (_dt_time.time(), all_results, failed_props,
+                                   dict(failure_statuses), failed_refs)
+    elif _cached_fresh and not retry_failed:
         all_results, failed_props, failure_statuses = _cached[1], _cached[2], dict(_cached[3])
     else:
-        all_results, failed_props = [], 0
-        failure_statuses: dict = {}
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            for tasks, ok, status in executor.map(
-                    lambda ref: _robust_property_tasks(token, ref, date_str),
-                    list(pid_candidates.keys())):
-                all_results.extend(tasks)
-                if not ok:
-                    failed_props += 1
-                    k = _failure_key(status)
-                    failure_statuses[k] = failure_statuses.get(k, 0) + 1
+        all_results, failed_props, failure_statuses, failed_refs = _sweep(
+            list(pid_candidates.keys()), [])
         _bw_day_cache[date_str] = (_dt_time.time(), all_results, failed_props,
-                                   dict(failure_statuses))
+                                   dict(failure_statuses), failed_refs)
 
     if not all_results:
         return jsonify({"matched": [], "unmatched": [], "failed_properties": failed_props,

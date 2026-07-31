@@ -810,10 +810,17 @@ async function runBwImport() {
       }
       if (data.failed_properties) {
         const f = bwFailureCause(data);
-        msg  += ` ${f.text}${f.retry
-                  ? ` — re-import to retry so no tasks are missed.`
-                  : ` — re-importing won't help; this needs a fix in Breezeway or the app's configuration.`}`;
+        // Offer to retry just the ones that failed. A full re-import spends ~442
+        // calls to recover a handful, and those extra requests are what provoke
+        // the throttling being retried.
+        _bwLastImport = {date, assignee: assignees[0] || "", failed: data.failed_properties};
+        msg  += ` ${f.text}.`;
         color = "amber";
+        _bwImportMsg(msg, color);
+        if (f.retry) _bwAddRetryMissingBtn(data.failed_properties);
+        _bwShowTaskSidebar(date, data.matched || []);
+        _bwRenderUncertain(date, uncertain);
+        return;
       }
       _bwImportMsg(msg, color);
       _bwShowTaskSidebar(date, data.matched || []);
@@ -836,6 +843,73 @@ async function runBwImport() {
     btn.disabled      = false;
     btn.textContent   = "Import Stops";
     btn.style.cssText = "";
+  }
+}
+
+/* "Try the missing N again" — refetch ONLY the properties that failed and merge
+   them into what already loaded, instead of re-running the whole ~442-call sweep
+   to recover a handful. The server keeps the failed refs for 15 minutes; after
+   that a retry falls back to a full import. */
+let _bwLastImport = null;
+
+function _bwAddRetryMissingBtn(n) {
+  const el = document.getElementById("bwImportResult");
+  if (!el || !_bwLastImport) return;
+  const btn = document.createElement("button");
+  btn.textContent = `Try the missing ${n} again`;
+  btn.style.cssText = "display:block;margin-top:5px;text-decoration:underline;font-weight:700;"
+                    + "background:none;border:none;padding:0;cursor:pointer;color:#b45309;font-size:12px;";
+  btn.onclick = () => bwRetryMissingImport(btn);
+  el.appendChild(btn);
+}
+
+async function bwRetryMissingImport(btn) {
+  if (!_bwLastImport) return;
+  const { date, assignee } = _bwLastImport;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Retrying…";
+  try {
+    const res  = await fetch("/api/bw-import", {
+      method:  "POST",
+      headers: {"Content-Type": "application/json"},
+      body:    JSON.stringify({date, assignee, retry_failed: true}),
+    });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch (e) {
+      _bwImportFail({ when_utc: new Date().toISOString(), endpoint: "/api/bw-import",
+                      request: {date, assignee, retry_failed: true},
+                      failure: `server returned HTTP ${res.status}`,
+                      http_status: res.status, response_body: (text || "").slice(0, 800) },
+                    "The retry didn't come back as data.");
+      return;
+    }
+    if (data.error) { _bwImportMsg(data.error, "red"); return; }
+
+    // Add any stops the retry recovered, without disturbing what's already there.
+    let added = 0;
+    for (const p of (data.matched || [])) {
+      if (!selectedStops.find(s => s.name === p.name)) { selectedStops.push(p); added++; }
+    }
+    if (added) {
+      _bwPlaceMarkers();
+      _bwShowTaskSidebar(date, data.matched || []);
+    }
+    const still = data.failed_properties || 0;
+    if (still) {
+      const f = bwFailureCause(data);
+      _bwLastImport = {date, assignee, failed: still};
+      _bwImportMsg(`Recovered ${added} more stop${added === 1 ? "" : "s"}. ${f.text}.`, "amber");
+      if (f.retry) _bwAddRetryMissingBtn(still);
+    } else {
+      _bwImportMsg(`Recovered ${added} more stop${added === 1 ? "" : "s"}. All properties loaded.`, "green");
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    _bwImportMsg(`Retry failed: ${e.message}`, "red");
   }
 }
 
