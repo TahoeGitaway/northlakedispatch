@@ -1623,6 +1623,17 @@ function _renderChangesHtml(d) {
     h += `<div class="font-semibold text-amber-700 mt-3 mb-1">➖ No longer on list (${removed.length})</div>`;
     for (const r of removed) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}${_bwCalLinkHtml(r.property_id, r.property)}</div>`;
   }
+  // Stops we could NOT check because Breezeway refused the lookup. Shown, but
+  // deliberately kept OUT of the remove action — "no task found" and "couldn't
+  // ask" look identical from here, and dropping a stop on missing data would
+  // take a house off someone's route that is still assigned to them.
+  const unverified = (d.unverified || []).filter(r => _cur.has((r.property || "").toLowerCase()));
+  if (unverified.length) {
+    h += `<div class="font-semibold text-amber-700 mt-3 mb-1">❔ Couldn't check (${unverified.length})</div>`;
+    h += `<div class="text-gray-500 text-xs mb-1">Breezeway didn't return these, so we can't tell whether they changed. `
+       + `They're left on the route — hit ↻ Recheck to try again.</div>`;
+    for (const r of unverified) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}${_bwCalLinkHtml(r.property_id, r.property)}</div>`;
+  }
   if (moved.length) {
     h += `<div class="font-semibold text-blue-700 mt-3 mb-1">🕑 Time changed (${moved.length})</div>`;
     for (const m of moved) {

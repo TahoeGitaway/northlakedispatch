@@ -1706,12 +1706,19 @@ def route_discrepancies():
     all_tasks = []
     failed_props = 0
     failure_statuses: dict = {}
+    # WHICH properties failed, not just how many. "Removed" below is inferred from
+    # the ABSENCE of a task — so a throttled house looks exactly like one taken off
+    # the list, and the UI would offer to delete a stop that is still assigned.
+    unverified_pids: set = set()
+    _sweep_keys = list(pid_candidates.keys())
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, ok, status in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
-                                 list(pid_candidates.keys())):
+        for ref_id, (tasks, ok, status) in zip(
+                _sweep_keys,
+                ex.map(lambda ref: _robust_property_tasks(token, ref, date_str), _sweep_keys)):
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
+                unverified_pids.add(str(pid_candidates.get(ref_id)))
                 k = _failure_key(status)
                 failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
@@ -1800,9 +1807,24 @@ def route_discrepancies():
                           "history": _task_history_summary(t)})
 
     # REMOVED — a saved-route house with no task for this person today.
-    removed = [{"property": info["name"],
-                "property_id": int(canon[4:]) if canon.startswith("pid:") and canon[4:].isdigit() else None}
-               for canon, info in route_by_canon.items() if canon not in tasks_by_canon]
+    # A house whose fetch FAILED also has no task here, and proposing to delete a
+    # stop because we couldn't read it would be acting on missing data. Hold those
+    # back as "unverified" so the remove action only ever covers houses we actually
+    # checked.
+    def _pid_of(canon):
+        return canon[4:] if canon.startswith("pid:") else None
+
+    removed, unverified = [], []
+    for canon, info in route_by_canon.items():
+        if canon in tasks_by_canon:
+            continue
+        pid = _pid_of(canon)
+        entry = {"property": info["name"],
+                 "property_id": int(pid) if pid and pid.isdigit() else None}
+        if pid is not None and pid in unverified_pids:
+            unverified.append(entry)     # couldn't check — never propose removing it
+        else:
+            removed.append(entry)
 
     # NEW CHECK-IN — a house already ON the route that became a same-day arrival since the
     # route was saved (the case the old name-only check silently missed). Added houses that
@@ -1858,6 +1880,10 @@ def route_discrepancies():
         "route_id": route_id, "assignee": assignee, "date": date_str,
         "added":       sorted(added,       key=lambda x: x["property"].lower()),
         "removed":     sorted(removed,     key=lambda x: x["property"].lower()),
+        # Stops we could NOT check because their fetch was throttled/errored. They
+        # are deliberately NOT in `removed` — proposing a deletion off missing data
+        # would drop a stop that is still assigned.
+        "unverified":  sorted(unverified,  key=lambda x: x["property"].lower()),
         "moved":       sorted(moved,       key=lambda x: x["property"].lower()),
         "new_checkin": sorted(new_checkin, key=lambda x: x["property"].lower()),
         "current_tasks": current_tasks,
@@ -1865,6 +1891,7 @@ def route_discrepancies():
         "failed_properties": failed_props,
         "failure_statuses": failure_statuses,
         "summary": {"added": len(added), "removed": len(removed),
+                    "unverified": len(unverified),
                     "moved": len(moved), "new_checkin": len(new_checkin)},
     }
     # Cache before returning so the result survives even if the gateway already timed
