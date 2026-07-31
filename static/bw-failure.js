@@ -26,12 +26,14 @@
     '404':     { label: 'Breezeway did not recognise the property id (HTTP 404)',  short: 'HTTP 404 — unknown id',     retry: false },
     '400':     { label: 'Breezeway rejected the query as malformed (HTTP 400)',    short: 'HTTP 400 — bad query',      retry: false },
     'timeout': { label: 'Breezeway did not respond within 15 s',                   short: 'no response (timeout)',     retry: true  },
-    // 598 is ours, not Breezeway's: the app's own rate limiter declined to send
-    // rather than pile onto an API that was already refusing us. Naming it
-    // separately matters — reporting it as "Breezeway rate-limited us" would
-    // blame the vendor for our own back-pressure.
-    '598':     { label: "held back by this app's rate limiter — not sent to Breezeway",
-                 short: 'held back locally', retry: true },
+    // 598 is OURS, not Breezeway's: the app's own limiter declined to send rather
+    // than pile onto an API already refusing us. It is not a real status — the
+    // number only exists so existing "retry anything >= 500" logic keeps working.
+    // Never print it: 598 is informally used elsewhere for "network read timeout",
+    // which is close to the opposite of what it means here, so showing it misleads
+    // anyone who recognises it.
+    '598':     { label: "held back by this app to avoid piling on",
+                 short: 'held back by the app', retry: true, noCode: true },
   };
 
   function info(code) {
@@ -65,8 +67,13 @@
     if (entries.length === 1 || topN === n) {
       return { text: '⚠ ' + n + ' ' + noun + " couldn't be loaded — " + info(topCode).label, retry: retry };
     }
+    // Describe each cause in words. Printing "3×HTTP 598" invents a status code
+    // Breezeway never sent — that number is ours and means we didn't ask at all.
     var breakdown = entries.map(function (e) {
-      return e[1] + '×' + (e[0] === 'timeout' ? 'timeout' : 'HTTP ' + e[0]);
+      var i = info(e[0]);
+      if (e[0] === 'timeout') return e[1] + ' timed out';
+      if (i.noCode)           return e[1] + ' held back by this app';
+      return e[1] + ' refused (HTTP ' + e[0] + ')';
     }).join(', ');
     return {
       text: '⚠ ' + n + ' ' + noun + " couldn't be loaded from Breezeway (" + breakdown + '). Mostly: ' + info(topCode).label,
@@ -84,7 +91,12 @@
     var topN  = entries[0][1];
     var text  = entries.length === 1 || topN === d.failed_properties
       ? info(entries[0][0]).short
-      : entries.map(function (e) { return e[1] + '×' + (e[0] === 'timeout' ? 'timeout' : e[0]); }).join(', ');
+      : entries.map(function (e) {
+          var i = info(e[0]);
+          if (e[0] === 'timeout') return e[1] + ' timed out';
+          if (i.noCode)           return e[1] + ' held back';
+          return e[1] + ' × HTTP ' + e[0];
+        }).join(', ');
     return { text: text, retry: retry };
   }
 
