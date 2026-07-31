@@ -916,10 +916,19 @@ async function bwRetryMissingImport(btn) {
     }
     if (data.error) { _bwImportMsg(data.error, "red"); return; }
 
-    // Add any stops the retry recovered, without disturbing what's already there.
+    // Add ONLY the stops this retry actually recovered.
+    //
+    // data.matched is the full merged list, not just the new houses — so adding
+    // anything "not currently in selectedStops" silently resurrected stops the
+    // user had deliberately deleted. _bwTasksByPropName holds every property the
+    // previous pass already knew about, so anything in there is not new.
+    const knownBefore = new Set(Object.keys(_bwTasksByPropName || {}));
     let added = 0;
     for (const p of (data.matched || [])) {
-      if (!selectedStops.find(s => s.name === p.name)) { selectedStops.push(p); added++; }
+      if (knownBefore.has(p.name)) continue;                       // not new — leave it alone
+      if (selectedStops.find(s => s.name === p.name)) continue;    // already on the route
+      selectedStops.push(p);
+      added++;
     }
     if (added) {
       _bwPlaceMarkers();
