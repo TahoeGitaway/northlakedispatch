@@ -1264,6 +1264,10 @@ def routes_for_date():
 import time as _dt_time
 _route_disc_cache: dict[int, dict] = {}   # route_id -> {"ts": float, "data": dict}
 _ROUTE_DISC_TTL = 120
+# Tasks collected so far + the refs that failed, so "try the missing N again" can
+# refetch only those instead of re-running the whole ~442-call sweep.
+_route_disc_partial: dict = {}            # route_id -> (ts, tasks, failed_refs)
+_ROUTE_DISC_RETRY_WINDOW = 900            # 15 min, then a retry sweeps everything
 
 # One day's raw Breezeway tasks, keyed by date and shared across imports.
 # date_str -> (ts, all_results, failed_props, failure_statuses)
@@ -1657,7 +1661,11 @@ def route_discrepancies():
     # (force=1). This both absorbs the every-reopen refetches and rescues a request the
     # gateway already 503'd: the prior call finished server-side and cached the result.
     force = request.args.get("force") in ("1", "true", "yes")
-    if not force:
+    # "Try the missing N again" — refetch ONLY the properties that failed last time
+    # and merge them in, rather than re-running all ~442 calls to recover a handful.
+    # Those hundreds of extra requests are what provokes the throttling being retried.
+    retry_failed = request.args.get("retry_failed") in ("1", "true", "yes")
+    if not force and not retry_failed:
         hit = _route_disc_cache.get(route_id)
         if hit and _dt_time.time() - hit["ts"] < _ROUTE_DISC_TTL:
             return jsonify({**hit["data"], "cached": True})
@@ -1730,14 +1738,24 @@ def route_discrepancies():
     # Per-property fetch with retry/backoff (shared helper) so a throttled house
     # isn't silently dropped — same fix as the import. Count genuine failures so the
     # sidebar can warn instead of quietly showing fewer tasks than really exist.
-    all_tasks = []
+    # Retry just the gaps when asked: reuse the tasks already collected and refetch
+    # only the refs that failed. Falls back to a full sweep when there's nothing
+    # held, or the held copy is too old.
+    _partial = _route_disc_partial.get(route_id)
+    _seed_tasks, _sweep_keys = [], list(pid_candidates.keys())
+    if retry_failed and _partial and _dt_time.time() - _partial[0] < _ROUTE_DISC_RETRY_WINDOW:
+        _retry = [r for r in _partial[2] if r in pid_candidates]
+        if _retry:
+            _seed_tasks, _sweep_keys = list(_partial[1]), _retry
+
+    all_tasks = list(_seed_tasks)
     failed_props = 0
     failure_statuses: dict = {}
     # WHICH properties failed, not just how many. "Removed" below is inferred from
     # the ABSENCE of a task — so a throttled house looks exactly like one taken off
     # the list, and the UI would offer to delete a stop that is still assigned.
     unverified_pids: set = set()
-    _sweep_keys = list(pid_candidates.keys())
+    failed_refs: list = []
     with ThreadPoolExecutor(max_workers=16) as ex:
         for ref_id, (tasks, ok, status) in zip(
                 _sweep_keys,
@@ -1745,9 +1763,16 @@ def route_discrepancies():
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
+                failed_refs.append(ref_id)
                 unverified_pids.add(str(pid_candidates.get(ref_id)))
                 k = _failure_key(status)
                 failure_statuses[k] = failure_statuses.get(k, 0) + 1
+
+    # Hold what loaded plus what failed, so the next click can retry only the gaps.
+    if failed_props:
+        _route_disc_partial[route_id] = (_dt_time.time(), all_tasks, failed_refs)
+    else:
+        _route_disc_partial.pop(route_id, None)
 
     asgn_lower = assignee.lower()
     seen_ids, mine = set(), []

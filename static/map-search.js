@@ -1479,13 +1479,15 @@ function _appendRouteChanges(content) {
   if (!_routeChangesUiState.collapsed) paintBody();
 }
 
-function _renderRouteChangesInto(routeId, body, force) {
+function _renderRouteChangesInto(routeId, body, force, retryFailed) {
   // Re-render from cached DATA (not a frozen html string) so the panel reflects
   // the CURRENT list each time — manual or applied fixes clear resolved changes.
-  if (_routeChangesCache.routeId === routeId && _routeChangesCache.data) {
+  // A retry must always go to the server, or it would just repaint the same gaps.
+  if (!retryFailed && _routeChangesCache.routeId === routeId && _routeChangesCache.data) {
     body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
     return;
   }
+  if (retryFailed) _invalidateRouteChanges();
   body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
   if (_routeChangesInflight.routeId !== routeId || !_routeChangesInflight.promise) {
     _routeChangesInflight = {
@@ -1495,7 +1497,9 @@ function _renderRouteChangesInto(routeId, body, force) {
       // Recheck only) tells the server to skip ITS short-lived result cache; passive
       // reopens omit it so they ride the cache and don't re-run the heavy all-houses
       // scan (which is what was timing out at the gateway → HTTP 503).
-      promise: fetch(`/api/route-discrepancies?route_id=${routeId}${force ? "&force=1" : ""}`, { cache: "no-store" })
+      promise: fetch(`/api/route-discrepancies?route_id=${routeId}`
+                     + (force ? "&force=1" : "")
+                     + (retryFailed ? "&retry_failed=1" : ""), { cache: "no-store" })
         .then(r => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
@@ -1515,6 +1519,15 @@ function _renderRouteChangesInto(routeId, body, force) {
     }
     const html = _renderChangesHtml(data);
     body.innerHTML = html;
+    // Wire the "load just the missing N" button — refetches only the failed houses.
+    const retryBtn = body.querySelector("[data-retry-missing]");
+    if (retryBtn) {
+      retryBtn.addEventListener("click", () => {
+        retryBtn.disabled = true;
+        retryBtn.textContent = "Loading the missing ones…";
+        _renderRouteChangesInto(routeId, body, false, true);
+      });
+    }
     _routeChangesCache = { routeId, html, data };
     _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
     // Remember each house's Breezeway property_id from the live scan so the saved-route
@@ -1620,7 +1633,14 @@ function _renderChangesHtml(d) {
     h += `<div class="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-snug">`
        + `${f.text} — some tasks may be missing.`
        + (f.retry
-            ? ` Click ↻ Recheck to retry.`
+            // Name the button and say what it does. "Click ↻ Recheck" sent people to
+            // a full re-scan of all 442 houses, which usually just failed again.
+            ? `<br><button data-retry-missing="${d.failed_properties}"`
+              + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:#b45309;`
+              + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
+              + `👉 Click here to load just the missing ${d.failed_properties}</button>`
+              + `<div class="text-gray-500 mt-1">Only re-checks the ones that failed — much faster, and far less likely`
+              + ` to be throttled again. (↻ Recheck at the top re-scans all ${d.scanned_properties || "the"} properties.)</div>`
             : ` Rechecking won't help; this needs a fix in Breezeway or the app's configuration.`)
        + `</div>`;
   }
