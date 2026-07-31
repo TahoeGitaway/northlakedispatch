@@ -83,15 +83,18 @@ function bwSyncTimes() {
       const s  = data.summary || {};
       let html = `<div class="font-semibold mb-1">`;
       html += `${s.updated || 0} updated &nbsp;·&nbsp; ${s.skipped || 0} skipped`;
-      if (s.failed) html += ` &nbsp;·&nbsp; <span class="text-red-600">${s.failed} failed</span>`;
+      if (s.failed)    html += ` &nbsp;·&nbsp; <span class="text-red-600">${s.failed} failed</span>`;
+      if (s.unmatched) html += ` &nbsp;·&nbsp; <span class="text-red-600">${s.unmatched} name not found in Breezeway</span>`;
       html += `</div>`;
 
       for (const r of (data.results || [])) {
+        const bad   = r.status === "failed" || r.status === "unmatched" || r.status === "partial";
         const color = r.status === "updated" ? "text-green-700"
-                    : r.status === "failed"  ? "text-red-600"
+                    : bad                    ? "text-red-600"
                     : "text-gray-500";
-        const icon  = r.status === "updated" ? "&#10003;"
-                    : r.status === "failed"  ? "&#10007;"
+        const icon  = r.status === "updated"   ? "&#10003;"
+                    : r.status === "unmatched" ? "&#9888;"
+                    : bad                      ? "&#10007;"
                     : "&ndash;";
         html += `<div class="${color} text-xs leading-snug mb-1">`;
         html += `${icon} <b>${r.name}</b>`;

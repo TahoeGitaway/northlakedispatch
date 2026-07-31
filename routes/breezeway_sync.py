@@ -254,8 +254,14 @@ def bw_sync_times():
         # Step 1: find Breezeway property id for this local name
         bw_pid = _find_bw_property_id(name, prop_cache)
         if bw_pid is None:
-            results.append({"name": name, "status": "skipped",
-                            "reason": "no matching Breezeway property"})
+            # NOT a benign skip: this stop's name doesn't match any Breezeway
+            # property, so its time can never be written until the name is fixed.
+            # Reported as "skipped" it counted as success and the page navigated
+            # away, hiding a data problem only a human can resolve.
+            results.append({"name": name, "status": "unmatched",
+                            "time": start_time,
+                            "reason": "no Breezeway property matches this name — "
+                                      "check the spelling against Breezeway"})
             continue
 
         ref_id = ref_cache.get(bw_pid) or str(bw_pid)
@@ -305,21 +311,25 @@ def bw_sync_times():
             "linked_reso": first_linked_reso,
         })
 
-    updated = sum(1 for r in results if r["status"] == "updated")
-    skipped = sum(1 for r in results if r["status"] == "skipped")
-    failed  = sum(1 for r in results if r["status"] == "failed")
-    partial = sum(1 for r in results if r["status"] == "partial")
+    updated   = sum(1 for r in results if r["status"] == "updated")
+    skipped   = sum(1 for r in results if r["status"] == "skipped")
+    failed    = sum(1 for r in results if r["status"] == "failed")
+    partial   = sum(1 for r in results if r["status"] == "partial")
+    unmatched = sum(1 for r in results if r["status"] == "unmatched")
 
-    # Anything that did NOT get its time written, so the UI can be loud about it.
-    # A sync that silently applied nothing is the failure mode being fixed here.
+    # Anything that did NOT get its time written and NEEDS a human. A throttled
+    # lookup can be retried; a name that matches no Breezeway property cannot —
+    # someone has to fix it. Both leave the stop without a time, so both belong
+    # here. "no tasks that day" is genuinely benign and stays out.
     not_applied = [
         {"name": r["name"], "status": r["status"], "reason": r.get("reason") or ""}
-        for r in results if r["status"] in ("failed", "partial")
+        for r in results if r["status"] in ("failed", "partial", "unmatched")
     ]
     return jsonify({
         "results": results,
         "summary": {"updated": updated, "skipped": skipped,
-                    "failed": failed, "partial": partial},
+                    "failed": failed, "partial": partial,
+                    "unmatched": unmatched},
         "not_applied": not_applied,
         "all_applied": not not_applied,
         "diagnostics": {
