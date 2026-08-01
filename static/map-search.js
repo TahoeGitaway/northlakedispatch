@@ -1482,13 +1482,26 @@ function _appendRouteChanges(content) {
     staleB.classList.toggle("hidden", !st.stale);
     body.style.display = st.collapsed ? "none" : "";
   };
-  // Body: a Stale notice once changes have been applied, else the live change render.
+  // Body: a Stale notice once changes have been applied, else the change render.
+  //
+  // This check sweeps EVERY property (~442 Breezeway calls), and it used to run
+  // automatically whenever the panel rendered — so simply opening a route spent
+  // the rate-limit budget whether or not anyone wanted the answer. It now waits
+  // to be asked. An existing result for this route still shows without refetching.
   const paintBody = () => {
     if (_routeChangesUiState.stale) {
       body.innerHTML = `<span class="text-amber-700">Stale — changes applied. Click ↻ Recheck to refresh against Breezeway.</span>`;
       return;
     }
-    _renderRouteChangesInto(rid, body);
+    if (_routeChangesCache.routeId === rid && _routeChangesCache.data) {
+      body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+      return;
+    }
+    body.innerHTML =
+      `<button data-check-changes class="text-indigo-600 hover:text-indigo-800 font-semibold underline">`
+      + `Check for changes vs Breezeway</button>`
+      + `<div class="text-gray-400 mt-1 leading-snug">Not checked yet. This looks up every property,`
+      + ` so it only runs when you ask for it.</div>`;
   };
 
   box.querySelector("[data-toggle]").addEventListener("click", () => {
@@ -1517,14 +1530,31 @@ function _appendRouteChanges(content) {
 // stayed on screen and did nothing. Delegating from the document survives every
 // re-render.
 document.addEventListener("click", function (ev) {
-  const btn = ev.target && ev.target.closest && ev.target.closest("[data-retry-missing]");
-  if (!btn || btn.disabled) return;
-  const body = btn.closest("[data-body]");
-  if (!body || !currentRouteId) return;
-  ev.preventDefault();
-  btn.disabled = true;
-  btn.textContent = "Loading the missing ones…";
-  _renderRouteChangesInto(currentRouteId, body, false, true);
+  const t = ev.target;
+  if (!t || !t.closest) return;
+
+  const retry = t.closest("[data-retry-missing]");
+  if (retry && !retry.disabled) {
+    const body = retry.closest("[data-body]");
+    if (!body || !currentRouteId) return;
+    ev.preventDefault();
+    retry.disabled = true;
+    retry.textContent = "Loading the missing ones…";
+    _renderRouteChangesInto(currentRouteId, body, false, true);
+    return;
+  }
+
+  // Explicit "check now" — the sweep no longer runs just because the panel opened.
+  const check = t.closest("[data-check-changes]");
+  if (check && !check.disabled) {
+    const body = check.closest("[data-body]");
+    if (!body || !currentRouteId) return;
+    ev.preventDefault();
+    check.disabled = true;
+    check.textContent = "Checking…";
+    _renderRouteChangesInto(currentRouteId, body);
+    return;
+  }
 });
 
 function _renderRouteChangesInto(routeId, body, force, retryFailed) {
