@@ -1736,7 +1736,13 @@ function _renderChangesHtml(d) {
     h += `<div class="text-green-600 mb-1">✓ No changes — the list matches the saved route.</div>`;
   }
   if (added.length) {
-    h += `<div class="font-semibold text-red-700 mb-1">➕ Added to list (${added.length})</div>`;
+    // "Added to list" claimed these were NEW since the route was saved. The check
+    // can't actually tell that: it reports any task in Breezeway that isn't on the
+    // route, so a task that was always there but whose property failed to load on
+    // an earlier throttled check shows up here the first time it loads cleanly.
+    // "Additional tasks" states what's true — they're on Breezeway and not on the
+    // route — without asserting when they got there.
+    h += `<div class="font-semibold text-red-700 mb-1">➕ Additional tasks (${added.length})</div>`;
     // Group by property so it reads like the stop list above: house header + bulleted tasks.
     const byProp = {};
     for (const a of added) (byProp[a.property] = byProp[a.property] || []).push(a);
