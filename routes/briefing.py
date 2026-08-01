@@ -1087,71 +1087,129 @@ def _shape_day_summary(checkins: list, checkouts: list) -> tuple:
     return arrivals, departures
 
 
-def refresh_day_summaries(days: int = 8) -> dict:
+# Dates the snapshot job could not write. Kept so the retry job knows what still
+# needs doing — a date left unwritten falls through to a LIVE Breezeway fetch on
+# every day-click for the rest of the day, which is the expensive behaviour this
+# job exists to remove. Giving up after one failed attempt would leave exactly that.
+_day_summary_pending: set = set()
+
+
+def _dates_with_snapshots(dates: list) -> set:
+    """Which of `dates` already have a stored snapshot. One cheap SQL query, no API
+    calls — safe to run often."""
+    from db import get_db, get_cursor
+    if not dates:
+        return set()
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            cur.execute(
+                "SELECT route_date FROM saved_day_summaries WHERE route_date = ANY(%s)",
+                (list(dates),))
+            return {r["route_date"] for r in cur.fetchall()}
+        finally:
+            cur.close(); conn.rollback(); conn.close()
+    except Exception:
+        return set()
+
+
+def _write_day_summary(date_str: str, arrivals: dict, departures: dict) -> None:
+    from db import get_db, get_cursor
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("""
+            INSERT INTO saved_day_summaries
+                   (route_date, arrivals, departures, saved_by, saved_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (route_date) DO UPDATE
+              SET arrivals   = EXCLUDED.arrivals,
+                  departures = EXCLUDED.departures,
+                  saved_by   = EXCLUDED.saved_by,
+                  saved_at   = EXCLUDED.saved_at
+        """, (date_str, json.dumps(arrivals), json.dumps(departures),
+              None, _fmt_pacific(time.time())))
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    _day_summary_cache.pop(date_str, None)   # next read comes from the DB
+
+
+def refresh_day_summaries(days: int = 8, only_missing: bool = False,
+                          attempts: int = 3) -> dict:
     """Build and store arrivals/departures snapshots for today and the next `days`.
 
-    Runs once overnight so the Saved Routes page reads a stored snapshot all day
-    instead of asking Breezeway on every day-click. Two requests per date is small
-    next to the property sweeps, but during a throttled window they fail — and a
-    failed reservations fetch returns EMPTY, which renders as "None" and is
-    indistinguishable from a day with no arrivals. Doing this at 6am, when nothing
-    competes, avoids that entirely.
+    The Saved Routes page prefers a stored snapshot and skips Breezeway entirely
+    when one exists, so filling this table is what keeps day-clicks off the API.
+    A date left unwritten does the opposite: it hits Breezeway live on every click
+    for the rest of the day.
 
-    Only writes a snapshot the fetch actually succeeded for. Persisting an empty
-    result from a throttled call would pin "None" for the whole day — the same
-    failure, made permanent.
+    only_missing=True does just the dates with no snapshot yet (plus anything a
+    previous run failed on), so the retry job costs one SQL query and zero API
+    calls once everything is covered.
 
-    Returns a per-date summary for logging. Never raises: a scheduled job that
-    throws would kill the scheduler thread."""
-    from db import get_db, get_cursor
+    Never stores a snapshot whose fetch errored or came back partial — persisting
+    an empty result would pin "None" for the whole day, the same bug made
+    permanent. Those dates go to _day_summary_pending for the retry job.
 
-    out = {"saved": [], "skipped": [], "errors": []}
+    Never raises: a scheduled job that throws kills the scheduler thread."""
+    out = {"saved": [], "skipped": [], "errors": [], "pending": []}
+    today   = date_cls.today()
+    targets = [(today + timedelta(days=i)).isoformat() for i in range(days)]
+
+    if only_missing:
+        have    = _dates_with_snapshots(targets)
+        targets = [d for d in targets if d not in have or d in _day_summary_pending]
+        if not targets:
+            return out                      # everything covered — no API calls at all
+
     token = _get_breezeway_token()
     if not token:
+        # Don't clear pending: without a token nothing was attempted, so the next
+        # run must still try these.
+        _day_summary_pending.update(targets)
         out["errors"].append(f"no Breezeway token: {_get_bw_token_last_error()}")
+        out["pending"] = sorted(_day_summary_pending)
         return out
 
-    today = date_cls.today()
-    for i in range(days):
-        d = (today + timedelta(days=i)).isoformat()
-        try:
-            checkins  = _fetch_bw_reservations(token, {
-                "checkin_date_ge": d, "checkin_date_le": d})
-            err_in    = _get_bw_resv_last_error()
-            checkouts = _fetch_bw_reservations(token, {
-                "checkout_date_ge": d, "checkout_date_le": d})
-            err_out   = _get_bw_resv_last_error()
-
-            # A partial or failed pull must not become the day's stored answer.
-            if err_in or err_out:
-                out["skipped"].append(f"{d}: fetch incomplete ({err_in or err_out})")
-                continue
-
-            arrivals, departures = _shape_day_summary(checkins, checkouts)
-
-            conn = get_db(); cur = get_cursor(conn)
+    for d in targets:
+        wrote = False
+        for attempt in range(max(1, attempts)):
             try:
-                cur.execute("""
-                    INSERT INTO saved_day_summaries
-                           (route_date, arrivals, departures, saved_by, saved_at)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (route_date) DO UPDATE
-                      SET arrivals   = EXCLUDED.arrivals,
-                          departures = EXCLUDED.departures,
-                          saved_by   = EXCLUDED.saved_by,
-                          saved_at   = EXCLUDED.saved_at
-                """, (d, json.dumps(arrivals), json.dumps(departures),
-                      None, _fmt_pacific(time.time())))
-                conn.commit()
-            finally:
-                cur.close(); conn.close()
+                checkins  = _fetch_bw_reservations(token, {
+                    "checkin_date_ge": d, "checkin_date_le": d})
+                err_in    = _get_bw_resv_last_error()
+                checkouts = _fetch_bw_reservations(token, {
+                    "checkout_date_ge": d, "checkout_date_le": d})
+                err_out   = _get_bw_resv_last_error()
 
-            _day_summary_cache.pop(d, None)   # next read comes from the DB
-            out["saved"].append(
-                f"{d}: {sum(len(v) for v in arrivals.values())} arrivals, "
-                f"{sum(len(v) for v in departures.values())} departures")
-        except Exception as ex:
-            out["errors"].append(f"{d}: {type(ex).__name__}: {ex}")
+                if err_in or err_out:
+                    # Throttled or partial — wait and try again rather than
+                    # abandoning the date to live fetches for the rest of the day.
+                    if attempt < attempts - 1:
+                        time.sleep(min(30.0, 5.0 * (attempt + 1)))
+                        continue
+                    out["skipped"].append(f"{d}: fetch incomplete ({err_in or err_out})")
+                    break
+
+                arrivals, departures = _shape_day_summary(checkins, checkouts)
+                _write_day_summary(d, arrivals, departures)
+                wrote = True
+                out["saved"].append(
+                    f"{d}: {sum(len(v) for v in arrivals.values())} arrivals, "
+                    f"{sum(len(v) for v in departures.values())} departures")
+                break
+            except Exception as ex:
+                if attempt < attempts - 1:
+                    time.sleep(min(30.0, 5.0 * (attempt + 1)))
+                    continue
+                out["errors"].append(f"{d}: {type(ex).__name__}: {ex}")
+
+        if wrote:
+            _day_summary_pending.discard(d)
+        else:
+            _day_summary_pending.add(d)      # the retry job will keep at it
+
+    out["pending"] = sorted(_day_summary_pending)
     return out
 
 

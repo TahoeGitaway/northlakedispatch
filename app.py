@@ -173,30 +173,58 @@ def _scheduled_asana_poll():
         except Exception:
             pass
 
+def _log_day_summary_run(tag, res):
+    app.logger.info("[day-summaries%s] saved=%d skipped=%d errors=%d pending=%d",
+                    tag, len(res.get("saved", [])), len(res.get("skipped", [])),
+                    len(res.get("errors", [])), len(res.get("pending", [])))
+    for line in res.get("skipped", []) + res.get("errors", []):
+        app.logger.warning("[day-summaries%s] %s", tag, line)
+
+
 def _scheduled_day_summaries():
     """Store arrivals/departures for the coming week, once, early.
 
     The Saved Routes page reads a stored snapshot before it will call Breezeway,
-    so filling that table overnight means day-clicks never hit the API — and a
-    reservations fetch, which returns EMPTY when it fails and renders as "None",
-    happens at 6am when nothing else is competing for the rate limit."""
+    so filling that table is what keeps day-clicks off the API. Running at 6am
+    means the fetch happens when nothing else competes for the rate limit."""
     with app.app_context():
         try:
             from routes.briefing import refresh_day_summaries
-            res = refresh_day_summaries(days=8)
-            app.logger.info("[day-summaries] saved=%d skipped=%d errors=%d",
-                            len(res.get("saved", [])), len(res.get("skipped", [])),
-                            len(res.get("errors", [])))
-            for line in res.get("skipped", []) + res.get("errors", []):
-                app.logger.warning("[day-summaries] %s", line)
+            _log_day_summary_run("", refresh_day_summaries(days=8))
         except Exception:
             app.logger.exception("[day-summaries] refresh failed")
+
+
+def _scheduled_day_summaries_retry():
+    """Keep after any date the morning run couldn't store.
+
+    An unwritten date is the expensive case: with no snapshot, every day-click
+    hits Breezeway live for the rest of the day. So retry through the morning
+    rather than giving up. Once every date is covered this costs one SQL query
+    and no API calls, so running it often is cheap."""
+    with app.app_context():
+        try:
+            from routes.briefing import refresh_day_summaries, _day_summary_pending
+            res = refresh_day_summaries(days=8, only_missing=True)
+            if res.get("saved") or res.get("pending"):
+                _log_day_summary_run(":retry", res)
+        except Exception:
+            app.logger.exception("[day-summaries:retry] failed")
+
 
 scheduler = BackgroundScheduler(timezone="America/Los_Angeles")
 scheduler.add_job(
     _scheduled_day_summaries,
     CronTrigger(hour=6, minute=0, timezone="America/Los_Angeles"),
     id="day_summaries_refresh",
+    replace_existing=True,
+)
+# Fills anything the 6am run missed. No-ops (one SQL query, zero API calls) once
+# every date is covered, so a frequent schedule costs nothing.
+scheduler.add_job(
+    _scheduled_day_summaries_retry,
+    CronTrigger(minute="*/20", hour="6-20", timezone="America/Los_Angeles"),
+    id="day_summaries_retry",
     replace_existing=True,
 )
 scheduler.add_job(
