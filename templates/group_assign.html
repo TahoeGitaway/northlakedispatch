@@ -397,6 +397,18 @@ function _taskRow(t, isCheckin) {
          style="font-size:0.85rem;font-weight:600;color:${titleColor};text-decoration:underline;text-decoration-color:#d1d5db;text-decoration-thickness:1px;text-underline-offset:2px;"
          onmouseover="this.style.textDecorationColor='#6b7280'" onmouseout="this.style.textDecorationColor='#d1d5db'">${esc(t.name)}</a>`
     : `<span style="font-size:0.85rem;font-weight:600;color:${titleColor};">${esc(t.name)}</span>`;
+  // Breezeway task tags, under the date. Muted chips so they read as reference
+  // detail rather than competing with the check-in / PCI / occupancy badges above.
+  const tagsHtml = (t.tags && t.tags.length)
+    ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;">`
+      + t.tags.map(tag =>
+          `<span title="Breezeway task tag"`
+          + ` style="display:inline-block;font-size:0.62rem;font-weight:600;padding:1px 6px;`
+          + `border-radius:99px;background:#f3f4f6;color:#4b5563;border:1px solid #e5e7eb;">`
+          + `${esc(tag)}</span>`).join('')
+      + `</div>`
+    : '';
+
   row.innerHTML = `
     <input type="checkbox" class="task-cb" data-tid="${t.task_id}" style="margin-top:3px;flex-shrink:0;width:16px;height:16px;cursor:pointer;">
     <div style="flex:1;min-width:0;">
@@ -406,6 +418,7 @@ function _taskRow(t, isCheckin) {
       </div>
       <div style="font-size:0.74rem;color:#6b7280;margin-top:3px;">${propLine}</div>
       <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px;">📅 ${esc(when)}</div>
+      ${tagsHtml}
     </div>`;
   // Purple left bar for a time/date-sensitive title. Set before the _assignFailed
   // block below so a failed task's red bar still overrides it. The row already has

@@ -72,6 +72,29 @@ def _is_blocked_assignee(name: str) -> bool:
     return any(t in _BLOCKED_ASSIGNEE_NAMES for t in toks)
 
 
+def _task_tag_names(task: dict) -> list:
+    """Display names of a task's tags, de-duplicated, original case preserved.
+
+    Breezeway puts them on either `task_tags` or `tags` depending on the endpoint,
+    and each entry is either {"id", "name"} or a bare string."""
+    out, seen = [], set()
+    for key in ("task_tags", "tags"):
+        for t in (task.get(key) or []):
+            name = ""
+            if isinstance(t, dict):
+                name = (t.get("name") or t.get("label") or t.get("title") or "").strip()
+            elif t is not None:
+                name = str(t).strip()
+            if not name:
+                continue
+            k = name.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(name)
+    return out
+
+
 def _diagnostics_blob(date_str: str, scanned: int, failed: int,
                       failure_statuses: dict, failure_samples: list) -> dict:
     """One copy-pasteable object with the context a developer actually needs.
@@ -478,6 +501,10 @@ def _scan_inner():
             "assignee_ids": [a.get("assignee_id") for a in (t.get("assignments") or [])
                              if a.get("assignee_id") is not None],
             "group":        group,
+            # Breezeway task tags, shown under the task. Display names, original
+            # case — _extract_str lowercases, which is right for matching and wrong
+            # for showing someone their own labels.
+            "tags":         _task_tag_names(t),
             # Who/what is in the house that day (strictly mid-stay)? Shown as a badge
             # on non-arrival tasks so it's clear the work happens during a stay.
             # occupancy_kind: guest | lease | owner | block | None (nobody).
