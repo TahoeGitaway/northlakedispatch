@@ -1135,7 +1135,7 @@ def _write_day_summary(date_str: str, arrivals: dict, departures: dict) -> None:
 
 
 def refresh_day_summaries(days: int = 8, only_missing: bool = False,
-                          attempts: int = 3) -> dict:
+                          attempts: int = 2) -> dict:
     """Build and store arrivals/departures snapshots for today and the next `days`.
 
     The Saved Routes page prefers a stored snapshot and skips Breezeway entirely
@@ -1183,10 +1183,12 @@ def refresh_day_summaries(days: int = 8, only_missing: bool = False,
                 err_out   = _get_bw_resv_last_error()
 
                 if err_in or err_out:
-                    # Throttled or partial — wait and try again rather than
-                    # abandoning the date to live fetches for the rest of the day.
+                    # Throttled or partial. One more try after a pause; beyond that
+                    # the date stays pending for a later scheduled catch-up rather
+                    # than hammering the same query now — Breezeway's limit resets
+                    # on the order of a minute, so retrying harder here won't help.
                     if attempt < attempts - 1:
-                        time.sleep(min(30.0, 5.0 * (attempt + 1)))
+                        time.sleep(10.0)
                         continue
                     out["skipped"].append(f"{d}: fetch incomplete ({err_in or err_out})")
                     break
@@ -1200,7 +1202,7 @@ def refresh_day_summaries(days: int = 8, only_missing: bool = False,
                 break
             except Exception as ex:
                 if attempt < attempts - 1:
-                    time.sleep(min(30.0, 5.0 * (attempt + 1)))
+                    time.sleep(10.0)
                     continue
                 out["errors"].append(f"{d}: {type(ex).__name__}: {ex}")
 

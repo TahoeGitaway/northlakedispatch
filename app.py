@@ -219,11 +219,12 @@ scheduler.add_job(
     id="day_summaries_refresh",
     replace_existing=True,
 )
-# Fills anything the 6am run missed. No-ops (one SQL query, zero API calls) once
-# every date is covered, so a frequent schedule costs nothing.
+# Catch-up for anything the 6am run missed. Three attempts, all before the working
+# day gets going — not a poll running all day. Each does nothing at all (one SQL
+# query, zero API calls) when every date is already covered, which is the norm.
 scheduler.add_job(
     _scheduled_day_summaries_retry,
-    CronTrigger(minute="*/20", hour="6-20", timezone="America/Los_Angeles"),
+    CronTrigger(hour="7,8,10", minute=0, timezone="America/Los_Angeles"),
     id="day_summaries_retry",
     replace_existing=True,
 )
