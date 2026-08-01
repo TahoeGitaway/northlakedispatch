@@ -808,6 +808,12 @@ async function runBwImport() {
         msg  += ` Not in your property DB (add ${unmatched.length !== 1 ? "them" : "it"} there first): ${unmatched.join(", ")}.`;
         color = added > 0 ? "amber" : "red";
       }
+      // A partial import must still set up the route exactly like a clean one.
+      // This used to `return` early when any property failed, which skipped the
+      // three lines below — so the route DATE was never filled in, optimize then
+      // defaulted it to TODAY, and a route planned for another day got saved and
+      // synced to the wrong date. Failures change the message, nothing else.
+      let retryCount = 0;
       if (data.failed_properties) {
         const f = bwFailureCause(data);
         // Offer to retry just the ones that failed. A full re-import spends ~442
@@ -816,13 +822,10 @@ async function runBwImport() {
         _bwLastImport = {date, assignee: assignees[0] || "", failed: data.failed_properties};
         msg  += ` ${f.text}.`;
         color = "amber";
-        _bwImportMsg(msg, color);
-        if (f.retry) _bwAddRetryMissingBtn(data.failed_properties);
-        _bwShowTaskSidebar(date, data.matched || []);
-        _bwRenderUncertain(date, uncertain);
-        return;
+        if (f.retry) retryCount = data.failed_properties;
       }
       _bwImportMsg(msg, color);
+      if (retryCount) _bwAddRetryMissingBtn(retryCount);   // must follow _bwImportMsg — it appends
       _bwShowTaskSidebar(date, data.matched || []);
       _bwRenderUncertain(date, uncertain);
       _bwPlaceMarkers();

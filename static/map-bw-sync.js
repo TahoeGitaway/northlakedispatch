@@ -78,7 +78,17 @@ function bwSyncTimes() {
         notApplied:  data.not_applied || [],
         summary:     data.summary || {},
         diagnostics: data.diagnostics || null,
+        wrongDay:    !!data.wrong_day_suspected,
+        wrongDayMsg: data.wrong_day_message || "",
       };
+
+      // Nothing written and every stop had no task that day — almost always the
+      // wrong date. Interrupt rather than let it read as a quiet success.
+      if (data.wrong_day_suspected) {
+        alert("⚠ Nothing was synced.\n\n" + data.wrong_day_message
+              + "\n\nThe route's date is what gets synced — check it matches the day "
+              + "you're planning before trying again.");
+      }
 
       const s  = data.summary || {};
       let html = `<div class="font-semibold mb-1">`;

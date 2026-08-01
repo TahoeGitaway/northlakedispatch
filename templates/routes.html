@@ -1114,7 +1114,15 @@ function selectDay(ds) {
     if (route.total_duration) metaHtml += `<span>⏱ ${(route.total_duration/3600).toFixed(1)} hrs</span>`;
     if (route.distance)       metaHtml += `<span>🛣 ${(route.distance/1609).toFixed(1)} mi</span>`;
     if (route.updated_at && route.updated_at !== route.created_at) {
-      const ts = new Date(route.updated_at).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/Los_Angeles"});
+      // The backend writes datetime.utcnow().isoformat() — UTC, but with NO offset
+      // suffix. JS parses an offset-less date-time as LOCAL time, so the value was
+      // read as 8:48 PM Pacific when it meant 8:48 PM UTC (= 1:48 PM PT), and the
+      // timeZone option below then had nothing left to convert. Tag it as UTC first,
+      // and only when it isn't already tagged, so this keeps working if the backend
+      // ever starts emitting a real offset. Same fix as vip.html.
+      const _utc = /[zZ]|[+\-]\d\d:?\d\d$/.test(route.updated_at)
+        ? route.updated_at : route.updated_at + "Z";
+      const ts = new Date(_utc).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/Los_Angeles"});
       const editor = route.last_edited_by_name || "unknown";
       metaHtml += `<span class="text-amber-600">edited ${ts} PT by ${editor}</span>`;
     }

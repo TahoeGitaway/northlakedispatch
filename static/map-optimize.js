@@ -300,6 +300,11 @@ function _watchBwSync() {
       _showBwSyncBanner("warn", "Sync result unconfirmed — re-run it to check. Staying on this route.");
       return;
     }
+    if (outcome && outcome.wrongDay) {
+      _showBwSyncBanner("error",
+        "Nothing synced — no stop has a task on that date. Check the route's date.");
+      return;                                     // stay put
+    }
     if (outcome && outcome.allApplied === false) {
       const n     = (outcome.notApplied || []).length;
       const names = (outcome.notApplied || []).slice(0, 3).map(x => x.name).join(", ");

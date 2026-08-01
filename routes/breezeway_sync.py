@@ -325,13 +325,26 @@ def bw_sync_times():
         {"name": r["name"], "status": r["status"], "reason": r.get("reason") or ""}
         for r in results if r["status"] in ("failed", "partial", "unmatched")
     ]
+
+    # NOTHING was written and every stop came back "this property has no task for
+    # that person on that day" — that is what syncing to the WRONG DATE looks like.
+    # It was reported as a clean run of harmless skips, so a route planned for one
+    # day could be synced to another with no warning at all. Say it plainly.
+    wrong_day = bool(results) and updated == 0 and partial == 0 and skipped == len(results)
     return jsonify({
         "results": results,
         "summary": {"updated": updated, "skipped": skipped,
                     "failed": failed, "partial": partial,
                     "unmatched": unmatched},
         "not_applied": not_applied,
-        "all_applied": not not_applied,
+        "wrong_day_suspected": wrong_day,
+        "wrong_day_message": (
+            f"No times were written. None of the {len(results)} stops has a task for "
+            f"{assignee_raw or 'this person'} on {date_str} — check the date is right "
+            f"before syncing again." if wrong_day else ""),
+        # A run that wrote nothing must never count as applied, or the page navigates
+        # away as though it worked.
+        "all_applied": (not not_applied) and not wrong_day,
         "diagnostics": {
             "date": date_str,
             "stops_submitted": len(stops),
