@@ -111,10 +111,15 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str,
     # attempts, alternate param shapes only on the first pass, and a hard deadline
     # shared across the sync so it always returns something.
     last_detail = "no response"
+    # ONE query shape, and it's the documented one. The old fallbacks used
+    # start_date/end_date and date, none of which exist in Breezeway's task API
+    # (the real filters are scheduled_date, created_at, finished_at, updated_at).
+    # An API that ignores unknown parameters answers those with the property's
+    # ENTIRE task list, every date — and this endpoint then PATCHes each one to the
+    # route's time. That is how a sync retimed a housekeeper's task on a different
+    # day. Never guess at filters on a write path.
     shapes = [
         {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"},
-        {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str},
-        {"reference_property_id": ref_id, "date": date_str},
     ]
     for attempt in range(2):
         if deadline and time.monotonic() > deadline:
@@ -213,6 +218,20 @@ def bw_sync_times():
         return jsonify({"error": "date is required"}), 400
     if not stops:
         return jsonify({"error": "no stops provided"}), 400
+    # HARD REFUSAL. Without a name the per-assignee filter below was skipped, so the
+    # sync rewrote EVERY task at each property that day — other people's included.
+    # It happened: a route synced with an empty assignee retimed a second cleaner's
+    # tasks and a housekeeper's on an unrelated day. There is no valid reason to
+    # write times for "whoever happens to be at this property", so refuse outright
+    # rather than treating a missing name as "no filter".
+    if not assignee_raw:
+        return jsonify({
+            "error": "No employee is set on this route, so there's no way to tell "
+                     "whose tasks to update. Set the employee before syncing — "
+                     "syncing without one would change other people's task times.",
+            "diagnostics": {"stage": "assignee_required", "date": date_str,
+                            "stops": len(stops)},
+        }), 400
 
     token = _get_token()
     if not token:
@@ -282,9 +301,17 @@ def bw_sync_times():
                             "reason": "no tasks found for this property on that date"})
             continue
 
-        # Step 2b: if an assignee was specified, only touch their tasks
-        if assignee_lower:
-            tasks = [t for t in tasks if _task_matches_assignee(t, assignee_lower)]
+        # Step 2a: STRICT date guard. Never trust the query to have filtered — every
+        # other module that reads tasks re-checks scheduled_date, and this one, the
+        # only module that WRITES, did not. A task on any other day is dropped here
+        # no matter what the API returned.
+        off_day = [t for t in tasks if (t.get("scheduled_date") or "")[:10] != date_str]
+        if off_day:
+            tasks = [t for t in tasks if (t.get("scheduled_date") or "")[:10] == date_str]
+        # Step 2b: ONLY this person's tasks. assignee_lower is guaranteed non-empty
+        # by the guard at the top of the endpoint — an unfiltered sync would rewrite
+        # every task at the property, including other people's.
+        tasks = [t for t in tasks if _task_matches_assignee(t, assignee_lower)]
         if not tasks:
             results.append({"name": name, "status": "skipped",
                             "reason": f"no tasks assigned to '{assignee_raw}' on that date"})
