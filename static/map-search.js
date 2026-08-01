@@ -1538,6 +1538,24 @@ function _appendRouteChanges(content) {
   if (!_routeChangesUiState.collapsed) paintBody();
 }
 
+// "Load just the missing N" — delegated, NOT bound per render.
+//
+// The panel is rebuilt on every sidebar sync (_appendRouteChanges) and again when
+// it renders from cache, and each rebuild replaces the DOM. A listener attached to
+// the button at render time was therefore discarded almost immediately: the button
+// stayed on screen and did nothing. Delegating from the document survives every
+// re-render.
+document.addEventListener("click", function (ev) {
+  const btn = ev.target && ev.target.closest && ev.target.closest("[data-retry-missing]");
+  if (!btn || btn.disabled) return;
+  const body = btn.closest("[data-body]");
+  if (!body || !currentRouteId) return;
+  ev.preventDefault();
+  btn.disabled = true;
+  btn.textContent = "Loading the missing ones…";
+  _renderRouteChangesInto(currentRouteId, body, false, true);
+});
+
 function _renderRouteChangesInto(routeId, body, force, retryFailed) {
   // Re-render from cached DATA (not a frozen html string) so the panel reflects
   // the CURRENT list each time — manual or applied fixes clear resolved changes.
@@ -1578,15 +1596,6 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
     }
     const html = _renderChangesHtml(data);
     body.innerHTML = html;
-    // Wire the "load just the missing N" button — refetches only the failed houses.
-    const retryBtn = body.querySelector("[data-retry-missing]");
-    if (retryBtn) {
-      retryBtn.addEventListener("click", () => {
-        retryBtn.disabled = true;
-        retryBtn.textContent = "Loading the missing ones…";
-        _renderRouteChangesInto(routeId, body, false, true);
-      });
-    }
     _routeChangesCache = { routeId, html, data };
     _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
     // Remember each house's Breezeway property_id from the live scan so the saved-route
