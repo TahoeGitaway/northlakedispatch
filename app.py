@@ -219,12 +219,14 @@ scheduler.add_job(
     id="day_summaries_refresh",
     replace_existing=True,
 )
-# Catch-up for anything the 6am run missed. Three attempts, all before the working
-# day gets going — not a poll running all day. Each does nothing at all (one SQL
-# query, zero API calls) when every date is already covered, which is the norm.
+# Catch-up for anything the 6am run missed: 6:12, 6:30, 7:12, 7:30 — clustered
+# right after the main run, done by 7:30. Breezeway's limit resets in about a
+# minute, so a date that failed at 6:00 is usually fine twelve minutes later;
+# waiting an hour to find that out just leaves the gap open longer. Each run does
+# nothing at all (one SQL query, zero API calls) when every date is covered.
 scheduler.add_job(
     _scheduled_day_summaries_retry,
-    CronTrigger(hour="7,8,10", minute=0, timezone="America/Los_Angeles"),
+    CronTrigger(hour="6,7", minute="12,30", timezone="America/Los_Angeles"),
     id="day_summaries_retry",
     replace_existing=True,
 )
