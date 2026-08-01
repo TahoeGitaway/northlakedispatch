@@ -902,7 +902,13 @@ async function bwRetryMissingImport(btn) {
     for (const p of (data.matched || [])) {
       if (knownBefore.has(p.name)) continue;                       // not new — leave it alone
       if (selectedStops.find(s => s.name === p.name)) continue;    // already on the route
-      selectedStops.push(p);
+      // Must go through addStop, same as the first-pass import. A raw push skips
+      // renderStops(), so the recovered stop lands in selectedStops with a marker
+      // and a sidebar row but NO card in the Selected Stops panel — and the search
+      // box then refuses to re-offer it, because it filters out names already on
+      // the route. It also skips _id/serviceMinutes, which remove and optimize need.
+      p.serviceMinutes = estServiceMinutes(p.tasks);
+      addStop(p, !!p.arrival, !!p.priority_checkin);
       added++;
     }
     if (added) {
