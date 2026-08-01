@@ -1330,7 +1330,7 @@ function bwSidebarMinimize() {
       tabs.style.display = "";
     }
     // A reopen reuses the cached discrepancy result — the check runs once per route
-    // load (and on explicit ↻ Recheck), not on every reopen. Re-running it here was
+    // load (and on an explicit Check again), not on every reopen. Re-running it here was
     // hammering the heavy all-houses endpoint past the gateway timeout (→ HTTP 503).
     // Fill stop list immediately if a route is already loaded
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
@@ -1435,11 +1435,11 @@ let _routeChangesCache    = { routeId: null, html: null };
 let _routeChangesInflight = { routeId: null, promise: null };
 let _appliedRouteChanges  = new Set();   // route ids whose changes have been applied (hide the Apply button)
 // Per-route UI state for the "Changes vs Breezeway" box: after Apply we collapse it and
-// mark it Stale (the shown list no longer reflects a fresh Breezeway check). ↻ Recheck clears both.
+// mark it applied (the shown list no longer reflects a fresh check). Check again clears both.
 let _routeChangesUiState  = { routeId: null, collapsed: false, stale: false };
 
 // Force the NEXT render to re-pull from Breezeway instead of serving the cached
-// result. Used on explicit ↻ Recheck and to avoid caching an error; a page reload
+// result. Used on an explicit Check again and to avoid caching an error; a page reload
 // gets a fresh run for free (in-memory cache starts empty). Passive reopens and
 // redraws within a session reuse the cache, so the check runs once per route load.
 function _invalidateRouteChanges() {
@@ -1465,43 +1465,47 @@ function _appendRouteChanges(content) {
       <button data-toggle class="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase tracking-wide hover:text-gray-900">
         <span data-caret class="text-gray-400 text-[10px] leading-none"></span>
         <span>Changes vs Breezeway</span>
-        <span data-stale class="hidden normal-case tracking-normal text-[10px] font-bold text-amber-700 bg-amber-100 border border-amber-200 rounded px-1.5 py-px">Stale</span>
+        <span data-stale class="hidden normal-case tracking-normal text-[10px] font-bold text-amber-700 bg-amber-100 border border-amber-200 rounded px-1.5 py-px">Applied</span>
       </button>
-      <button data-refresh class="text-xs text-indigo-500 hover:text-indigo-700 font-medium">↻ Recheck</button>
+      <button data-refresh class="text-xs text-indigo-500 hover:text-indigo-700 font-medium"></button>
     </div>
-    <div data-body class="text-xs text-gray-400">Checking Breezeway…</div>`;
+    <div data-body class="text-xs text-gray-400"></div>`;
   content.appendChild(box);
   const body   = box.querySelector("[data-body]");
   const caret  = box.querySelector("[data-caret]");
-  const staleB = box.querySelector("[data-stale]");
+  const staleB   = box.querySelector("[data-stale]");
+  const refreshB = box.querySelector("[data-refresh]");
 
-  // Header chrome (caret direction, Stale badge, body visibility) from the saved state.
+  // ONE action button, labelled for the state it's in. There used to be two — a
+  // header "↻ Recheck" plus a body "Check for changes" — which did nearly the same
+  // thing, and "Recheck" meant nothing before anything had been checked.
+  const _hasResult = () => _routeChangesCache.routeId === rid && !!_routeChangesCache.data;
+
   const paintChrome = () => {
     const st = _routeChangesUiState;
     caret.textContent  = st.collapsed ? "▸" : "▾";
     staleB.classList.toggle("hidden", !st.stale);
     body.style.display = st.collapsed ? "none" : "";
+    // "Check now" the first time, "Check again" once there's something to replace.
+    refreshB.textContent = (_hasResult() || st.stale) ? "Check again" : "Check now";
   };
-  // Body: a Stale notice once changes have been applied, else the change render.
-  //
-  // This check sweeps EVERY property (~442 Breezeway calls), and it used to run
-  // automatically whenever the panel rendered — so simply opening a route spent
-  // the rate-limit budget whether or not anyone wanted the answer. It now waits
-  // to be asked. An existing result for this route still shows without refetching.
+
+  // The check sweeps EVERY property (~442 Breezeway calls). It used to run
+  // automatically whenever the panel rendered, so opening a route spent the rate
+  // limit whether or not anyone wanted the answer. It now waits to be asked.
   const paintBody = () => {
     if (_routeChangesUiState.stale) {
-      body.innerHTML = `<span class="text-amber-700">Stale — changes applied. Click ↻ Recheck to refresh against Breezeway.</span>`;
+      body.innerHTML = `<span class="text-amber-700">These changes have been applied, so this list no `
+                     + `longer matches. Use <b>Check again</b> above to compare with Breezeway.</span>`;
       return;
     }
-    if (_routeChangesCache.routeId === rid && _routeChangesCache.data) {
+    if (_hasResult()) {
       body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
       return;
     }
     body.innerHTML =
-      `<button data-check-changes class="text-indigo-600 hover:text-indigo-800 font-semibold underline">`
-      + `Check for changes vs Breezeway</button>`
-      + `<div class="text-gray-400 mt-1 leading-snug">Not checked yet. This looks up every property,`
-      + ` so it only runs when you ask for it.</div>`;
+      `<span class="text-gray-400 leading-snug">Not checked yet. Use <b>Check now</b> above — `
+      + `it looks up every property, so it only runs when you ask.</span>`;
   };
 
   box.querySelector("[data-toggle]").addEventListener("click", () => {
@@ -1509,13 +1513,19 @@ function _appendRouteChanges(content) {
     paintChrome();
     if (!_routeChangesUiState.collapsed) paintBody();
   });
-  box.querySelector("[data-refresh]").addEventListener("click", () => {
+  refreshB.addEventListener("click", () => {
+    refreshB.disabled = true;
+    refreshB.textContent = "Checking…";
     _invalidateRouteChanges();
     _appliedRouteChanges.delete(rid);          // a fresh check brings the Apply button back
-    _routeChangesUiState.stale     = false;    // fresh data → no longer stale
+    _routeChangesUiState.stale     = false;    // fresh data → no longer applied-and-stale
     _routeChangesUiState.collapsed = false;    // and re-open it to show the result
-    paintChrome();
-    _renderRouteChangesInto(rid, body, true);  // explicit Recheck = bypass the server cache
+    body.style.display = "";
+    caret.textContent  = "▾";
+    staleB.classList.add("hidden");
+    // force=1 only when re-running over an existing result; the first check can
+    // ride the server's short cache.
+    _renderRouteChangesInto(rid, body, _hasResult());
   });
 
   paintChrome();
@@ -1544,17 +1554,6 @@ document.addEventListener("click", function (ev) {
     return;
   }
 
-  // Explicit "check now" — the sweep no longer runs just because the panel opened.
-  const check = t.closest("[data-check-changes]");
-  if (check && !check.disabled) {
-    const body = check.closest("[data-body]");
-    if (!body || !currentRouteId) return;
-    ev.preventDefault();
-    check.disabled = true;
-    check.textContent = "Checking…";
-    _renderRouteChangesInto(currentRouteId, body);
-    return;
-  }
 });
 
 function _renderRouteChangesInto(routeId, body, force, retryFailed) {
@@ -1572,7 +1571,7 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
       routeId,
       // no-store: the GET is otherwise HTTP-cacheable, which made a page reload show
       // the stale browser-cached result instead of a live re-check. force=1 (explicit
-      // Recheck only) tells the server to skip ITS short-lived result cache; passive
+      // an explicit re-check only) tells the server to skip ITS short-lived cache; passive
       // reopens omit it so they ride the cache and don't re-run the heavy all-houses
       // scan (which is what was timing out at the gateway → HTTP 503).
       promise: fetch(`/api/route-discrepancies?route_id=${routeId}`
@@ -1587,7 +1586,7 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
   _routeChangesInflight.promise.then(data => {
     if (data.error) {
       console.error("[route-changes] route", routeId, "server error:", data.error);
-      body.innerHTML = `<span class="text-red-500">${_escHtml(data.error)} — reopen the sidebar or click ↻ Recheck to retry.</span>`;
+      body.innerHTML = `<span class="text-red-500">${_escHtml(data.error)} — reopen the sidebar or use Check again.</span>`;
       _invalidateRouteChanges();   // never cache an error — let a reopen/recheck retry
       return;
     }
@@ -1607,7 +1606,7 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
     _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
   }).catch(e => {
     console.error("[route-changes] route", routeId, "fetch failed:", e);
-    body.innerHTML = `<span class="text-red-500">Could not check Breezeway: ${_escHtml(e.message)} — reopen the sidebar or click ↻ Recheck to retry.</span>`;
+    body.innerHTML = `<span class="text-red-500">Could not check Breezeway: ${_escHtml(e.message)} — reopen the sidebar or use Check again.</span>`;
     _invalidateRouteChanges();   // don't cache the failed promise, or every retry reuses it
   });
 }
@@ -1702,15 +1701,15 @@ function _renderChangesHtml(d) {
     h += `<div class="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-snug">`
        + `${f.text} — some tasks may be missing.`
        + (f.retry
-            // Name the button and say what it does. "Click ↻ Recheck" sent people to
+            // Name the button and say what it does. "Click Recheck" sent people to
             // a full re-scan of all 442 houses, which usually just failed again.
             ? `<br><button data-retry-missing="${d.failed_properties}"`
               + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:#b45309;`
               + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
               + `👉 Click here to load just the missing ${d.failed_properties}</button>`
               + `<div class="text-gray-500 mt-1">Only re-checks the ones that failed — much faster, and far less likely`
-              + ` to be throttled again. (↻ Recheck at the top re-scans all ${d.scanned_properties || "the"} properties.)</div>`
-            : ` Rechecking won't help; this needs a fix in Breezeway or the app's configuration.`)
+              + ` to be throttled again. (Check again at the top re-scans all ${d.scanned_properties || "the"} properties.)</div>`
+            : ` Checking again won't help; this needs a fix in Breezeway or the app's settings.`)
        + `</div>`;
   }
 
@@ -1794,7 +1793,7 @@ function _renderChangesHtml(d) {
   if (unverified.length) {
     h += `<div class="font-semibold text-amber-700 mt-3 mb-1">❔ Couldn't check (${unverified.length})</div>`;
     h += `<div class="text-gray-500 text-xs mb-1">Breezeway didn't return these, so we can't tell whether they changed. `
-       + `They're left on the route — hit ↻ Recheck to try again.</div>`;
+       + `They're left on the route — use Check again to try them once more.</div>`;
     for (const r of unverified) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}${_bwCalLinkHtml(r.property_id, r.property)}</div>`;
   }
   if (moved.length) {
@@ -1807,7 +1806,7 @@ function _renderChangesHtml(d) {
 
   // Apply-to-route button: add the added properties / drop the removed ones,
   // then leave the route in the editable state for manual reorder + optimize.
-  // Hidden once applied (until the next Recheck).
+  // Hidden once applied (until the next check).
   // Button reflects only OUTSTANDING changes — it disappears on its own once the
   // list matches (manual fix or Apply), no separate "applied" flag needed.
   if (added.length || removed.length) {
@@ -1902,7 +1901,7 @@ async function reapproachWithChanges() {
   }
 
   // Applied: the shown change list no longer reflects a fresh Breezeway check. Collapse
-  // the panel and mark it Stale — re-expanding shows "Stale"; ↻ Recheck refreshes it.
+  // the panel and mark it applied — re-expanding says so; Check again refreshes it.
   _routeChangesUiState = { routeId: currentRouteId, collapsed: true, stale: true };
   if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
 
@@ -1942,7 +1941,7 @@ function _expandSidebarIfMinimized() {
     chevron.textContent   = "›";
     chevron.title         = "Minimize";
     // Reopening reuses the cached discrepancy result (runs once per route load + on
-    // ↻ Recheck) — re-pulling here was re-running the heavy scan on every reopen.
+    // an explicit check) — re-pulling here re-ran the heavy scan on every reopen.
     if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
   }
 }
