@@ -185,8 +185,8 @@ def _scheduled_day_summaries():
     """Store arrivals/departures for the coming week, once, early.
 
     The Saved Routes page reads a stored snapshot before it will call Breezeway,
-    so filling that table is what keeps day-clicks off the API. Running at 6am
-    means the fetch happens when nothing else competes for the rate limit."""
+    so filling that table is what keeps day-clicks off the API. Running early,
+    at 5:30am means the fetch happens when nothing else competes for the limit."""
     with app.app_context():
         try:
             from routes.briefing import refresh_day_summaries
@@ -215,19 +215,26 @@ def _scheduled_day_summaries_retry():
 scheduler = BackgroundScheduler(timezone="America/Los_Angeles")
 scheduler.add_job(
     _scheduled_day_summaries,
-    CronTrigger(hour=6, minute=0, timezone="America/Los_Angeles"),
+    CronTrigger(hour=5, minute=30, timezone="America/Los_Angeles"),
     id="day_summaries_refresh",
     replace_existing=True,
 )
-# Catch-up for anything the 6am run missed: 6:12, 6:30, 7:12, 7:30 — clustered
-# right after the main run, done by 7:30. Breezeway's limit resets in about a
-# minute, so a date that failed at 6:00 is usually fine twelve minutes later;
-# waiting an hour to find that out just leaves the gap open longer. Each run does
-# nothing at all (one SQL query, zero API calls) when every date is covered.
+# Catch-up for anything the 5:30 run missed: 5:45, 6:15, 6:45 — clustered right
+# after the main run and finished by quarter to seven. Breezeway's limit resets in
+# about a minute, so a date that failed at 5:30 is usually fine fifteen minutes
+# later; waiting an hour to find that out just leaves the gap open longer. Two
+# triggers rather than one so nothing fires BEFORE the 5:30 run. Each does nothing
+# at all (one SQL query, zero API calls) when every date is already covered.
 scheduler.add_job(
     _scheduled_day_summaries_retry,
-    CronTrigger(hour="6,7", minute="12,30", timezone="America/Los_Angeles"),
-    id="day_summaries_retry",
+    CronTrigger(hour=5, minute=45, timezone="America/Los_Angeles"),
+    id="day_summaries_retry_1",
+    replace_existing=True,
+)
+scheduler.add_job(
+    _scheduled_day_summaries_retry,
+    CronTrigger(hour=6, minute="15,45", timezone="America/Los_Angeles"),
+    id="day_summaries_retry_2",
     replace_existing=True,
 )
 scheduler.add_job(
