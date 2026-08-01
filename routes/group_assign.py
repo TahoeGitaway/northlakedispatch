@@ -95,6 +95,29 @@ def _task_tag_names(task: dict) -> list:
     return out
 
 
+def _scan_task_snapshot(task_id) -> dict:
+    """What the most recent scan knew about this task, for the audit log.
+
+    Read from the cached scan rather than re-fetching: the whole point is to
+    record who/what a task looked like BEFORE the write, and the scan the user
+    was looking at when they clicked is exactly that. Returns {} if it isn't
+    cached — the log line is still written, just with blanks."""
+    tid = str(task_id)
+    for _ts, result, *_rest in list(_scan_cache.values()):
+        buckets = list(result.get("checkins") or [])
+        for g in (result.get("groups") or []):
+            buckets.extend(g.get("tasks") or [])
+        for t in buckets:
+            if str(t.get("task_id")) == tid:
+                return {
+                    "name":      t.get("name"),
+                    "property":  t.get("property"),
+                    "date":      t.get("date"),
+                    "assignees": t.get("assignees") or [],
+                }
+    return {}
+
+
 def _diagnostics_blob(date_str: str, scanned: int, failed: int,
                       failure_statuses: dict, failure_samples: list) -> dict:
     """One copy-pasteable object with the context a developer actually needs.
@@ -606,8 +629,19 @@ def group_assign_apply():
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
 
     def _assign_one(tid):
+        from routes.bw_audit import log_bw_write
         url = f"{BW_BASE}/public/inventory/v1/task/{tid}"
         last = "no attempt"
+        # Who WAS on this task, so the log can show what the assignment replaced.
+        # Read from the current scan rather than an extra API call.
+        _prev = _scan_task_snapshot(tid)
+
+        def _audit(ok, detail, after=None):
+            log_bw_write("group_assign", "assignments", task_id=tid,
+                         task_name=_prev.get("name"), property_name=_prev.get("property"),
+                         task_date=_prev.get("date"),
+                         old_value=_prev.get("assignees"),
+                         new_value=after or target["name"], ok=ok, detail=detail)
         # Retry on throttle / transient server errors so an assignment never gets
         # silently dropped because Breezeway was momentarily busy.
         for attempt in range(3):
@@ -625,17 +659,20 @@ def group_assign_apply():
                             after = _assignee_names(g.json())
                     except Exception:
                         pass
+                    _audit(True, last, after)
                     return {"task_id": tid, "ok": True, "assignees_after": after, "detail": last}
                 if r.status_code == 429 or r.status_code >= 500:
                     last += f" {r.text[:120]}"
                     time.sleep(0.4 * (attempt + 1))
                     continue
                 # Non-retryable (e.g. 400/404)
+                _audit(False, f"{last} {r.text[:160]}")
                 return {"task_id": tid, "ok": False, "assignees_after": None,
                         "detail": f"{last} {r.text[:160]}"}
             except Exception as e:
                 last = str(e)
                 time.sleep(0.4 * (attempt + 1))
+        _audit(False, f"failed after retries — {last}")
         return {"task_id": tid, "ok": False, "assignees_after": None,
                 "detail": f"failed after retries — {last}"}
 
@@ -793,8 +830,17 @@ def group_assign_change_date():
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
 
     def _move_one(tid):
+        from routes.bw_audit import log_bw_write
         url  = f"{BW_BASE}/public/inventory/v1/task/{tid}"
         last = "no attempt"
+        _prev = _scan_task_snapshot(tid)
+
+        def _audit(ok, detail, after=None):
+            log_bw_write("change_date", "scheduled_date", task_id=tid,
+                         task_name=_prev.get("name"), property_name=_prev.get("property"),
+                         task_date=_prev.get("date") or from_date,
+                         old_value=_prev.get("date") or from_date,
+                         new_value=after or new_date, ok=ok, detail=detail)
         # Retry on throttle / transient server errors so a move never gets silently
         # dropped because Breezeway was momentarily busy.
         for attempt in range(3):
@@ -817,6 +863,7 @@ def group_assign_change_date():
                         except Exception:
                             pass
                     confirmed = (after == new_date)
+                    _audit(True, last + ("" if confirmed else f" NOT CONFIRMED (got {after or '?'})"), after)
                     return {"task_id": tid, "ok": True, "date_after": after, "confirmed": confirmed,
                             "detail": last + (" ✓ confirmed" if confirmed
                                               else f" ⚠ Breezeway returned {after or '?'} (expected {new_date})")}
@@ -825,11 +872,13 @@ def group_assign_change_date():
                     time.sleep(0.4 * (attempt + 1))
                     continue
                 # Non-retryable (e.g. 400/404)
+                _audit(False, f"{last} {r.text[:160]}")
                 return {"task_id": tid, "ok": False, "date_after": None,
                         "detail": f"{last} {r.text[:160]}"}
             except Exception as e:
                 last = str(e)
                 time.sleep(0.4 * (attempt + 1))
+        _audit(False, f"failed after retries — {last}")
         return {"task_id": tid, "ok": False, "date_after": None,
                 "detail": f"failed after retries — {last}"}
 

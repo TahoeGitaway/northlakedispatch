@@ -467,6 +467,39 @@ def init_db():
         archived_by INTEGER
     )""")
 
+    # Every write this app makes to Breezeway, attempted or successful.
+    #
+    # Breezeway's own task history/audit/activity endpoints all 404, so nothing
+    # upstream records who changed what. Without this there is no way to answer
+    # "what did the app just do to my data" — which is exactly what was needed when
+    # a sync rewrote another cleaner's task times and a housekeeper's on a
+    # different day, and the original values were simply gone.
+    #
+    # old_value is what makes this a repair tool rather than a diary: it is the
+    # only record of what a task looked like before the app touched it.
+    # user_name is denormalised on purpose so the log still reads correctly after a
+    # user row is deleted.
+    cur.execute("""CREATE TABLE IF NOT EXISTS bw_write_log (
+        id         SERIAL PRIMARY KEY,
+        ts         TEXT NOT NULL,          -- UTC ISO8601
+        user_id    INTEGER,
+        user_name  TEXT,
+        feature    TEXT NOT NULL,          -- sync_times | group_assign | change_date | ...
+        task_id    TEXT,
+        task_name  TEXT,
+        property   TEXT,
+        task_date  TEXT,                   -- the TASK's scheduled_date, not today
+        field      TEXT NOT NULL,          -- scheduled_time | assignments | scheduled_date
+        old_value  TEXT,
+        new_value  TEXT,
+        ok         BOOLEAN NOT NULL DEFAULT FALSE,
+        detail     TEXT
+    )""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_bw_write_log_ts
+                   ON bw_write_log (ts DESC)""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_bw_write_log_task
+                   ON bw_write_log (task_id)""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")

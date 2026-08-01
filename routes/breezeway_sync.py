@@ -159,13 +159,31 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str,
     return ([], False, last_detail)
 
 
-def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: str) -> tuple[bool, str]:
-    """PATCH a task's start time. Tries scheduled_start (full datetime) first, then start_time."""
+def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: str,
+                     task: dict = None, property_name: str = "") -> tuple[bool, str]:
+    """PATCH a task's start time.
+
+    `task` is the Breezeway task as it was BEFORE the write. It is used only to
+    record the previous time in the audit log — the one piece of information that
+    makes an unintended change reversible, and which was gone when a sync retimed
+    tasks that were never in scope.
+    """
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url     = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
-    dt      = f"{date_str}T{start_time_hhmm}"  # e.g. "2026-05-17T11:29:00"
 
     from routes.bw_ratelimit import gate
+    from routes.bw_audit import log_bw_write
+
+    task = task or {}
+    _before   = str(task.get("scheduled_time") or "")[:8]
+    _name     = task.get("name") or ""
+    _taskdate = str(task.get("scheduled_date") or date_str)[:10]
+
+    def _audit(ok, detail):
+        log_bw_write("sync_times", "scheduled_time", task_id=task_id,
+                     task_name=_name, property_name=property_name,
+                     task_date=_taskdate, old_value=_before,
+                     new_value=start_time_hhmm, ok=ok, detail=detail)
 
     for payload in [
         {"scheduled_time": start_time_hhmm},
@@ -174,6 +192,7 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
             # Writes share the same rate limit as reads — pace them too, or a sync
             # can exhaust the budget the scans depend on.
             if not gate.acquire():
+                _audit(False, "held back by this app's rate limiter — not sent")
                 return False, "held back by this app's rate limiter — not sent"
             r = requests.patch(url, headers=headers, json=payload, timeout=15)
             gate.on_response(r.status_code)
@@ -185,11 +204,15 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
             except Exception:
                 msg = f"status={r.status_code} payload={payload} raw={r.text[:200]}"
             if r.status_code in (200, 201):
+                _audit(True, msg)
                 return True, msg
             # non-2xx: report and stop trying
+            _audit(False, msg)
             return False, msg
         except Exception as e:
+            _audit(False, f"{type(e).__name__}: {e}")
             return False, str(e)
+    _audit(False, "all payload variants failed")
     return False, "all payload variants failed"
 
 
@@ -324,7 +347,10 @@ def bw_sync_times():
         for task in tasks:
             task_id   = task.get("id")
             task_name = (task.get("name") or "task")[:40]
-            ok, msg   = _patch_task_time(token, task_id, start_time, date_str)
+            # Pass the pre-write task so the log keeps its ORIGINAL time — without
+            # that, an unintended change can be seen but not undone.
+            ok, msg   = _patch_task_time(token, task_id, start_time, date_str,
+                                         task=task, property_name=name)
             task_results.append({"task_id": task_id, "task_name": task_name,
                                  "ok": ok, "msg": msg})
 
