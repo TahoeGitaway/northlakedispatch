@@ -26,6 +26,9 @@
     <!-- Shared wording for "couldn't load from Breezeway" warnings, so every page
          names the same cause (429 vs 401 vs timeout) instead of assuming a throttle -->
     <script src="{{ url_for('static', filename='bw-failure.js') }}"></script>
+    <!-- Backend timestamps are UTC but carry no offset, which JS parses as local
+         time. Always render them with fmtUtc()/utcDate(), never `new Date()`. -->
+    <script src="{{ url_for('static', filename='utc-time.js') }}"></script>
 </head>
 
 <body class="bg-gray-100">
@@ -227,9 +230,10 @@
         notes.forEach(n => {
           const row = document.createElement("div");
           row.className = "flex items-center justify-between gap-4 text-xs text-violet-700 pl-1";
-          const when = n.asana_created_at
-            ? new Date(n.asana_created_at).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
-            : "";
+          // Asana's created_at already ends in "Z", so this was rendering correctly;
+          // fmtUtc leaves an offset-bearing string alone and pins the zone to Pacific
+          // rather than the viewer's device.
+          const when = fmtUtc(n.asana_created_at);
           row.innerHTML = `
             <span><strong>${n.commenter}</strong> on <em>${n.task_name}</em>${when ? " · " + when : ""}: ${n.comment_text.slice(0,120)}${n.comment_text.length > 120 ? "…" : ""}</span>
             <button onclick="dismissAsanaNote('${n.item_key}', this.closest('div'))"
@@ -277,9 +281,10 @@
         items.forEach(m => {
           const row = document.createElement("div");
           row.className = "flex items-center justify-between gap-4 text-xs text-indigo-700 pl-1";
-          const when = m.bw_created_at
-            ? new Date(m.bw_created_at).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
-            : "";
+          // Breezeway's created_at is UTC as "2026-08-01 20:48:33" — no "T", no "Z".
+          // new Date() on that is both zone-wrong and format-nonstandard; fmtUtc
+          // normalises the space and tags it UTC before parsing.
+          const when = fmtUtc(m.bw_created_at);
           const text = (m.comment_text || "");
           const snippet = text.slice(0,140) + (text.length > 140 ? "…" : "");
           const taskLink = m.task_id && m.task_id !== "0"
