@@ -1788,7 +1788,12 @@ function _renderChangesHtml(d) {
     }
   }
   if (removed.length) {
-    h += `<div class="font-semibold text-amber-700 mt-3 mb-1">➖ No longer on list (${removed.length})</div>`;
+    // Mirror of "Additional tasks": all that's known is Breezeway returned no task
+    // for this person at this house. "No longer on list" asserted a removal, which
+    // the check can't establish — the task may have been reassigned, finished, or
+    // never existed. (Houses whose lookup FAILED are held back separately under
+    // "Couldn't check" and never appear here.)
+    h += `<div class="font-semibold text-amber-700 mt-3 mb-1">➖ No tasks in Breezeway (${removed.length})</div>`;
     for (const r of removed) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}${_bwCalLinkHtml(r.property_id, r.property)}</div>`;
   }
   // Stops we could NOT check because Breezeway refused the lookup. Shown, but
