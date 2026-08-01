@@ -173,7 +173,32 @@ def _scheduled_asana_poll():
         except Exception:
             pass
 
+def _scheduled_day_summaries():
+    """Store arrivals/departures for the coming week, once, early.
+
+    The Saved Routes page reads a stored snapshot before it will call Breezeway,
+    so filling that table overnight means day-clicks never hit the API — and a
+    reservations fetch, which returns EMPTY when it fails and renders as "None",
+    happens at 6am when nothing else is competing for the rate limit."""
+    with app.app_context():
+        try:
+            from routes.briefing import refresh_day_summaries
+            res = refresh_day_summaries(days=8)
+            app.logger.info("[day-summaries] saved=%d skipped=%d errors=%d",
+                            len(res.get("saved", [])), len(res.get("skipped", [])),
+                            len(res.get("errors", [])))
+            for line in res.get("skipped", []) + res.get("errors", []):
+                app.logger.warning("[day-summaries] %s", line)
+        except Exception:
+            app.logger.exception("[day-summaries] refresh failed")
+
 scheduler = BackgroundScheduler(timezone="America/Los_Angeles")
+scheduler.add_job(
+    _scheduled_day_summaries,
+    CronTrigger(hour=6, minute=0, timezone="America/Los_Angeles"),
+    id="day_summaries_refresh",
+    replace_existing=True,
+)
 scheduler.add_job(
     _scheduled_pri_check,
     CronTrigger(hour=7, minute=30, timezone="America/Los_Angeles"),

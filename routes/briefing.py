@@ -1036,6 +1036,24 @@ def day_summary():
         "checkout_date_ge": date_str, "checkout_date_le": date_str,
     })
 
+    arrivals, departures = _shape_day_summary(checkins, checkouts)
+
+    payload = {"date": date_str, "arrivals": arrivals, "departures": departures}
+    ts      = time.time()
+    # Only cache NON-empty results. An empty fetch is usually a transient Breezeway
+    # hiccup; caching it (previously with no TTL) is what made arrivals/departures
+    # stick on "None" on every auto-load until a manual Refresh.
+    if any(arrivals.values()) or any(departures.values()):
+        _day_summary_cache[date_str] = (ts, payload)
+
+    return jsonify({**payload, "cached_at": _fmt_pacific(ts), "source": "live"})
+
+
+def _shape_day_summary(checkins: list, checkouts: list) -> tuple:
+    """Turn raw reservations into the arrivals/departures shape the page renders.
+
+    Split out of day_summary() so the overnight refresh job can build the same
+    payload without going through the HTTP layer."""
     arrivals   = {"guest": [], "owner": [], "lease": []}
     departures = {"guest": [], "owner": [], "lease": []}
 
@@ -1066,15 +1084,75 @@ def day_summary():
         t    = (r.get("checkout_time") or "")[:5]
         departures.setdefault(kind, []).append({"name": prop, "time": t})
 
-    payload = {"date": date_str, "arrivals": arrivals, "departures": departures}
-    ts      = time.time()
-    # Only cache NON-empty results. An empty fetch is usually a transient Breezeway
-    # hiccup; caching it (previously with no TTL) is what made arrivals/departures
-    # stick on "None" on every auto-load until a manual Refresh.
-    if any(arrivals.values()) or any(departures.values()):
-        _day_summary_cache[date_str] = (ts, payload)
+    return arrivals, departures
 
-    return jsonify({**payload, "cached_at": _fmt_pacific(ts), "source": "live"})
+
+def refresh_day_summaries(days: int = 8) -> dict:
+    """Build and store arrivals/departures snapshots for today and the next `days`.
+
+    Runs once overnight so the Saved Routes page reads a stored snapshot all day
+    instead of asking Breezeway on every day-click. Two requests per date is small
+    next to the property sweeps, but during a throttled window they fail — and a
+    failed reservations fetch returns EMPTY, which renders as "None" and is
+    indistinguishable from a day with no arrivals. Doing this at 6am, when nothing
+    competes, avoids that entirely.
+
+    Only writes a snapshot the fetch actually succeeded for. Persisting an empty
+    result from a throttled call would pin "None" for the whole day — the same
+    failure, made permanent.
+
+    Returns a per-date summary for logging. Never raises: a scheduled job that
+    throws would kill the scheduler thread."""
+    from db import get_db, get_cursor
+
+    out = {"saved": [], "skipped": [], "errors": []}
+    token = _get_breezeway_token()
+    if not token:
+        out["errors"].append(f"no Breezeway token: {_get_bw_token_last_error()}")
+        return out
+
+    today = date_cls.today()
+    for i in range(days):
+        d = (today + timedelta(days=i)).isoformat()
+        try:
+            checkins  = _fetch_bw_reservations(token, {
+                "checkin_date_ge": d, "checkin_date_le": d})
+            err_in    = _get_bw_resv_last_error()
+            checkouts = _fetch_bw_reservations(token, {
+                "checkout_date_ge": d, "checkout_date_le": d})
+            err_out   = _get_bw_resv_last_error()
+
+            # A partial or failed pull must not become the day's stored answer.
+            if err_in or err_out:
+                out["skipped"].append(f"{d}: fetch incomplete ({err_in or err_out})")
+                continue
+
+            arrivals, departures = _shape_day_summary(checkins, checkouts)
+
+            conn = get_db(); cur = get_cursor(conn)
+            try:
+                cur.execute("""
+                    INSERT INTO saved_day_summaries
+                           (route_date, arrivals, departures, saved_by, saved_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (route_date) DO UPDATE
+                      SET arrivals   = EXCLUDED.arrivals,
+                          departures = EXCLUDED.departures,
+                          saved_by   = EXCLUDED.saved_by,
+                          saved_at   = EXCLUDED.saved_at
+                """, (d, json.dumps(arrivals), json.dumps(departures),
+                      None, _fmt_pacific(time.time())))
+                conn.commit()
+            finally:
+                cur.close(); conn.close()
+
+            _day_summary_cache.pop(d, None)   # next read comes from the DB
+            out["saved"].append(
+                f"{d}: {sum(len(v) for v in arrivals.values())} arrivals, "
+                f"{sum(len(v) for v in departures.values())} departures")
+        except Exception as ex:
+            out["errors"].append(f"{d}: {type(ex).__name__}: {ex}")
+    return out
 
 
 @briefing_bp.route("/briefing/save-day-summary", methods=["POST"])
