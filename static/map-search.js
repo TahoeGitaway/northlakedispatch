@@ -852,43 +852,15 @@ async function runBwImport() {
    that a retry falls back to a full import. */
 let _bwLastImport = null;
 
-// Breezeway's rate limit resets on roughly a 60-second window — that's what its
-// auth 429 reports in `retry_after`. Retrying inside that window is refused again,
-// which is exactly what happened: a retry fired seconds later got all 40 refused
-// and recovered nothing. So make the button wait, and show the countdown rather
-// than letting someone click into a guaranteed failure.
-const BW_RETRY_COOLDOWN_S = 60;
-
-function _bwAddRetryMissingBtn(n, cooldownS) {
+function _bwAddRetryMissingBtn(n) {
   const el = document.getElementById("bwImportResult");
   if (!el || !_bwLastImport) return;
   const btn = document.createElement("button");
+  btn.textContent = `👉 Try the missing ${n} again`;
   btn.style.cssText = "display:block;margin-top:5px;text-decoration:underline;font-weight:700;"
                     + "background:none;border:none;padding:0;cursor:pointer;color:#b45309;font-size:12px;";
+  btn.onclick = () => bwRetryMissingImport(btn);
   el.appendChild(btn);
-
-  let left = cooldownS || 0;
-  const ready = () => {
-    btn.disabled = false;
-    btn.style.cursor = "pointer";
-    btn.style.color = "#b45309";
-    btn.textContent = `👉 Try the missing ${n} again`;
-    btn.onclick = () => bwRetryMissingImport(btn);
-  };
-  if (!left) { ready(); return; }
-
-  btn.disabled = true;
-  btn.style.cursor = "default";
-  btn.style.color  = "#a8a29e";
-  btn.style.textDecoration = "none";
-  const tick = () => {
-    if (left <= 0) { btn.style.textDecoration = "underline"; ready(); return; }
-    btn.textContent = `Waiting ${left}s before retrying the missing ${n} — `
-                    + `Breezeway's limit resets about every minute`;
-    left--;
-    setTimeout(tick, 1000);
-  };
-  tick();
 }
 
 async function bwRetryMissingImport(btn) {
@@ -948,18 +920,17 @@ async function bwRetryMissingImport(btn) {
     if (still) {
       const f = bwFailureCause(data);
       _bwLastImport = {date, assignee, failed: still};
-      // Recovering nothing means Breezeway is still inside its reset window, so
-      // the next attempt has to wait it out. Progress means it's easing — let the
-      // next click go straight through.
-      const stalled = recovered === 0;
+      // Say whether it made progress. No enforced wait — Breezeway's reset window
+      // is a guess from one data point, so blocking the button on it would take
+      // control away on the strength of an assumption.
       _bwImportMsg(
-        stalled
-          ? `Still ${still} to go — Breezeway refused them again, so its limit hasn't reset yet. `
-            + `Wait for the countdown below, then try once more.`
+        recovered === 0
+          ? `Still ${still} to go — Breezeway refused them again. `
+            + `Waiting a bit before trying again usually works better.`
           : `Loaded ${recovered} more propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}. `
             + `${still} still couldn't be loaded. Click again to keep going.`,
         "amber");
-      if (f.retry) _bwAddRetryMissingBtn(still, stalled ? BW_RETRY_COOLDOWN_S : 0);
+      if (f.retry) _bwAddRetryMissingBtn(still);
     } else {
       _bwImportMsg(
         `Loaded the last ${recovered} propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}. `

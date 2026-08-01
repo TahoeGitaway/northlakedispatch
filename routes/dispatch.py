@@ -1399,6 +1399,15 @@ def bw_import():
     if retry_failed and _cached and len(_cached) > 4:
         if _dt_time.time() - _cached[0] < _BW_RETRY_WINDOW:
             _retry_refs = [r for r in _cached[4] if r in pid_candidates]
+    if retry_failed and not _retry_refs:
+        # Never let "try the missing N" quietly turn into all ~442 calls. If the
+        # failed list is gone, say so rather than doing the expensive sweep the
+        # user is specifically trying to avoid.
+        return jsonify({
+            "error": "The list of which properties failed has expired, so there's "
+                     "nothing left to retry on its own. Run the import again to do "
+                     "a full load.",
+        }), 200
 
     def _sweep(keys, seed_results):
         """Fetch `keys`, appending onto `seed_results`. Returns
@@ -1665,6 +1674,19 @@ def route_discrepancies():
     # and merge them in, rather than re-running all ~442 calls to recover a handful.
     # Those hundreds of extra requests are what provokes the throttling being retried.
     retry_failed = request.args.get("retry_failed") in ("1", "true", "yes")
+    if retry_failed:
+        # A retry must NEVER silently become a full sweep. The button promises "just
+        # the missing N"; if the list of which properties failed is gone (server
+        # restarted, or older than the window), doing all ~442 calls instead would
+        # be the opposite of what was asked — and the expensive thing the user is
+        # trying to avoid. Say so and let them choose Recheck deliberately.
+        _p = _route_disc_partial.get(route_id)
+        if not _p or _dt_time.time() - _p[0] >= _ROUTE_DISC_RETRY_WINDOW:
+            return jsonify({
+                "error": "The list of which properties failed has expired, so there's "
+                         "nothing left to retry on its own. Click ↻ Recheck to run a "
+                         "full check of all properties."
+            }), 200
     if not force and not retry_failed:
         hit = _route_disc_cache.get(route_id)
         if hit and _dt_time.time() - hit["ts"] < _ROUTE_DISC_TTL:
