@@ -127,10 +127,19 @@ def _delete_task(token: str, task_id) -> tuple[bool, str]:
         return False, str(e)
 
 
-def _unassign_task(token: str, task_id) -> tuple[bool, str]:
+def _unassign_task(token: str, task_id, meta: dict = None) -> tuple[bool, str]:
     """Clear a task's assignee(s) (PATCH assignments:[]) WITHOUT touching its date.
     Reversible — just drops it back to Unassigned on the same day. Confirms by
     re-reading the task so we report what actually happened, not just the status."""
+    from routes.bw_audit import log_bw_write
+    meta = meta or {}
+
+    def _audit(ok, detail):
+        log_bw_write("bear_fence_unassign", "assignments", task_id=task_id,
+                     task_name=meta.get("name"), property_name=meta.get("property"),
+                     task_date=meta.get("date"), old_value=meta.get("before"),
+                     new_value="(unassigned)", ok=ok, detail=detail)
+
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
@@ -138,6 +147,7 @@ def _unassign_task(token: str, task_id) -> tuple[bool, str]:
         ok = r.status_code in (200, 201, 202, 204)
         detail = f"status={r.status_code}"
         if not ok:
+            _audit(False, detail + f" body={r.text[:200]}")
             return False, detail + f" body={r.text[:200]}"
         # Re-read to confirm it really cleared.
         after = None
@@ -148,9 +158,12 @@ def _unassign_task(token: str, task_id) -> tuple[bool, str]:
         except Exception:
             pass
         if after:
+            _audit(True, detail + f" ⚠ still assigned to {', '.join(after)}")
             return True, detail + f" ⚠ still assigned to {', '.join(after)}"
+        _audit(True, detail + " ✓ confirmed unassigned")
         return True, detail + " ✓ confirmed unassigned"
     except Exception as e:
+        _audit(False, f"{type(e).__name__}: {e}")
         return False, str(e)
 
 
@@ -349,7 +362,9 @@ def bear_fence_delete_unassign():
             })
             continue
 
-        ok, msg = _unassign_task(token, task_id)
+        ok, msg = _unassign_task(token, task_id,
+                                 meta={"name": live_name, "property": prop,
+                                       "date": live_date, "before": before})
         who = ", ".join(before)
         results.append({
             "task_id": task_id, "property": prop, "name": live_name,

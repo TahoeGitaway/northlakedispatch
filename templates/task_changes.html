@@ -23,7 +23,14 @@
         <option value="">Everything</option>
         {% for f, label in [('sync_times','Sync times to Breezeway'),
                             ('group_assign','Batcher — assign'),
-                            ('change_date','Batcher — change date')] %}
+                            ('change_date','Batcher — change date'),
+                            ('clear_times','Clear task times'),
+                            ('bear_fence','Bear fence — move date'),
+                            ('bear_fence_unassign','Bear fence — unassign'),
+                            ('pri_rename','PRI rename'),
+                            ('walk_thru_rename','Walk-thru rename'),
+                            ('assign_probe','Assignment probe (admin)'),
+                            ('template_probe','Template probe (admin)')] %}
           <option value="{{ f }}" {% if f_feature == f %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>

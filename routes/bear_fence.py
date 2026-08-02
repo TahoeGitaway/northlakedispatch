@@ -142,7 +142,11 @@ def _live_scheduled_date(task: dict) -> str:
     return str(sched)[:10]
 
 
-def _patch_task(token: str, task_id, payload: dict) -> tuple:
+def _patch_task(token: str, task_id, payload: dict, meta: dict = None) -> tuple:
+    """meta carries the pre-write context (task name, property, current date) so the
+    audit log can record what this replaced. Breezeway keeps no history of its own."""
+    from routes.bw_audit import log_bw_write
+    meta = meta or {}
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
@@ -159,8 +163,17 @@ def _patch_task(token: str, task_id, payload: dict) -> tuple:
                 msg = f"status={r.status_code} body={r.text[:300]}"
         except Exception:
             msg = f"status={r.status_code} body={r.text[:200]}"
+        log_bw_write("bear_fence", "scheduled_date", task_id=task_id,
+                     task_name=meta.get("name"), property_name=meta.get("property"),
+                     task_date=meta.get("old_date"), old_value=meta.get("old_date"),
+                     new_value=payload.get("scheduled_date"), ok=ok, detail=msg)
         return ok, msg
     except Exception as e:
+        log_bw_write("bear_fence", "scheduled_date", task_id=task_id,
+                     task_name=meta.get("name"), property_name=meta.get("property"),
+                     task_date=meta.get("old_date"), old_value=meta.get("old_date"),
+                     new_value=payload.get("scheduled_date"), ok=False,
+                     detail=f"{type(e).__name__}: {e}")
         return False, str(e)
 
 
@@ -338,7 +351,10 @@ def bear_fence_apply():
             })
             continue
 
-        ok, msg = _patch_task(token, task_id, {"scheduled_date": target_date})
+        ok, msg = _patch_task(token, task_id, {"scheduled_date": target_date},
+                              meta={"name": item.get("task_title", ""),
+                                    "property": item.get("property", ""),
+                                    "old_date": item.get("walk_thru_date") or item.get("current_date", "")})
         results.append({
             "task_id":         task_id,
             "property":        item.get("property", ""),

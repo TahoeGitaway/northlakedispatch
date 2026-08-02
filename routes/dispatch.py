@@ -2203,11 +2203,17 @@ def bw_assign_test():
         {"assignments": [assignee_id]},
         {"assigned_to":  [assignee_id]},
     ]
+    from routes.bw_audit import log_bw_write
     for p in payloads:
         try:
             r = requests.patch(url, headers=headers, json=p, timeout=15)
             after = _assignees_now()
             stuck = bool(after and assignee_id in after)
+            # A diagnostic, but every attempt is a REAL write to a real task —
+            # exactly the kind of thing you want to find in the log later.
+            log_bw_write("assign_probe", "assignments", task_id=task_id,
+                         old_value=before, new_value=str(assignee_id),
+                         ok=bool(stuck), detail=f"payload={p} status={r.status_code}")
             attempts.append({"PATCH": p, "status": r.status_code,
                              "assignees_after": after, "stuck": stuck,
                              "resp": (r.text or "")[:200]})
@@ -2318,15 +2324,29 @@ def bw_property_probe():
 
 # ── Remove all assigned task times for a person on a day (admin, destructive) ──
 
-def _clear_task_time(token: str, task_id) -> tuple:
-    """Clear a task's scheduled start time in Breezeway (PATCH scheduled_time=null)."""
+def _clear_task_time(token: str, task_id, meta: dict = None) -> tuple:
+    """Clear a task's scheduled start time in Breezeway (PATCH scheduled_time=null).
+
+    Destructive and not reversible from Breezeway, which keeps no history — so the
+    previous time is recorded here or it is gone."""
+    from routes.bw_audit import log_bw_write
+    meta = meta or {}
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"https://api.breezeway.io/public/inventory/v1/task/{task_id}"
+
+    def _audit(ok, detail):
+        log_bw_write("clear_times", "scheduled_time", task_id=task_id,
+                     task_name=meta.get("name"), property_name=meta.get("property"),
+                     task_date=meta.get("date"), old_value=meta.get("old_time"),
+                     new_value="(cleared)", ok=ok, detail=detail)
     try:
         r = requests.patch(url, headers=headers, json={"scheduled_time": None}, timeout=15)
         ok = r.status_code in (200, 201)
-        return ok, f"status={r.status_code}" + ("" if ok else f" {r.text[:160]}")
+        msg = f"status={r.status_code}" + ("" if ok else f" {r.text[:160]}")
+        _audit(ok, msg)
+        return ok, msg
     except Exception as e:
+        _audit(False, f"{type(e).__name__}: {e}")
         return False, str(e)
 
 
@@ -2394,7 +2414,14 @@ def clear_task_times():
     # Clear the times in PARALLEL — the person can have many tasks, and a
     # sequential loop (15s timeout each) was the slowest, avoidable part.
     def _clear_one(t):
-        ok, detail = _clear_task_time(token, t.get("id"))
+        # The task as it stands BEFORE clearing — the time about to be destroyed is
+        # only recoverable from the log, so capture it here.
+        ok, detail = _clear_task_time(token, t.get("id"), meta={
+            "name":     _bw_task_title(t),
+            "property": _get_property_name(t.get("home_id") or t.get("property_id")),
+            "date":     (t.get("scheduled_date") or "")[:10],
+            "old_time": str(t.get("scheduled_time") or "")[:8],
+        })
         pid = t.get("home_id") or t.get("property_id")
         asgn = []
         for a in (t.get("assignments") or []):
@@ -2511,6 +2538,11 @@ def bw_task_template_test():
     try:
         pr = requests.patch(url, headers=headers, json={"template_id": template_id}, timeout=15)
         patch["status"] = pr.status_code
+        from routes.bw_audit import log_bw_write
+        log_bw_write("template_probe", "template_id", task_id=task_id,
+                     old_value=str(before), new_value=str(template_id),
+                     ok=pr.status_code in (200, 201),
+                     detail=f"status={pr.status_code}")
         try:
             patch["body"] = pr.json()
         except Exception:

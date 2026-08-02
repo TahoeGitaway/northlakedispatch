@@ -142,7 +142,11 @@ def _fetch_reservations_range(token, start, end):
     return all_results
 
 
-def _patch_task_name(token, task_id, new_name):
+def _patch_task_name(token, task_id, new_name, meta: dict = None):
+    """meta carries the pre-write name/property so the audit log records
+    what the rename replaced."""
+    from routes.bw_audit import log_bw_write
+    meta = meta or {}
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
@@ -153,8 +157,16 @@ def _patch_task_name(token, task_id, new_name):
             msg = f"status={r.status_code} name='{returned}'"
         except Exception:
             msg = f"status={r.status_code} body={r.text[:200]}"
+        log_bw_write("pri_rename", "name", task_id=task_id,
+                     task_name=meta.get("old_name"), property_name=meta.get("property"),
+                     task_date=meta.get("date"), old_value=meta.get("old_name"),
+                     new_value=new_name, ok=ok, detail=msg)
         return ok, msg
     except Exception as e:
+        log_bw_write("pri_rename", "name", task_id=task_id,
+                     task_name=meta.get("old_name"), property_name=meta.get("property"),
+                     task_date=meta.get("date"), old_value=meta.get("old_name"),
+                     new_value=new_name, ok=False, detail=f"{type(e).__name__}: {e}")
         return False, str(e)
 
 
@@ -260,7 +272,10 @@ def pri_rename_apply():
     items   = request.json.get("items", [])
     results = []
     for item in items:
-        ok, msg = _patch_task_name(token, item["task_id"], item["proposed_title"])
+        ok, msg = _patch_task_name(token, item["task_id"], item["proposed_title"],
+                                   meta={"old_name": item.get("current_title") or item.get("task_title", ""),
+                                         "property": item.get("property", ""),
+                                         "date": item.get("date") or item.get("scheduled_date", "")})
         results.append({
             "task_id":        item["task_id"],
             "property":       item.get("property", ""),
