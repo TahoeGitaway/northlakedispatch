@@ -135,7 +135,12 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
     return all_results
 
 
-def _patch_task_name(token: str, task_id, new_name: str) -> tuple[bool, str]:
+def _patch_task_name(token: str, task_id, new_name: str,
+                     meta: dict = None) -> tuple[bool, str]:
+    """meta carries the pre-write name/property so the audit log records what the
+    rename replaced."""
+    from routes.bw_audit import log_bw_write
+    meta = meta or {}
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:

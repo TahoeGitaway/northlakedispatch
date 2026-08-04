@@ -152,6 +152,49 @@ PAGE_LIMIT   = 100
 _ALLOWED_METHODS = {"GET", "POST"}
 _SESSION = requests.Session()
 
+# ── Rate gate ────────────────────────────────────────────────────────────────
+# This engine runs as its own OS process (the app launches it via subprocess), so
+# it gets its OWN instance of the gate — it is NOT sharing state with the web
+# tier. What it buys is coordination between THIS RUN'S OWN THREADS: bw_get's
+# time.sleep() only ever paused the thread that was refused, so when one of the
+# workers hit a 429 the other eleven kept firing into the same wall. The gate
+# pauses all of them together, which is the half of routes/bw_ratelimit.py this
+# engine was missing.
+#
+# sys.path: this file is run BY PATH (python tools/hot_tub_billing.py), so
+# sys.path[0] is tools/, not the repo root, and `routes` is not importable
+# without this. If the import still fails the engine runs exactly as it did
+# before — degraded pacing must never be the reason a billing run can't happen.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from routes.bw_ratelimit import gate as _gate
+except Exception:
+    _gate = None
+
+
+def _gate_wait():
+    """Block until the gate allows a send.
+
+    The gate's acquire() gives up after MAX_GATE_WAIT because a *web request*
+    that hangs is worse than one that fails fast. This engine has no such
+    deadline — it is an out-of-band batch run — and shedding here would turn a
+    throttle into a property missing from the worksheet, which is the one thing
+    this program must never do. So wait it out: the set of requests sent is
+    unchanged, only their spacing is."""
+    if _gate is None:
+        return
+    while not _gate.acquire():
+        pass   # acquire() sleeps internally; this is not a spin
+
+
+def _gate_report(status):
+    """Feed a data-endpoint status back so the gate can adapt. Auth is
+    deliberately NOT reported: it is rate-limited separately (1/min, handled in
+    authenticate()), and letting an auth 429 throttle the data budget would slow
+    the whole scan for a limit that has nothing to do with it."""
+    if _gate is not None:
+        _gate.on_response(status)
+
 
 # ── Report ───────────────────────────────────────────────────────────────────
 
