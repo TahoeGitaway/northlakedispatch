@@ -216,6 +216,25 @@ async function applyRenames() {
     });
     const data = await resp.json();
 
+    // A server error carries no `results`, and the counting below derives failures
+    // from results.length — so an outright failure produced "0 renamed · 0 FAILED"
+    // and rendered GREEN as though everything had been approved. Handle it first.
+    if (data.error || !Array.isArray(data.results)) {
+      const box = document.getElementById('resultsBox');
+      box.innerHTML = '';
+      const err = document.createElement('div');
+      err.style.cssText = 'font-size:0.85rem;font-weight:700;color:#b91c1c;margin-bottom:8px;';
+      err.textContent = `Nothing was renamed — the server returned an error. `
+                      + `All ${items.length} are still selected; try again once it's resolved.`;
+      box.appendChild(err);
+      const detail = document.createElement('pre');
+      detail.style.cssText = 'font-size:0.72rem;color:#6b7280;white-space:pre-wrap;'
+                           + 'background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px;';
+      detail.textContent = data.error || JSON.stringify(data, null, 2);
+      box.appendChild(detail);
+      return;
+    }
+
     const succeededIds = new Set(
       (data.results || []).filter(r => r.success).map(r => String(r.task_id))
     );
@@ -233,15 +252,24 @@ async function applyRenames() {
     });
 
     const succeeded = succeededIds.size;
-    const failed    = (data.results || []).length - succeeded;
+    const failed    = data.results.length - succeeded;
+    // Anything the server never reported back on. A short results list used to be
+    // invisible: 22 sent, 5 returned, and the other 17 simply vanished from the
+    // count rather than being flagged.
+    const missing   = Math.max(0, items.length - data.results.length);
     const box       = document.getElementById('resultsBox');
     box.innerHTML   = '';
 
     const summary = document.createElement('div');
-    summary.style.cssText = `font-size:0.85rem;font-weight:700;color:${failed ? '#b91c1c' : '#15803d'};margin-bottom:8px;`;
-    summary.textContent = failed
-      ? `${succeeded} renamed · ${failed} FAILED — see red rows below`
-      : `${succeeded} renamed — all approved by Breezeway · rescan when ready`;
+    // Green ONLY when every task sent came back renamed. "0 renamed" is never a
+    // success, and neither is a run where some tasks never came back at all.
+    const allGood = succeeded === items.length && !failed && !missing;
+    summary.style.cssText = `font-size:0.85rem;font-weight:700;color:${allGood ? '#15803d' : '#b91c1c'};margin-bottom:8px;`;
+    summary.textContent = allGood
+      ? `${succeeded} renamed — all approved by Breezeway · rescan when ready`
+      : `${succeeded} of ${items.length} renamed`
+        + (failed  ? ` · ${failed} FAILED — see red rows below` : ``)
+        + (missing ? ` · ${missing} never reported back — re-run to be sure` : ``);
     box.appendChild(summary);
 
     // Per-task confirmation (success AND fail), each with Breezeway's raw response.

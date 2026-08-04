@@ -1281,6 +1281,11 @@ _BW_DAY_PARTIAL_TTL = 45   # gappy sweep — long enough to cover the cascade of
                            # that a later retry genuinely retries
 _BW_RETRY_WINDOW = 900     # 15 min to "try the missing N again" before a retry
                            # falls back to sweeping everything
+_BW_IMPORT_BUDGET_S = 45   # Stop sweeping after this and return what loaded. With
+                           # no budget the import ran to completion however long it
+                           # took — five minutes under throttling — and the gateway
+                           # killed it at 300s, leaving no data and nothing to retry
+                           # against. A partial answer is recoverable; a 502 is not.
 
 
 def _robust_property_tasks(token, ref_id, date_str):
@@ -1386,6 +1391,10 @@ def bw_import():
     # spending the very budget that caused the gaps. Its warning is carried along
     # with it, so the second import reports the same missing properties honestly
     # rather than presenting partial data as complete.
+    # Wall-clock budget for the whole sweep. Railway's gateway gives up at 300s;
+    # returning partial data long before that beats returning nothing at all.
+    _import_deadline = _dt_time.monotonic() + _BW_IMPORT_BUDGET_S
+
     _cached = _bw_day_cache.get(date_str)
     _cached_ttl = _BW_DAY_TTL if (_cached and not _cached[2]) else _BW_DAY_PARTIAL_TTL
     # NB: this module imports time as _dt_time — there is no bare `time` name here.
@@ -1411,18 +1420,60 @@ def bw_import():
 
     def _sweep(keys, seed_results):
         """Fetch `keys`, appending onto `seed_results`. Returns
-        (results, failed_count, status_tally, refs_that_failed)."""
+        (results, failed_count, status_tally, refs_that_failed).
+
+        Bounded by a wall-clock budget. With no budget this ran every property to
+        completion however long it took — and under throttling, where each failure
+        costs three retries with sleeps, that reached FIVE MINUTES and the gateway
+        killed the request at 300s. The user got a 502, no data, and no way to
+        recover incrementally, because there were no partial results to offer a
+        retry against.
+
+        Returning early with 300 of 442 properties and an honest count of what
+        wasn't reached is far better: the stops that loaded are usable immediately,
+        and "try the missing N again" fills the rest a few calls at a time."""
+        from concurrent.futures import as_completed
         out, nfail, tally, refs = list(seed_results), 0, {}, []
         with ThreadPoolExecutor(max_workers=16) as executor:
-            for ref_id, (tasks, ok, status) in zip(
-                    keys,
-                    executor.map(lambda ref: _robust_property_tasks(token, ref, date_str), keys)):
-                out.extend(tasks)
-                if not ok:
+            futures = {executor.submit(_robust_property_tasks, token, ref, date_str): ref
+                       for ref in keys}
+            # Take results AS THEY LAND, up to the budget. (Polling each future with
+            # a tiny timeout instead would mark every still-running property as
+            # failed — it loaded 0 of 40 in a test.)
+            remaining = max(0.0, _import_deadline - _dt_time.monotonic())
+            try:
+                for fut in as_completed(futures, timeout=remaining):
+                    ref_id = futures[fut]
+                    try:
+                        tasks, ok, status = fut.result()
+                    except Exception:
+                        nfail += 1; refs.append(ref_id)
+                        tally["timeout"] = tally.get("timeout", 0) + 1
+                        continue
+                    out.extend(tasks)
+                    if not ok:
+                        nfail += 1
+                        refs.append(ref_id)
+                        k = _failure_key(status)
+                        tally[k] = tally.get(k, 0) + 1
+            except Exception:
+                pass        # budget reached — the leftovers are handled below
+
+            # Whatever hasn't finished is reported as not-reached so the retry
+            # button can pick it up, rather than the whole request dying at the
+            # gateway with nothing to show for five minutes of work.
+            unreached = 0
+            for fut, ref_id in futures.items():
+                if not fut.done():
+                    fut.cancel()
+                    unreached += 1
                     nfail += 1
                     refs.append(ref_id)
-                    k = _failure_key(status)
-                    tally[k] = tally.get(k, 0) + 1
+                    tally["timeout"] = tally.get("timeout", 0) + 1
+        if unreached:
+            current_app.logger.warning(
+                "[bw-import] %s: budget reached, %d properties not reached",
+                date_str, unreached)
         return out, nfail, tally, refs
 
     if _retry_refs:

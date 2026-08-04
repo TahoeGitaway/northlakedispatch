@@ -762,7 +762,13 @@ async function runBwImport() {
         response_body: (bodyText || "").slice(0, 800),
         parse_error: String(parseErr),
       }, res.status === 502 || res.status === 504
-           ? "The server took too long and the gateway gave up. The scan may still be running — try again in a moment."
+           // "The scan may still be running — try again in a moment" told the user
+           // nothing they could act on, and wasn't even reliably true. Say what
+           // happened and what to do about it.
+           ? "This took too long and the connection was cut, so nothing loaded. "
+             + "If you started imports for more than one person at once, run them "
+             + "ONE AT A TIME — each looks up every property, and together they slow "
+             + "each other down. Click Import Stops to try again."
            : `The server returned HTTP ${res.status} instead of data.`);
       return;
     }
