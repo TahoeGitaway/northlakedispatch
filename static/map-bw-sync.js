@@ -22,7 +22,7 @@ function _bwRetryableNames(outcome) {
    since the banner builds its own markup outside the stylesheet's reach). */
 function _bwRetryButtonHtml(names, where) {
   const n     = names.length;
-  const label = `&#8635; Retry only ${n} that didn't sync`;
+  const label = `&#8635; Retry the ${n} that failed to sync`;
   if (where === "banner") {
     return '<button type="button" onclick="bwRetryNotApplied()" '
          + 'style="margin-left:14px;background:#fff;border:none;color:#b91c1c;'
