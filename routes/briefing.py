@@ -263,6 +263,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     retrying into the same wall.
     """
     from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
+    from routes import bw_api_log
 
     all_results = []
     page, limit = 1, 100
@@ -277,6 +278,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 return [], ("Held back by this app's rate limiter — not sent to "
                             "Breezeway"), LOCAL_THROTTLE_STATUS
 
+            _t0 = time.time()
             resp = requests.get(
                 f"https://api.breezeway.io{path}",
                 headers={"Authorization": f"JWT {token}"},
@@ -285,6 +287,10 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
             )
             last_status = resp.status_code
             gate.on_response(last_status)
+            # One line, one direction. routes/bw_api_log.py owns everything else.
+            bw_api_log.record(path, last_status, resp.ok,
+                              ref=str(params.get("reference_property_id") or ""),
+                              elapsed_ms=int((time.time() - _t0) * 1000))
             if not resp.ok:
                 try:
                     detail = resp.json()
@@ -299,8 +305,10 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 break
             page += 1
     except requests.exceptions.Timeout:
+        bw_api_log.record(path, None, False, detail="timed out after 15 s")
         return [], "Request timed out — Breezeway API did not respond within 15 s", last_status
     except Exception as ex:
+        bw_api_log.record(path, None, False, detail=f"{type(ex).__name__}: {ex}")
         return [], str(ex), last_status
     return all_results, "", last_status
 

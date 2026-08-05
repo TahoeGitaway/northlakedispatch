@@ -500,6 +500,34 @@ def init_db():
     cur.execute("""CREATE INDEX IF NOT EXISTS idx_bw_write_log_task
                    ON bw_write_log (task_id)""")
 
+    # Every Breezeway REQUEST, success or failure, in order.
+    #
+    # bw_write_log above answers "what did the app change" — this answers "what did
+    # Breezeway do to us". Without it there is no way to say how many 429s a day
+    # actually produced; the rate gate counts them in memory and every deploy
+    # resets that to zero.
+    #
+    # Successes are recorded too, on purpose: "261 refused out of 1,847" is a very
+    # different conversation from "we got some errors".
+    #
+    # Rows are written in batches (see routes/bw_api_log.py) — a scan makes ~442
+    # requests and a round-trip per request would itself slow the scan down.
+    cur.execute("""CREATE TABLE IF NOT EXISTS bw_api_log (
+        id         SERIAL PRIMARY KEY,
+        ts         TEXT NOT NULL,          -- UTC ISO8601
+        feature    TEXT,                   -- the page/endpoint that triggered it
+        endpoint   TEXT,                   -- Breezeway path
+        status     INTEGER,                -- NULL = no response (timeout/network)
+        ok         BOOLEAN NOT NULL DEFAULT FALSE,
+        ref        TEXT,                   -- property/task the call was for
+        elapsed_ms INTEGER,
+        detail     TEXT
+    )""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_bw_api_log_ts
+                   ON bw_api_log (ts DESC)""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_bw_api_log_status
+                   ON bw_api_log (status)""")
+
     # Safe migrations
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")

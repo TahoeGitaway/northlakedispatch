@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Breezeway Log · North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="px-6 py-5">
+
+  <h1 class="text-xl font-semibold text-gray-900">Breezeway Log</h1>
+  <p class="text-xs text-gray-500 mt-1 mb-4 leading-snug max-w-3xl">
+    Every request this app makes to Breezeway, newest first — successes and failures.
+    Use this to say exactly how many requests were refused, and when.
+    <span class="text-gray-400">(For what the app <i>changed</i>, see
+    <a href="{{ url_for('bw_audit.task_changes_page') }}" class="text-indigo-600 hover:underline">Task Changes</a>.)</span>
+  </p>
+
+  {% if totals and totals.total %}
+  <div class="flex flex-wrap gap-3 mb-4">
+    {% set pct = (100.0 * (totals.failed or 0) / totals.total) %}
+    <div class="border border-gray-200 rounded-lg px-4 py-2 bg-white">
+      <div class="text-[0.65rem] uppercase tracking-wide text-gray-400">Requests</div>
+      <div class="text-lg font-semibold text-gray-900">{{ '{:,}'.format(totals.total) }}</div>
+    </div>
+    <div class="border border-gray-200 rounded-lg px-4 py-2 bg-white">
+      <div class="text-[0.65rem] uppercase tracking-wide text-gray-400">Succeeded</div>
+      <div class="text-lg font-semibold text-green-700">{{ '{:,}'.format(totals.ok or 0) }}</div>
+    </div>
+    <div class="border border-gray-200 rounded-lg px-4 py-2 bg-white">
+      <div class="text-[0.65rem] uppercase tracking-wide text-gray-400">Failed</div>
+      <div class="text-lg font-semibold text-red-700">
+        {{ '{:,}'.format(totals.failed or 0) }}
+        <span class="text-xs font-normal text-gray-400">{{ '%.1f'|format(pct) }}%</span>
+      </div>
+    </div>
+    <div class="border border-gray-200 rounded-lg px-4 py-2 bg-white">
+      <div class="text-[0.65rem] uppercase tracking-wide text-gray-400">Rate-limited (429)</div>
+      <div class="text-lg font-semibold text-amber-700">{{ '{:,}'.format(totals.throttled or 0) }}</div>
+    </div>
+    {% if totals.by_code %}
+    <div class="border border-gray-200 rounded-lg px-4 py-2 bg-white">
+      <div class="text-[0.65rem] uppercase tracking-wide text-gray-400">Failures by code</div>
+      <div class="text-xs text-gray-700 mt-1">
+        {% for c in totals.by_code %}<span class="mr-2">{{ c.code }} · <b>{{ c.n }}</b></span>{% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="get" class="flex flex-wrap items-end gap-3 mb-4 text-sm">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Day</label>
+      <input type="date" name="day" value="{{ f_day }}"
+             class="border border-gray-300 rounded px-2 py-1 text-sm">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Show</label>
+      <select name="show" class="border border-gray-300 rounded px-2 py-1 text-sm">
+        {% for v, label in [('all','Successes and failures'), ('failed','Failures only'), ('ok','Successes only')] %}
+          <option value="{{ v }}" {% if f_show == v %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Status</label>
+      <select name="status" class="border border-gray-300 rounded px-2 py-1 text-sm">
+        <option value="">Any</option>
+        {% for v, label in [('429','429 rate limited'), ('401','401 auth'), ('403','403 forbidden'),
+                            ('404','404 not found'), ('422','422 bad params'),
+                            ('500','500 server error'), ('timeout','No response')] %}
+          <option value="{{ v }}" {% if f_status == v %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-1.5 rounded">Filter</button>
+    {% if f_day or f_status or f_show != 'all' %}
+      <a href="{{ url_for('bw_api_log.breezeway_log_page') }}" class="text-xs text-gray-500 hover:text-gray-800 pb-1.5">Clear</a>
+    {% endif %}
+  </form>
+
+  {% if not rows %}
+    <div class="text-sm text-gray-400 border border-dashed border-gray-300 rounded p-6 text-center">
+      Nothing recorded{% if f_day or f_status or f_show != 'all' %} for that filter{% endif %}.
+    </div>
+  {% else %}
+  <div class="overflow-x-auto border border-gray-200 rounded-lg bg-white">
+    <table class="w-full text-xs">
+      <thead class="bg-gray-50 text-gray-500 uppercase tracking-wide">
+        <tr>
+          <th class="text-left font-semibold px-3 py-2">When</th>
+          <th class="text-left font-semibold px-3 py-2">Result</th>
+          <th class="text-left font-semibold px-3 py-2">Status</th>
+          <th class="text-left font-semibold px-3 py-2">Breezeway endpoint</th>
+          <th class="text-left font-semibold px-3 py-2">For</th>
+          <th class="text-left font-semibold px-3 py-2">Triggered by</th>
+          <th class="text-right font-semibold px-3 py-2">Took</th>
+          <th class="text-left font-semibold px-3 py-2">Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr class="border-t border-gray-100 {% if not r.ok %}bg-red-50{% endif %}">
+          <td class="px-3 py-1 text-gray-500 whitespace-nowrap" data-utc="{{ r.ts }}">{{ r.ts }}</td>
+          <td class="px-3 py-1 whitespace-nowrap">
+            {% if r.ok %}<span class="text-green-700 font-semibold">✓</span>
+            {% else %}<span class="text-red-700 font-semibold">✗</span>{% endif %}
+          </td>
+          <td class="px-3 py-1 whitespace-nowrap {% if r.status == 429 %}text-amber-700 font-semibold{% else %}text-gray-600{% endif %}">
+            {{ r.status if r.status is not none else 'no response' }}
+          </td>
+          <td class="px-3 py-1 text-gray-600">{{ r.endpoint }}</td>
+          <td class="px-3 py-1 text-gray-500 whitespace-nowrap">{{ r.ref or '—' }}</td>
+          <td class="px-3 py-1 text-gray-500 whitespace-nowrap">{{ r.feature or '—' }}</td>
+          <td class="px-3 py-1 text-gray-400 text-right whitespace-nowrap">{{ r.elapsed_ms }} ms</td>
+          <td class="px-3 py-1 text-gray-500">{{ r.detail or '' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs text-gray-400 mt-2">Showing {{ rows|length }} most recent.</p>
+  {% endif %}
+</div>
+
+<script>
+  document.querySelectorAll('[data-utc]').forEach(function (el) {
+    if (typeof fmtUtc === 'function') el.textContent = fmtUtc(el.dataset.utc);
+  });
+</script>
+{% endblock %}
