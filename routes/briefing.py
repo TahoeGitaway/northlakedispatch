@@ -24,6 +24,7 @@ from flask_login import login_required, current_user
 from db import get_db, get_cursor
 from routes.auth import admin_required
 from routes.bw_ratelimit import LOCAL_THROTTLE_STATUS as _LOCAL_THROTTLE
+from routes.bw_api_log import bw_get
 
 briefing_bp = Blueprint("briefing", __name__)
 
@@ -179,7 +180,7 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
     page, limit = 1, 100
     try:
         while True:
-            resp = requests.get(
+            resp = bw_get(
                 "https://api.breezeway.io/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={**params, "limit": limit, "page": page},
@@ -223,12 +224,21 @@ def _fetch_bw_reservations_checked(token: str, params: dict,
         last_exc = None
         for attempt in range(retries + 1):
             try:
-                resp = requests.get(
+                resp = bw_get(
                     "https://api.breezeway.io/public/inventory/v1/reservation",
                     headers={"Authorization": f"JWT {token}"},
                     params={**params, "limit": limit, "page": page},
                     timeout=15,
                 )
+                # A throttled or errored page is NOT an empty page. Without this,
+                # a 429 whose body happens to parse as JSON yields no "results",
+                # which then reads as "that was the last page" and returns a
+                # truncated set marked COMPLETE — defeating the one thing this
+                # function exists to guarantee. Raising routes it through the
+                # retry/backoff below and, if it never recovers, reports the
+                # fetch as incomplete.
+                if not resp.ok:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
                 data = resp.json()
                 page_results = (data.get("results", data.get("data", [])) or []) \
                                if isinstance(data, dict) else (data or [])
@@ -406,7 +416,7 @@ def _load_property_cache() -> str:
         fetched_addr = {}
         fetched_ref  = {}
         while True:
-            resp = requests.get(
+            resp = bw_get(
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
                 params={"limit": limit, "page": page, "status": "active"},
@@ -1649,7 +1659,7 @@ def debug_properties():
     raw_sample = None
     if token:
         try:
-            resp = requests.get(
+            resp = bw_get(
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
                 params={"limit": 1, "page": 1},
