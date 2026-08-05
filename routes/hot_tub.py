@@ -35,6 +35,7 @@ BW_BASE = "https://api.breezeway.io"
 # timeout (→ "upstream error"); caching means the backend finishes and a retry
 # returns instantly. The scan takes no params, so one entry is enough.
 import time as _time
+from routes.bw_api_log import bw_get
 _scan_cache = {"ts": 0.0, "data": None}
 _SCAN_TTL = 300
 
@@ -82,7 +83,7 @@ def _get_property_name(pid):
 def _fetch_hot_tub_tag_id(token: str) -> int | None:
     """Fetch all available property tags and find the Hot Tub - TG Service tag ID."""
     try:
-        r = requests.get(
+        r = bw_get(
             f"{BW_BASE}/public/inventory/v1/property/tags",
             headers={"Authorization": f"JWT {token}"},
             timeout=15,
@@ -107,7 +108,7 @@ def _fetch_property_tags(token: str, pid: str) -> list:
         f"/public/inventory/v1/property/{pid}",
     ]:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}{path}",
                 headers={"Authorization": f"JWT {token}"},
                 timeout=15,
@@ -138,7 +139,7 @@ def _fetch_current_lease_pids(token: str, today: date) -> set:
     page = 1
     while True:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={"checkin_date_le": today.isoformat(),
@@ -173,7 +174,7 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
     id_pairs += [("property_id", pid), ("home_id", pid)]
     for key, val in id_pairs:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/task/",
                 headers={"Authorization": f"JWT {token}"},
                 params={"scheduled_date": date_range, key: val, "limit": 100},

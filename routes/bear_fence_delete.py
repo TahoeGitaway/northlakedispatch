@@ -29,6 +29,7 @@ from flask_login import login_required
 
 from routes.auth import admin_required
 from routes.group_assign import _assignee_names
+from routes.bw_api_log import bw_get
 from routes.bear_fence import (
     BW_BASE,
     _get_token,
@@ -152,7 +153,7 @@ def _unassign_task(token: str, task_id, meta: dict = None) -> tuple[bool, str]:
         # Re-read to confirm it really cleared.
         after = None
         try:
-            g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+            g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
             if g.ok:
                 after = _assignee_names(g.json())
         except Exception:

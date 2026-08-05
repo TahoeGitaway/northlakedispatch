@@ -36,6 +36,7 @@ from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required, current_user
 
 from routes.auth import admin_required
+from routes.bw_api_log import bw_get
 
 assignee_monitor_bp = Blueprint("assignee_monitor", __name__)
 
@@ -83,7 +84,7 @@ def _fetch_all_people(token: str) -> list:
     people, page, ok = [], 1, False
     while page <= 10:
         try:
-            r = requests.get(f"{BW_BASE}/public/inventory/v1/people",
+            r = bw_get(f"{BW_BASE}/public/inventory/v1/people",
                              headers={"Authorization": f"JWT {token}"},
                              params={"status": "active", "limit": 200, "page": page},
                              timeout=20)

@@ -18,6 +18,7 @@ from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required
 
 from routes.auth import admin_required
+from routes.bw_api_log import bw_get
 
 lease_prep_bp = Blueprint("lease_prep", __name__)
 
@@ -43,7 +44,7 @@ def _fetch_property_tags(token: str, pid: str) -> list:
     for path in (f"/public/inventory/v1/property/{pid}/tags",
                  f"/public/inventory/v1/property/{pid}"):
         try:
-            r = requests.get(f"{BW_BASE}{path}",
+            r = bw_get(f"{BW_BASE}{path}",
                              headers={"Authorization": f"JWT {token}"}, timeout=15)
             if r.status_code == 200:
                 body = r.json()
@@ -103,7 +104,7 @@ def _fetch_reservations(token: str, start: date, end: date,
     page = 1
     while True:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={ge_key: start.isoformat(),
@@ -135,7 +136,7 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
     id_pairs += [("property_id", pid), ("home_id", pid)]
     for key, val in id_pairs:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/task/",
                 headers={"Authorization": f"JWT {token}"},
                 params={"scheduled_date": date_range, key: val, "limit": 200},

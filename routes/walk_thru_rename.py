@@ -29,6 +29,7 @@ BW_BASE = "https://api.breezeway.io"
 # proxy's timeout (→ "upstream error"); caching means the backend finishes and a
 # retry returns instantly. Cleared after any rename.
 import time as _time
+from routes.bw_api_log import bw_get
 _scan_cache: dict = {}      # (start_iso, end_iso) -> (timestamp, result_dict)
 _SCAN_TTL = 90
 
@@ -67,7 +68,7 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
     id_pairs += [("property_id", pid), ("home_id", pid)]
     for key, val in id_pairs:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/task/",
                 headers={"Authorization": f"JWT {token}"},
                 params={"scheduled_date": date_range, key: val, "limit": 100},
@@ -109,7 +110,7 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
     page = 1
     while True:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={

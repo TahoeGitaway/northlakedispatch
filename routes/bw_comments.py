@@ -43,6 +43,7 @@ from flask_login import login_required, current_user
 
 from db import get_db, get_cursor
 from routes.auth import admin_required
+from routes.bw_api_log import bw_get
 
 bw_comments_bp = Blueprint("bw_comments", __name__)
 
@@ -336,7 +337,7 @@ def bw_comments_status():
     subs, err = None, None
     if token:
         try:
-            r = requests.get(f"{BW_BASE}/public/webhook/v1/webhooks",
+            r = bw_get(f"{BW_BASE}/public/webhook/v1/webhooks",
                              headers={"Authorization": f"JWT {token}"}, timeout=15)
             if r.ok:
                 subs = r.json()

@@ -51,6 +51,7 @@ def _safe_trim(messages, limit):
 
 # ── Breezeway context cache (avoids re-fetching on every chat message) ──
 import time as _time
+from routes.bw_api_log import bw_get
 _bw_ctx_cache: dict = {}   # {cache_key: (timestamp, checkins, checkouts)}
 _BW_CTX_TTL = 10 * 60     # 10 minutes
 
@@ -379,7 +380,7 @@ def geocode_address():
                 page = 1
                 bw_found_any = False
                 while True:
-                    resp = requests.get(
+                    resp = bw_get(
                         "https://api.breezeway.io/public/inventory/v1/property",
                         headers={"Authorization": f"JWT {bw_token}"},
                         params={"limit": 100, "page": page, "status": "active"},

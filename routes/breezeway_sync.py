@@ -14,6 +14,7 @@ import requests
 from flask import Blueprint, request, jsonify
 from flask_login import login_required
 from routes.auth import admin_required
+from routes.bw_api_log import bw_get
 
 bw_sync_bp = Blueprint("bw_sync", __name__)
 
@@ -133,7 +134,7 @@ def _fetch_tasks_for_property(token: str, ref_id: str, date_str: str,
                 last_detail = "held back by this app's rate limiter"
                 continue
             try:
-                r = requests.get(
+                r = bw_get(
                     f"{BW_BASE}/public/inventory/v1/task",
                     headers={"Authorization": f"JWT {token}"},
                     params={**params, "limit": 50},

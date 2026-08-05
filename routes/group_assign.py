@@ -26,6 +26,7 @@ from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required
 
 from routes.auth import admin_required
+from routes.bw_api_log import bw_get
 
 group_assign_bp = Blueprint("group_assign", __name__)
 
@@ -200,7 +201,7 @@ def _refresh_group_map(token: str):
     page = 1
     while page <= 6:
         try:
-            r = requests.get(f"{BW_BASE}/public/inventory/v1/property",
+            r = bw_get(f"{BW_BASE}/public/inventory/v1/property",
                              headers={"Authorization": f"JWT {token}"},
                              params={"limit": 200, "page": page, "status": "active"},
                              timeout=20)
@@ -248,7 +249,7 @@ def _fetch_people(token: str) -> list:
     people, page, ok = [], 1, False
     while page <= 10:
         try:
-            r = requests.get(f"{BW_BASE}/public/inventory/v1/people",
+            r = bw_get(f"{BW_BASE}/public/inventory/v1/people",
                              headers={"Authorization": f"JWT {token}"},
                              params={"status": "active", "limit": 200, "page": page},
                              timeout=20)
@@ -654,7 +655,7 @@ def group_assign_apply():
                     # assigned now — confirmation, not just the PATCH status.
                     after = None
                     try:
-                        g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+                        g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
                         if g.ok:
                             after = _assignee_names(g.json())
                     except Exception:
@@ -857,7 +858,7 @@ def group_assign_change_date():
                         after = None
                     if not after:
                         try:
-                            g = requests.get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+                            g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
                             if g.ok:
                                 after = (g.json().get("scheduled_date") or "")[:10]
                         except Exception:

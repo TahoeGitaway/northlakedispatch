@@ -16,6 +16,7 @@ from flask_login import login_required
 
 from db import get_db, get_cursor
 from routes.auth import admin_required
+from routes.bw_api_log import bw_get
 
 my_bot_bp = Blueprint("my_bot", __name__)
 
@@ -276,7 +277,7 @@ def _mybot_bw_property_index():
     by_num, page = {}, 1
     for _ in range(20):
         try:
-            r = requests.get(
+            r = bw_get(
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {tok}"},
                 params={"limit": 200, "page": page, "status": "active"},

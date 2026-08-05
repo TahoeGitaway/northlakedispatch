@@ -16,6 +16,7 @@ from flask_login import login_required, current_user
 from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
+from routes.bw_api_log import bw_get
 from db import (get_db, get_cursor, DEFAULT_START,
                 CHECKIN_DEADLINE_HHMM, PRIORITY_CHECKIN_DEADLINE_HHMM,
                 hhmm_to_minutes, minutes_to_hhmm)
@@ -1664,7 +1665,7 @@ def _bw_assignee_match(task: dict, asgn_lower: str) -> bool:
 def _bw_get_raw(token: str, path: str):
     """Single raw GET against Breezeway. Returns (json_or_none, status_or_none)."""
     try:
-        r = requests.get(f"https://api.breezeway.io{path}",
+        r = bw_get(f"https://api.breezeway.io{path}",
                          headers={"Authorization": f"JWT {token}"}, timeout=15)
         try:
             body = r.json()

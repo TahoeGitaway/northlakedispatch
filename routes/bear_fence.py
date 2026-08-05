@@ -22,6 +22,7 @@ from flask_login import login_required
 
 from routes.auth import admin_required
 from routes.group_assign import _assignee_names
+from routes.bw_api_log import bw_get
 
 bear_fence_bp = Blueprint("bear_fence", __name__)
 
@@ -58,7 +59,7 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
     id_pairs += [("property_id", pid), ("home_id", pid)]
     for key, val in id_pairs:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/task/",
                 headers={"Authorization": f"JWT {token}"},
                 params={"scheduled_date": date_range, key: val, "limit": 100},
@@ -97,7 +98,7 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
     page = 1
     while True:
         try:
-            r = requests.get(
+            r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={"checkin_date_ge": start.isoformat(), "checkin_date_le": end.isoformat(),
@@ -126,7 +127,7 @@ def _fetch_task_by_id(token: str, task_id) -> dict | None:
     for path in (f"/public/inventory/v1/task/{task_id}",
                  f"/public/inventory/v1/task/{task_id}/"):
         try:
-            r = requests.get(f"{BW_BASE}{path}", headers=headers, timeout=15)
+            r = bw_get(f"{BW_BASE}{path}", headers=headers, timeout=15)
             if r.status_code == 200:
                 body = r.json()
                 if isinstance(body, dict):

@@ -115,6 +115,32 @@ def flush() -> int:
         return 0
 
 
+def bw_get(url, **kwargs):
+    """requests.get for Breezeway, recorded. Drop-in replacement: identical
+    arguments, return value and exceptions.
+
+    Every Breezeway read should go through this. The alternative — a record()
+    call next to each requests.get — is what left two dozen call sites
+    uninstrumented and the 429 count wrong; with a wrapper, a new caller is
+    logged by default and only an explicit `requests.get` can escape it."""
+    import requests
+    t0 = time.time()
+    params = kwargs.get("params") or {}
+    ref = str(params.get("reference_property_id") or params.get("home_id")
+              or params.get("property_id") or "")[:80]
+    path = url.split("breezeway.io", 1)[-1] if "breezeway.io" in url else url
+    try:
+        r = requests.get(url, **kwargs)
+        record(path, r.status_code, r.ok, ref,
+               int((time.time() - t0) * 1000),
+               "" if r.ok else (r.text or "")[:200])
+        return r
+    except Exception as e:
+        record(path, None, False, ref, int((time.time() - t0) * 1000),
+               f"{type(e).__name__}: {e}")
+        raise
+
+
 # ── Reading ───────────────────────────────────────────────────────
 
 def _rows(show: str = "all", day: str = "", status: str = "", limit: int = 500) -> list:
