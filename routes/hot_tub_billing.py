@@ -52,7 +52,10 @@ from db import get_db, get_cursor
 # exactly one auth + reservation-classification code path with the rest of the app.
 from routes.briefing import (
     _get_breezeway_token,
-    _fetch_bw_reservations,
+    # The *_checked variant, deliberately: these reservations decide which houses
+    # show a lease on the tape chart, and a half-loaded set would quietly redraw
+    # the evidence she bills from. It reports whether the fetch was complete.
+    _fetch_bw_reservations_checked,
     _classify_reservation,
 )
 
@@ -103,10 +106,20 @@ def _month_reservations(month: str) -> dict:
                 "reason": "Could not authenticate with Breezeway."}
 
     # Overlap: checks in on/before the last day AND out on/after the first day.
-    raw = _fetch_bw_reservations(token, {
+    raw, complete = _fetch_bw_reservations_checked(token, {
         "checkin_date_le": last.isoformat(),
         "checkout_date_ge": first.isoformat(),
     })
+    if not complete:
+        # Do NOT cache, and do NOT present a partial set as the month's truth. A
+        # reservation missing because of a throttle would silently redraw a tape
+        # chart with a stay — or a lease — erased from it, and the page treats
+        # what it is given as the whole month. Better to say the lookup failed:
+        # the chart already renders ok:false as "Tape chart unavailable".
+        return {"ok": False, "month": month,
+                "reason": "Breezeway returned only part of the reservation list "
+                          "(usually rate limiting) — showing nothing rather than "
+                          "a partial month"}
     by_property, seen = {}, set()
     for r in raw:
         rid = r.get("id")
@@ -333,6 +346,56 @@ def _import_file_to_db_if_needed(month: str):
     except Exception:
         pass   # serving still works even if the persist fails
     return payload
+
+
+def _adopt_scan_output(month: str):
+    """Persist the file a just-finished scan wrote, REPLACING any stored copy.
+
+    _import_file_to_db_if_needed deliberately prefers the database, because on a
+    normal page load the DB is the durable truth and a file on the ephemeral disk
+    may be a leftover. Right after a scan that rule is exactly backwards: the file
+    IS the new result and the stored copy is what it supersedes. Regenerate kept
+    re-showing the old worksheet for this reason — the scan ran, wrote its file,
+    and the page then loaded the row it had just replaced."""
+    path = _json_path(month)
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        # The scan wrote nothing (halted). Keep whatever was already stored —
+        # never let a failed run erase a good worksheet.
+        return _db_load_worksheet(month)
+    try:
+        _db_save_worksheet(month, payload)
+    except Exception:
+        pass   # serving still works even if the persist fails
+    return payload
+
+
+def _missing_property_ids(payload: dict) -> tuple:
+    """Houses the last scan could not load, as (ids, names).
+
+    Prefers the structured `failed_properties` record. Worksheets generated before
+    that existed only have failure SENTENCES, which name the house but carry no
+    id — so fall back to the name, and never try to infer an id from a name.
+    Returns ids when it can, names when it can't, and empty when nothing failed."""
+    ids, seen = [], set()
+    for f in (payload.get("failed_properties") or []):
+        pid = str(f.get("property_id") or "").strip()
+        if pid and pid not in seen:
+            seen.add(pid)
+            ids.append(pid)
+    if ids:
+        return ids, []
+
+    names, seen_n = [], set()
+    for line in (payload.get("failures") or []):
+        # Format written by RunReport.fail_property: "<house>: <error> — services…"
+        name = str(line).split(":", 1)[0].strip()
+        if name and name not in seen_n and "services MISSING from worksheet" in str(line):
+            seen_n.add(name)
+            names.append(name)
+    return [], names
 
 
 def _worksheet_exists(month: str) -> bool:
@@ -835,6 +898,77 @@ def hot_tub_billing_generate():
     return jsonify({"started": True, "running": True, "month": month})
 
 
+@hot_tub_billing_bp.route("/admin/hot-tub-billing/load-missing", methods=["POST"])
+@login_required
+@admin_required
+def hot_tub_billing_load_missing():
+    """Re-scan ONLY the houses the last run couldn't load, and merge them in.
+
+    A house that failed is not "a house with no services" — it is a house we never
+    saw, and it is absent from the worksheet entirely rather than sitting there at
+    $0. Left alone it bills the owner nothing, silently.
+
+    Recovering them by regenerating the whole month means another full-portfolio
+    sweep against the same API that dropped them, which is both slow and the most
+    likely way to drop a fresh set. This fetches just the missing houses — the
+    engine skips the portfolio-wide tag sweep for anything not requested — and
+    folds the results into the stored worksheet.
+    """
+    month = (request.args.get("month") or "").strip()
+    if not _MONTH_FMT.fullmatch(month or ""):
+        abort(400, "month must be YYYY-MM.")
+    if _db_get_archive(month):
+        abort(409, f"{month} is archived (read-only). Reopen it first to load more houses.")
+
+    payload = _import_file_to_db_if_needed(month)
+    if payload is None:
+        abort(404, f"No worksheet for {month} yet — generate it first.")
+
+    ids, names = _missing_property_ids(payload)
+    if not ids and not names:
+        return jsonify({"started": False, "running": False, "month": month, "missing": 0,
+                        "message": "Nothing missing — every house on the scan loaded."})
+
+    with _JOBS_LOCK:
+        job = _JOBS.get(month)
+        if job and job["proc"].poll() is None:
+            return jsonify({"started": False, "running": True, "month": month,
+                            "missing": len(ids or names),
+                            "message": "A scan for this month is already running."})
+
+        # Stage the current worksheet where the engine will look for it. The DB is
+        # the durable copy and the host wipes the disk on restart, so the file may
+        # not exist — and the engine refuses to merge into nothing rather than
+        # replace the month with just the recovered houses.
+        try:
+            os.makedirs(REPORTS_DIR, exist_ok=True)
+            with open(_json_path(month), "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, default=str)
+        except Exception as e:
+            return jsonify({"started": False, "running": False, "month": month,
+                            "message": f"Could not stage the worksheet for merge: {e}"}), 500
+
+        selector = ["--only", ",".join(ids)] if ids else ["--only-names", "|".join(names)]
+        log_path = _log_path(month)
+        try:
+            logf = open(log_path, "w", encoding="utf-8")
+            proc = subprocess.Popen(
+                [_engine_python(), os.path.join(_ROOT, "tools", "hot_tub_billing.py"),
+                 "--month", month, "--outdir", REPORTS_DIR, "--merge", *selector],
+                cwd=_ROOT, stdout=logf, stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as e:
+            return jsonify({"started": False, "running": False, "month": month,
+                            "message": f"Could not start the recovery scan: {e}"}), 500
+
+        _JOBS[month] = {"proc": proc, "logf": logf,
+                        "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                        "log": log_path}
+    return jsonify({"started": True, "running": True, "month": month,
+                    "missing": len(ids or names)})
+
+
 @hot_tub_billing_bp.route("/admin/hot-tub-billing/status")
 @login_required
 @admin_required
@@ -865,8 +999,10 @@ def hot_tub_billing_status():
         log = job["log"]
         _JOBS.pop(month, None)
         # Persist the just-written file to the DB immediately so it survives the
-        # next deploy/restart (the file itself lives on the ephemeral disk).
-        payload = _import_file_to_db_if_needed(month)
+        # next deploy/restart (the file itself lives on the ephemeral disk), and
+        # REPLACE the stored copy — this file is the result of the scan that just
+        # finished, not a leftover to be skipped in favour of the old row.
+        payload = _adopt_scan_output(month)
         if payload is not None:
             return jsonify({"month": month, "running": False, "exists": True,
                             "returncode": rc, "generated_at": _generated_at(month)})

@@ -432,6 +432,64 @@ async function generate(month) {
   polling = setTimeout(poll, 1500);
 }
 
+// Names of the houses the scan couldn't read. Prefers the structured record the
+// engine now writes; falls back to parsing the failure sentence so worksheets
+// generated before that record existed can still be recovered.
+function missingHouses(d) {
+  const structured = (d.failed_properties || []).map(f => f && f.property).filter(Boolean);
+  if (structured.length) return structured;
+  return (d.failures || [])
+    .filter(l => String(l).includes("services MISSING from worksheet"))
+    .map(l => String(l).split(":")[0].trim())
+    .filter(Boolean);
+}
+
+// Re-scan ONLY the houses that failed and merge them into this month. Cheaper and
+// far less likely to trip the rate limiter than regenerating all ~245, and it
+// cannot lose the houses that already loaded — the engine refuses to merge unless
+// it has the existing worksheet to merge into.
+async function loadMissing(month, n) {
+  const btn  = document.getElementById("loadMissingBtn");
+  const note = document.getElementById("loadMissingNote");
+  const label = `Load the ${n} missing house${n === 1 ? "" : "s"}`;
+  const fail = (msg) => {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (note) note.textContent = msg;
+  };
+  if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+  if (note) note.textContent = "";
+
+  let r, j;
+  try {
+    r = await fetch(`/admin/hot-tub-billing/load-missing?month=${encodeURIComponent(month)}`,
+                    { method: "POST" });
+    j = await r.json().catch(() => ({}));
+  } catch (e) {
+    return fail("Could not reach the server.");
+  }
+  if (!r.ok || (!j.started && !j.running)) {
+    return fail(j.message || ("Couldn't start — HTTP " + r.status));
+  }
+
+  const started = Date.now();
+  const poll = async () => {
+    const s = Math.round((Date.now() - started) / 1000);
+    if (btn) btn.textContent = `Loading ${n} house${n === 1 ? "" : "s"}… ${s}s`;
+    let st = {};
+    try {
+      const sr = await fetch(`/admin/hot-tub-billing/status?month=${encodeURIComponent(month)}`);
+      st = await sr.json().catch(() => ({}));
+    } catch (e) { /* transient — keep polling */ }
+    if (st.running) { polling = setTimeout(poll, 3000); return; }
+    polling = null;
+    if (st.failed) {
+      return fail(st.message || "The recovery scan wrote nothing — the worksheet is unchanged.");
+    }
+    return load(month);   // re-render; any house still missing re-offers the button
+  };
+  polling = setTimeout(poll, 1500);
+}
+
 // ── Local adjustments (comp / resolve review / hypothetical credit+service) ──
 // Every edit here lives ONLY in the per-month overrides file on our side. The
 // Breezeway scan is never written to — it stays strictly read-only. These
@@ -655,6 +713,10 @@ function render(d) {
 
   const partial = d.status !== "COMPLETE";
   ARCHIVED = !!d.archived;
+  // Houses the scan never managed to read. They are NOT in `props` at all — not
+  // even at $0 — so without naming them here the only trace they ever existed is
+  // a failure count, and they bill nothing at all.
+  const missing = ARCHIVED ? [] : missingHouses(d);
   // Live owner total + service-type tally across ALL houses AFTER your edits
   // (comps drop out, reclassifications move between types, manual lines add in).
   const revenue = computed.reduce((s, c) => s + c.rc.total, 0);
@@ -686,9 +748,26 @@ function render(d) {
         ? `<button id="reopenBtn" type="button" class="text-xs bg-white border border-slate-300 text-slate-700 px-2.5 py-1 rounded-md hover:bg-slate-50">Reopen to edit</button>`
         : `<span id="saveState" class="text-[11px] text-gray-400"></span>`}
     </div>
-    ${ARCHIVED ? `<div class="mt-1.5 text-xs text-slate-500">This month is frozen and read-only — edits are disabled. Reopen it if you need to change anything.</div>` : ""}`;
+    ${ARCHIVED ? `<div class="mt-1.5 text-xs text-slate-500">This month is frozen and read-only — edits are disabled. Reopen it if you need to change anything.</div>` : ""}
+    ${missing.length ? `
+    <div class="mt-1.5 text-xs bg-amber-50/70 border border-amber-200 rounded-md px-4 py-3">
+      <div class="font-semibold text-amber-900 mb-1">
+        ${missing.length} house${missing.length === 1 ? "" : "s"} could not be read from Breezeway — missing from this worksheet and the CSV.
+      </div>
+      <div class="text-amber-800 mb-2">
+        These are not $0 houses: their services were never loaded, so billing from this
+        month as it stands would invoice ${missing.length === 1 ? "this owner" : "these owners"} nothing.
+        <span class="text-amber-900">${esc(missing.join(" · "))}</span>
+      </div>
+      <button id="loadMissingBtn" type="button"
+        class="bg-amber-600 text-white text-xs px-3 py-1.5 rounded-md hover:bg-amber-700">
+        Load the ${missing.length} missing house${missing.length === 1 ? "" : "s"}</button>
+      <span id="loadMissingNote" class="ml-2 text-[11px] text-amber-700"></span>
+    </div>` : ""}`;
   const rb = document.getElementById("reopenBtn");
   if (rb) rb.addEventListener("click", () => reopen(d.month));
+  const lmb = document.getElementById("loadMissingBtn");
+  if (lmb) lmb.addEventListener("click", () => loadMissing(d.month, missing.length));
 
   // Reset the per-render map of tape-chart data (property_id → marks), filled
   // below as we build each card and consumed by fillTapeCharts() once the

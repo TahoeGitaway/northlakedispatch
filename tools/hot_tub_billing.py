@@ -54,8 +54,10 @@ import argparse
 import calendar
 import csv
 import os
+import random
 import re
 import sys
+import threading
 import time
 import json
 from collections import defaultdict, Counter
@@ -152,48 +154,54 @@ PAGE_LIMIT   = 100
 _ALLOWED_METHODS = {"GET", "POST"}
 _SESSION = requests.Session()
 
-# ── Rate gate ────────────────────────────────────────────────────────────────
-# This engine runs as its own OS process (the app launches it via subprocess), so
-# it gets its OWN instance of the gate — it is NOT sharing state with the web
-# tier. What it buys is coordination between THIS RUN'S OWN THREADS: bw_get's
-# time.sleep() only ever paused the thread that was refused, so when one of the
-# workers hit a 429 the other eleven kept firing into the same wall. The gate
-# pauses all of them together, which is the half of routes/bw_ratelimit.py this
-# engine was missing.
-#
-# sys.path: this file is run BY PATH (python tools/hot_tub_billing.py), so
-# sys.path[0] is tools/, not the repo root, and `routes` is not importable
-# without this. If the import still fails the engine runs exactly as it did
-# before — degraded pacing must never be the reason a billing run can't happen.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-try:
-    from routes.bw_ratelimit import gate as _gate
-except Exception:
-    _gate = None
+# ── Fleet-wide throttle handling ─────────────────────────────────────────────
+
+class _Throttle:
+    """Makes a 429 pause EVERY worker thread, not just the one that was refused.
+
+    bw_get already backed off on a 429 — but with time.sleep(), which pauses only
+    the calling thread. At --workers 12 that means eleven others keep firing into
+    a limit the API has just told us we are over, and their refusals extend the
+    very backoff they are ignoring. That is the pattern that turned a throttled
+    sweep into a storm across the rest of this app (see routes/bw_ratelimit.py);
+    the difference here is between backing off and merely appearing to.
+
+    Deliberately small: no adaptive pacing, no learned interval, no shared state
+    with the web tier's gate. This engine is a separate process AND a batch run
+    with no request deadline, so simply waiting out a throttle is free — the web
+    tier has to be cleverer only because a hanging request is worse than a failed
+    one. The set of requests sent is unchanged; only their timing is."""
+
+    def __init__(self):
+        self._lock  = threading.Lock()
+        self._until = 0.0     # monotonic time before which nobody may send
+        self._n_429 = 0
+
+    def wait(self):
+        """Block until any fleet-wide pause has elapsed."""
+        while True:
+            with self._lock:
+                remaining = self._until - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 5.0))
+
+    def penalise(self, seconds):
+        """Hold every thread for `seconds`. Jittered so the workers don't all
+        resume on the same tick and re-trigger the limit in lockstep. Extends an
+        existing pause rather than shortening it."""
+        with self._lock:
+            self._n_429 += 1
+            self._until = max(self._until,
+                              time.monotonic() + seconds * random.uniform(0.85, 1.15))
+
+    @property
+    def n_429(self):
+        with self._lock:
+            return self._n_429
 
 
-def _gate_wait():
-    """Block until the gate allows a send.
-
-    The gate's acquire() gives up after MAX_GATE_WAIT because a *web request*
-    that hangs is worse than one that fails fast. This engine has no such
-    deadline — it is an out-of-band batch run — and shedding here would turn a
-    throttle into a property missing from the worksheet, which is the one thing
-    this program must never do. So wait it out: the set of requests sent is
-    unchanged, only their spacing is."""
-    if _gate is None:
-        return
-    while not _gate.acquire():
-        pass   # acquire() sleeps internally; this is not a spin
-
-
-def _gate_report(status):
-    """Feed a data-endpoint status back so the gate can adapt. Auth is
-    deliberately NOT reported: it is rate-limited separately (1/min, handled in
-    authenticate()), and letting an auth 429 throttle the data budget would slow
-    the whole scan for a limit that has nothing to do with it."""
-    if _gate is not None:
-        _gate.on_response(status)
+THROTTLE = _Throttle()
 
 
 # ── Report ───────────────────────────────────────────────────────────────────
@@ -205,8 +213,22 @@ class RunReport:
         self.properties_tagged = 0
         self.properties_scanned = 0
         self.candidate_tasks = 0
+        # Structured twin of `failures`, for the per-property ones only. The string
+        # list is what a human reads in the .md; this is what the app needs to
+        # RE-FETCH exactly the houses that dropped out, instead of making the
+        # operator re-scan all 245 to recover 12.
+        self.failed_props = []
 
     def fail(self, m): self._emit(f"[FAIL] {m}"); self.failures.append(m)
+
+    def fail_property(self, pid, name, err):
+        """A house that could not be scanned. Recorded twice on purpose: once as
+        the human sentence, once structured so it can be retried on its own."""
+        msg = f"{name}: {err} — services MISSING from worksheet."
+        self.fail(msg)
+        self.failed_props.append({"property_id": pid, "property": name,
+                                  "error": err, "message": msg})
+
     def warn(self, m): self._emit(f"[WARN] {m}"); self.warnings.append(m)
     def info(self, m): self._emit(f"[info] {m}")
 
@@ -241,6 +263,9 @@ def bw_get(url, params, token, what):
     _assert_readonly("GET")
     last = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        # Respect a pause any other worker earned, before spending a request on
+        # a limit we already know we are over.
+        THROTTLE.wait()
         try:
             resp = _SESSION.get(url, headers={"Authorization": f"JWT {token}"},
                                 params=params, timeout=30)
@@ -258,7 +283,15 @@ def bw_get(url, params, token, what):
         if resp.status_code == 429 or resp.status_code >= 500:
             d = _retry_delay(resp, attempt)
             REPORT.warn(f"{what}: HTTP {resp.status_code} (attempt {attempt}/{MAX_ATTEMPTS}); waiting {d:.0f}s")
-            time.sleep(d); continue
+            if resp.status_code == 429:
+                # A 429 is a statement about the whole run, not about this one
+                # request — so hold every worker, not just this thread. A 5xx is
+                # not a rate limit and stays a local retry.
+                THROTTLE.penalise(d)
+                THROTTLE.wait()
+            else:
+                time.sleep(d)
+            continue
         detail = resp.text[:300]
         try: detail = resp.json()
         except Exception: pass
@@ -504,23 +537,45 @@ def fetch_properties(token):
 
 
 def fetch_property_tags(token, pid):
+    """Returns (tags, error).
+
+    A non-empty error means the tags could not be READ — which is not the same as
+    the house having none, though this used to return [] for both. An unreadable
+    house then looked untagged, dropped out of the scan without a word, and its
+    services were never billed: strictly worse than the failures we do report,
+    because nothing anywhere said it happened."""
+    last_err = ""
     for path in (f"/public/inventory/v1/property/{pid}/tags",
                  f"/public/inventory/v1/property/{pid}"):
-        data, err, _ = bw_get(f"{BASE}{path}", {}, token, f"tags {pid}")
+        data, err, status = bw_get(f"{BASE}{path}", {}, token, f"tags {pid}")
         if err:
+            last_err = err
+            # Being throttled says nothing about which PATH is right, so walking
+            # the remaining candidate cannot help — it just spends more of a
+            # budget we have already been told we are over. Under sustained
+            # throttling each candidate costs MAX_ATTEMPTS requests plus their
+            # backoff, so this doubled both the traffic and the wall-clock at
+            # exactly the wrong moment. (Same fix as the web tier's task paths.)
+            if status == 429:
+                break
             continue
         if isinstance(data, list):
-            return data
+            return data, ""
         if isinstance(data, dict):
             tags = data.get("tags") or data.get("property_tags") or []
             if tags:
-                return tags
-    return []
+                return tags, ""
+    # Every candidate answered and none carried tags -> genuinely untagged.
+    return [], last_err
 
 
 def property_include_tag(token, pid):
-    """The hot-tub property tag that qualifies this house for billing, or ''."""
-    return hot_tub_tag(fetch_property_tags(token, pid))
+    """The hot-tub property tag that qualifies this house for billing, or ''.
+    Returns (tag, error); a non-empty error means we could not tell."""
+    tags, err = fetch_property_tags(token, pid)
+    if err:
+        return "", err
+    return hot_tub_tag(tags), ""
 
 
 def collect_tagged_properties(token, properties, workers):
@@ -532,9 +587,19 @@ def collect_tagged_properties(token, properties, workers):
         for fut in as_completed(futs):
             p = futs[fut]
             try:
-                tag = fut.result()
+                tag, err = fut.result()
             except Exception as e:
-                REPORT.warn(f"tag classify failed for {property_name(p)}: {e}"); continue
+                REPORT.fail_property(property_id(p), property_name(p),
+                                     f"tag lookup crashed: {e}")
+                continue
+            if err:
+                # We could not read this house's tags, so we do not know whether
+                # it should be billed. Recorded as a missing house — which the
+                # page can offer to load — instead of being silently treated as
+                # a house with no hot tub.
+                REPORT.fail_property(property_id(p), property_name(p),
+                                     f"tag lookup failed: {err}")
+                continue
             # Force-include special houses (e.g. Aerial Grace) even without a tag.
             if not tag and str(property_id(p)) in ALWAYS_INCLUDE:
                 tag = "always-included (special house)"
@@ -588,7 +653,7 @@ def build(token, properties, month_str, workers, max_props):
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for p, tasks, err in ex.map(work, tagged):
             if err:
-                REPORT.fail(f"{property_name(p)}: {err} — services MISSING from worksheet.")
+                REPORT.fail_property(property_id(p), property_name(p), err)
                 continue
             REPORT.properties_scanned += 1
             rows = []
@@ -680,6 +745,60 @@ def build(token, properties, month_str, workers, max_props):
         "type_totals": dict(type_totals),
         "money_total": money_total,
     }
+
+
+def merge_existing(data, existing):
+    """Fold a targeted (--only) run into the month's existing worksheet.
+
+    Houses scanned in THIS run replace their previous entry; every other house is
+    carried through byte-for-byte. Aggregates are RECOMPUTED from the merged set
+    rather than added to the previous ones — adding would double-count any house
+    that gets retried more than once, which is exactly what a recovery button
+    invites. Recomputing is also self-checking: re-merging a worksheet that
+    gained nothing reproduces the same totals it already had."""
+    by_id = {str(p.get("property_id")): p for p in (existing.get("props") or [])}
+    fresh_ids = set()
+    for p in data["props"]:
+        pid = str(p.get("property_id"))
+        by_id[pid] = p
+        fresh_ids.add(pid)
+    merged = sorted(by_id.values(), key=lambda x: str(x.get("property") or "").lower())
+
+    type_totals = Counter()
+    money_total = 0
+    for p in merged:
+        money_total += p.get("total") or 0
+        for r in (p.get("rows") or []):
+            if r.get("disposition") == "billable" and r.get("completed"):
+                type_totals[r.get("service_type")] += 1
+
+    # A previous failure for a house this run recovered is resolved; the rest stay
+    # outstanding so the page keeps offering them. A house that failed AGAIN is
+    # already recorded by this run — carrying the old entry too would list it
+    # twice and inflate properties_tagged on every retry.
+    retried_and_failed = {str(f.get("property_id")) for f in REPORT.failed_props}
+    carried = [f for f in (existing.get("failed_properties") or [])
+               if str(f.get("property_id")) not in fresh_ids
+               and str(f.get("property_id")) not in retried_and_failed]
+    REPORT.failed_props = carried + REPORT.failed_props
+    REPORT.failures = [c.get("message") or f"{c.get('property')}: {c.get('error')}"
+                       for c in carried] + REPORT.failures
+
+    # Counters must describe the MERGED worksheet, not just this run — otherwise
+    # recovering twelve houses would make the banner read "12/12 properties".
+    # candidate_tasks is recounted from rows (every counted task became a row), so
+    # it stays correct no matter how many times a house is re-scanned.
+    REPORT.properties_scanned = len(merged)
+    REPORT.properties_tagged  = max(int(existing.get("properties_tagged") or 0),
+                                    len(merged) + len(REPORT.failed_props))
+    REPORT.properties_total   = int(existing.get("properties_total") or REPORT.properties_total)
+    REPORT.candidate_tasks    = sum(len(p.get("rows") or []) for p in merged)
+
+    REPORT.info(f"Merged {len(fresh_ids)} house(s) into "
+                f"{len(existing.get('props') or [])} existing → {len(merged)} total; "
+                f"{len(REPORT.failed_props)} still missing.")
+    return {"month": data["month"], "props": merged,
+            "type_totals": dict(type_totals), "money_total": money_total}
 
 
 # ── Output ───────────────────────────────────────────────────────────────────
@@ -800,6 +919,9 @@ def write_json(path, data):
         "money_total": data["money_total"],
         "props": data["props"],
         "failures": REPORT.failures,
+        # Structured, so the app can offer "load the N missing houses" instead of
+        # only telling the operator that N of them vanished.
+        "failed_properties": REPORT.failed_props,
         "warnings_count": len(REPORT.warnings),
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -831,21 +953,80 @@ def main():
                     help="Output directory (default <repo>/reports).")
     ap.add_argument("--workers", type=int, default=12, help="Parallel property fetches.")
     ap.add_argument("--max-properties", type=int, default=0, help="TESTING ONLY: first N tagged properties.")
+    ap.add_argument("--only", default="",
+                    help="Comma-separated Breezeway property ids — scan ONLY these. "
+                         "Used to recover houses that failed a previous run.")
+    ap.add_argument("--only-names", default="",
+                    help="Pipe-separated property NAMES to scan instead of --only. For "
+                         "worksheets written before failures recorded property ids: the "
+                         "failure line names the house but not its id.")
+    ap.add_argument("--merge", action="store_true",
+                    help="Fold this run's houses into the month's existing worksheet "
+                         "instead of replacing it. Requires --only in practice.")
     args = ap.parse_args()
 
     month_str = args.month or _default_month()
     if not re.fullmatch(r"\d{4}-\d{2}", month_str):
         print("--month must be YYYY-MM.", file=sys.stderr); sys.exit(2)
 
+    os.makedirs(args.outdir, exist_ok=True)
+    base = f"hot_tub_billing_{month_str}"
+    json_path = os.path.join(args.outdir, base + ".json")
+
+    # A merge must have something to merge INTO. The app writes the current
+    # worksheet here before launching us, because on the deployed host the disk is
+    # wiped on every restart and the database — not this file — is the durable
+    # copy. If it is missing we refuse the run outright: halting writes no file at
+    # all, which leaves the stored worksheet intact. Writing "just the recovered
+    # houses" would replace a 233-house month with a 12-house one.
+    existing = None
+    if args.merge:
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception as ex:
+            REPORT.fail(f"--merge: no readable worksheet at {json_path} to merge into ({ex}).")
+            _halt("Refusing to merge into nothing — the existing worksheet would be lost.")
+
     REPORT.info(f"Hot Tub Billing — month {month_str}")
     token = authenticate()
     properties = fetch_properties(token)
 
+    only_ids = {s.strip() for s in args.only.split(",") if s.strip()}
+    if only_ids:
+        # Filter BEFORE collect_tagged_properties. That sweep is one request per
+        # property across the whole portfolio and is the most throttle-prone part
+        # of a run — recovering 12 houses must not cost another ~442 calls.
+        properties = [p for p in properties if str(property_id(p)) in only_ids]
+        found = {str(property_id(p)) for p in properties}
+        REPORT.info(f"Targeted run: {len(properties)} of {len(only_ids)} requested property id(s).")
+        if only_ids - found:
+            REPORT.warn("Requested ids not present in the property list: "
+                        + ", ".join(sorted(only_ids - found)))
+        if not properties:
+            REPORT.fail("None of the requested property ids exist in Breezeway.")
+            _halt("Nothing to scan.")
+
+    only_names = {s.strip().lower() for s in args.only_names.split("|") if s.strip()}
+    if only_names and not only_ids:
+        properties = [p for p in properties
+                      if property_name(p).strip().lower() in only_names]
+        found = {property_name(p).strip().lower() for p in properties}
+        REPORT.info(f"Targeted run by name: {len(properties)} of {len(only_names)} requested.")
+        if only_names - found:
+            # Say so loudly. A name that no longer resolves is a house that stays
+            # missing, and silently scanning fewer houses than asked for is the
+            # failure mode this whole program is built to avoid.
+            REPORT.fail("Requested names not found in the property list: "
+                        + ", ".join(sorted(only_names - found)))
+        if not properties:
+            _halt("Nothing to scan.")
+
     data = build(token, properties, month_str, args.workers, args.max_properties)
 
-    os.makedirs(args.outdir, exist_ok=True)
-    base = f"hot_tub_billing_{month_str}"
-    json_path = os.path.join(args.outdir, base + ".json")
+    if existing is not None:
+        data = merge_existing(data, existing)
+
     csv_path  = os.path.join(args.outdir, base + ".csv")
     md_path   = os.path.join(args.outdir, base + ".md")
     # Also write a stable "latest" json the page can default to.
