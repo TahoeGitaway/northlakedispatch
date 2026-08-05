@@ -245,7 +245,7 @@ function _goToSavedRoutes() {
    A prominent, real-time indicator for the Save & Sync flow. It does NOT touch
    the sync function — it only watches what bwSyncTimes() writes into
    #bwSyncResult and mirrors it as an obvious top-of-screen banner. */
-function _showBwSyncBanner(state, text) {
+function _showBwSyncBanner(state, text, extraHtml) {
   const b = document.getElementById("bwSyncBanner");
   if (!b) return;
   const bg = { contacting:"#1e293b", ok:"#16a34a", warn:"#d97706", error:"#dc2626" }[state] || "#1e293b";
@@ -262,13 +262,19 @@ function _showBwSyncBanner(state, text) {
     + "padding:11px 20px;border-radius:9999px;font-size:0.85rem;font-weight:600;color:#fff;"
     + "box-shadow:0 6px 22px rgba(0,0,0,0.28);display:flex;align-items:center;max-width:92vw;"
     + "background:" + bg + ";";
-  b.innerHTML = spinner + '<span style="line-height:1.3;">' + text + '</span>' + dismiss;
+  b.innerHTML = spinner + '<span style="line-height:1.3;">' + text + '</span>'
+              + (extraHtml || '') + dismiss;
   b.style.display = "flex";
 }
 
 function _watchBwSync() {
   const src = document.getElementById("bwSyncResult");
   if (!src) return;
+  // Marks this as a Save & Sync flow, which ends by returning to the route list.
+  // A retry re-arms this watcher, and it must only do so when the flow it belongs
+  // to was armed in the first place — otherwise retrying from the standalone
+  // sidebar button would navigate the user off a page they never asked to leave.
+  window.__bwSyncWatchArmed = true;
   let started = false;
   const obs = new MutationObserver(() => {
     const txt = (src.textContent || "").trim();
@@ -308,10 +314,19 @@ function _watchBwSync() {
     if (outcome && outcome.allApplied === false) {
       const n     = (outcome.notApplied || []).length;
       const names = (outcome.notApplied || []).slice(0, 3).map(x => x.name).join(", ");
+      // Retry straight from the banner, and only over the stops a retry can
+      // actually fix — no button at all when every failure needs a name fix.
+      const retryable = typeof _bwRetryableNames === "function"
+        ? _bwRetryableNames(outcome) : [];
+      const extra = retryable.length
+        ? _bwRetryButtonHtml(retryable, "banner") : '';
       _showBwSyncBanner("error",
         `${n || "Some"} stop${n === 1 ? "" : "s"} did NOT get a time in Breezeway`
         + (names ? ` — ${names}${n > 3 ? "…" : ""}` : "")
-        + ". Details below; staying on this route so you can retry.");
+        + (retryable.length
+            ? ". Details below — the stops that already synced won't be touched again."
+            : ". Details below; staying on this route so you can retry."),
+        extra);
       return;                                     // stay put
     }
 
