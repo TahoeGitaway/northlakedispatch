@@ -96,27 +96,36 @@ def _task_tag_names(task: dict) -> list:
     return out
 
 
-def _scan_task_snapshot(task_id) -> dict:
-    """What the most recent scan knew about this task, for the audit log.
+# What each task looked like when it was last scanned, kept SEPARATELY from
+# _scan_cache. The audit log reads this.
+#
+# It cannot live in _scan_cache: every assign and date-change clears that, so a
+# second batch in the same sitting found nothing and logged a row with no task
+# name, property, date or previous assignee — which is most of the point. This
+# survives those clears and is only overwritten by a fresh scan of the same task.
+_task_details: dict = {}          # str(task_id) -> {name, property, date, assignees, tags}
+_TASK_DETAIL_CAP = 5000           # ~10 days of scans; trimmed oldest-first
 
-    Read from the cached scan rather than re-fetching: the whole point is to
-    record who/what a task looked like BEFORE the write, and the scan the user
-    was looking at when they clicked is exactly that. Returns {} if it isn't
-    cached — the log line is still written, just with blanks."""
-    tid = str(task_id)
-    for _ts, result, *_rest in list(_scan_cache.values()):
-        buckets = list(result.get("checkins") or [])
-        for g in (result.get("groups") or []):
-            buckets.extend(g.get("tasks") or [])
-        for t in buckets:
-            if str(t.get("task_id")) == tid:
-                return {
-                    "name":      t.get("name"),
-                    "property":  t.get("property"),
-                    "date":      t.get("date"),
-                    "assignees": t.get("assignees") or [],
-                }
-    return {}
+
+def _remember_task_detail(task_id, name, property_name, date_str, assignees, tags):
+    """Called for every task a scan returns, so a later write can say what it
+    replaced without an extra Breezeway call."""
+    if task_id is None:
+        return
+    if len(_task_details) >= _TASK_DETAIL_CAP:
+        for k in list(_task_details)[:len(_task_details) - _TASK_DETAIL_CAP + 500]:
+            _task_details.pop(k, None)
+    _task_details[str(task_id)] = {
+        "name": name, "property": property_name, "date": date_str,
+        "assignees": list(assignees or []), "tags": list(tags or []),
+    }
+
+
+def _scan_task_snapshot(task_id) -> dict:
+    """What the last scan knew about this task, for the audit log. Returns {} if
+    the task has never been scanned by this process — the log row is still
+    written, just with blanks."""
+    return dict(_task_details.get(str(task_id)) or {})
 
 
 def _diagnostics_blob(date_str: str, scanned: int, failed: int,
@@ -536,6 +545,9 @@ def _scan_inner():
             "occupancy_kind": (occupancy.get(str(home_id)) or {}).get("kind"),
             "occupied_until": (occupancy.get(str(home_id)) or {}).get("until"),
         }
+        _remember_task_detail(tid, entry["name"], entry["property"], entry["date"],
+                              entry["assignees"], entry["tags"])
+
         # Check-in houses get their OWN section (easy selection) — pulled out of the
         # group buckets so a task never appears, or is selected, twice.
         if is_arrival:
@@ -629,20 +641,26 @@ def group_assign_apply():
 
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
 
+    # Captured HERE, on the request thread. Flask's request context does not reach
+    # ThreadPoolExecutor workers, so reading current_user inside _assign_one logged
+    # an empty "who" on every row.
+    from routes.bw_audit import log_bw_write, current_actor
+    _actor = current_actor()
+
     def _assign_one(tid):
-        from routes.bw_audit import log_bw_write
         url = f"{BW_BASE}/public/inventory/v1/task/{tid}"
         last = "no attempt"
-        # Who WAS on this task, so the log can show what the assignment replaced.
-        # Read from the current scan rather than an extra API call.
+        # What this task looked like before the write — name, property, date, who
+        # was on it, and its tags. From the scan, so it costs no extra API call.
         _prev = _scan_task_snapshot(tid)
 
         def _audit(ok, detail, after=None):
             log_bw_write("group_assign", "assignments", task_id=tid,
                          task_name=_prev.get("name"), property_name=_prev.get("property"),
                          task_date=_prev.get("date"),
-                         old_value=_prev.get("assignees"),
-                         new_value=after or target["name"], ok=ok, detail=detail)
+                         old_value=_prev.get("assignees") or "(unassigned)",
+                         new_value=after or target["name"], ok=ok, detail=detail,
+                         tags=_prev.get("tags"), actor=_actor)
         # Retry on throttle / transient server errors so an assignment never gets
         # silently dropped because Breezeway was momentarily busy.
         for attempt in range(3):
@@ -830,8 +848,10 @@ def group_assign_change_date():
 
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
 
+    from routes.bw_audit import log_bw_write, current_actor
+    _actor = current_actor()          # request thread — see the note in _assign_one
+
     def _move_one(tid):
-        from routes.bw_audit import log_bw_write
         url  = f"{BW_BASE}/public/inventory/v1/task/{tid}"
         last = "no attempt"
         _prev = _scan_task_snapshot(tid)
@@ -841,7 +861,8 @@ def group_assign_change_date():
                          task_name=_prev.get("name"), property_name=_prev.get("property"),
                          task_date=_prev.get("date") or from_date,
                          old_value=_prev.get("date") or from_date,
-                         new_value=after or new_date, ok=ok, detail=detail)
+                         new_value=after or new_date, ok=ok, detail=detail,
+                         tags=_prev.get("tags"), actor=_actor)
         # Retry on throttle / transient server errors so a move never gets silently
         # dropped because Breezeway was momentarily busy.
         for attempt in range(3):

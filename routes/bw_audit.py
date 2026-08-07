@@ -66,24 +66,39 @@ def _s(v, limit: int = 500) -> str:
     return str(v)[:limit]
 
 
+def current_actor() -> tuple:
+    """(user_id, user_name) for the request in flight.
+
+    Capture this on the REQUEST thread and hand it to anything running in a
+    ThreadPoolExecutor: Flask's request context does not cross thread boundaries,
+    so current_user is unavailable inside a worker and every batched write logged
+    an empty "who"."""
+    return _who()
+
+
 def log_bw_write(feature: str, field: str, *, task_id=None, task_name=None,
                  property_name=None, task_date=None, old_value=None,
-                 new_value=None, ok: bool = False, detail: str = "") -> None:
-    """Record one attempted write. Never raises."""
+                 new_value=None, ok: bool = False, detail: str = "",
+                 tags=None, actor: tuple = None) -> None:
+    """Record one attempted write. Never raises.
+
+    `actor` overrides the logged-in user, for writes made off the request thread."""
     try:
         from db import get_db, get_cursor
-        uid, uname = _who()
+        uid, uname = actor if actor else _who()
         conn = get_db(); cur = get_cursor(conn)
         try:
             cur.execute("""
                 INSERT INTO bw_write_log
                        (ts, user_id, user_name, feature, task_id, task_name,
-                        property, task_date, field, old_value, new_value, ok, detail)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        property, task_date, field, old_value, new_value, ok,
+                        detail, tags)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (_now_iso(), uid, _s(uname, 120), _s(feature, 40),
                   _s(task_id, 40), _s(task_name, 200), _s(property_name, 200),
                   _s(task_date, 20), _s(field, 40),
-                  _s(old_value), _s(new_value), bool(ok), _s(detail, 400)))
+                  _s(old_value), _s(new_value), bool(ok), _s(detail, 400),
+                  _s(tags, 300)))
             conn.commit()
         finally:
             cur.close(); conn.close()

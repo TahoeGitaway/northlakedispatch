@@ -521,7 +521,9 @@ def init_db():
         ok         BOOLEAN NOT NULL DEFAULT FALSE,
         ref        TEXT,                   -- property/task the call was for
         elapsed_ms INTEGER,
-        detail     TEXT
+        detail     TEXT,
+        method     TEXT,                   -- GET / PATCH / … so a write is obvious
+        params     TEXT                    -- the query as sent, credentials masked
     )""")
     cur.execute("""CREATE INDEX IF NOT EXISTS idx_bw_api_log_ts
                    ON bw_api_log (ts DESC)""")
@@ -529,6 +531,11 @@ def init_db():
                    ON bw_api_log (status)""")
 
     # Safe migrations
+    # A failed row used to name only the endpoint, so a whole-portfolio fetch and a
+    # single-house fetch were indistinguishable and "which house was that?" had no
+    # answer. The query itself is the missing identity; older rows stay NULL.
+    cur.execute("ALTER TABLE bw_api_log ADD COLUMN IF NOT EXISTS method TEXT")
+    cur.execute("ALTER TABLE bw_api_log ADD COLUMN IF NOT EXISTS params TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_time TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS start_location_json TEXT")
     cur.execute("ALTER TABLE saved_routes ADD COLUMN IF NOT EXISTS end_location_json TEXT")
@@ -553,6 +560,15 @@ def init_db():
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS property_name TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS cleaner_name_2 TEXT")
     cur.execute("ALTER TABLE carpet_log ADD COLUMN IF NOT EXISTS rescheduled INTEGER DEFAULT 0")
+    # Owner-clean flags for the day's arrivals, stored alongside the arrivals list by
+    # the 5:30am snapshot job. The scan costs one Breezeway task call per arriving
+    # house, so it belongs in the overnight run, not on every page open. NULL = the
+    # scan hasn't completed for that date yet (the morning retry job keeps at it).
+    cur.execute("ALTER TABLE saved_day_summaries ADD COLUMN IF NOT EXISTS owner_cleaned TEXT")
+    cur.execute("ALTER TABLE saved_day_summaries ADD COLUMN IF NOT EXISTS owner_cleaned_at TEXT")
+    # The task's Breezeway tags at the moment it was changed — context you'd
+    # otherwise have to reconstruct by hand when reviewing a bad batch.
+    cur.execute("ALTER TABLE bw_write_log ADD COLUMN IF NOT EXISTS tags TEXT")
     # Stable link from a local property to its Breezeway property. Populated via the
     # /admin/property-links reconciliation page. Once set, the route scan matches houses
     # by THIS id instead of fuzzy name-matching — which is what let a spelling variant

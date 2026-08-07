@@ -78,14 +78,28 @@
           <td class="px-3 py-1.5 text-gray-800">
             {% if r.task_id %}
               <a href="https://app.breezeway.io/task/{{ r.task_id }}" target="_blank" rel="noopener"
-                 class="text-indigo-600 hover:underline">{{ r.task_name or r.task_id }}</a>
+                 class="text-indigo-600 hover:underline">{{ r.task_name or ('task ' ~ r.task_id) }}</a>
+              {% if r.task_name %}<div class="text-gray-400">#{{ r.task_id }}</div>{% endif %}
             {% else %}{{ r.task_name or '—' }}{% endif %}
+            {% if r.tags %}
+              <div class="mt-0.5 flex flex-wrap gap-1">
+                {% for tag in r.tags.split(', ') if tag %}
+                  <span class="text-[0.6rem] font-semibold rounded-full px-1.5 py-px
+                               bg-gray-100 text-gray-600 border border-gray-200">{{ tag }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
           </td>
           <td class="px-3 py-1.5 text-gray-600">{{ r.property or '—' }}</td>
           <td class="px-3 py-1.5 text-gray-600 whitespace-nowrap">{{ r.task_date or '—' }}</td>
           <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{{ r.field }}</td>
-          <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{{ r.old_value or '—' }}</td>
-          <td class="px-3 py-1.5 text-gray-900 font-medium whitespace-nowrap">{{ r.new_value or '—' }}</td>
+          <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">
+            {{ r.old_value if r.old_value else '(none)' }}
+          </td>
+          <td class="px-3 py-1.5 whitespace-nowrap">
+            <span class="text-gray-300">→</span>
+            <span class="text-gray-900 font-medium">{{ r.new_value or '—' }}</span>
+          </td>
           <td class="px-3 py-1.5 whitespace-nowrap">
             {% if r.ok %}
               <span class="text-green-700 font-semibold">✓</span>

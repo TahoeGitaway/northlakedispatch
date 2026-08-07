@@ -179,12 +179,21 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
     _before   = str(task.get("scheduled_time") or "")[:8]
     _name     = task.get("name") or ""
     _taskdate = str(task.get("scheduled_date") or date_str)[:10]
+    # Tags as the task carried them at write time. Breezeway puts them on either
+    # key, and entries are {"name": ...} or bare strings.
+    _tags = []
+    for _k in ("task_tags", "tags"):
+        for _t in (task.get(_k) or []):
+            _n = (_t.get("name") if isinstance(_t, dict) else str(_t) or "").strip()
+            if _n and _n not in _tags:
+                _tags.append(_n)
 
     def _audit(ok, detail):
         log_bw_write("sync_times", "scheduled_time", task_id=task_id,
                      task_name=_name, property_name=property_name,
                      task_date=_taskdate, old_value=_before,
-                     new_value=start_time_hhmm, ok=ok, detail=detail)
+                     new_value=start_time_hhmm, ok=ok, detail=detail,
+                     tags=_tags)
 
     for payload in [
         {"scheduled_time": start_time_hhmm},

@@ -828,7 +828,22 @@ async function assignSelected() {
   const personName  = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '';
   if (!ids.length)       { alert('Tick at least one task first.'); return; }
   if (!assignee_id)      { alert('Pick a person to assign to.'); return; }
-  if (!confirm(`Assign ${ids.length} task(s) to ${personName}? This writes to Breezeway and sets the assignee.`)) return;
+  // List what's actually being assigned. A bare count can't be checked — you
+  // can't tell a mis-tick from the number alone, and this writes to Breezeway.
+  const _byId = {};
+  _allScanTasks().forEach(t => { _byId[String(t.task_id)] = t; });
+  const _lines = ids.map(id => {
+    const t = _byId[String(id)];
+    if (!t) return `• (task ${id})`;
+    return `• ${t.property || '?'} — ${t.name || 'task'}`
+         + (t.assignees && t.assignees.length ? `  (now: ${t.assignees.join(', ')})` : '  (unassigned)');
+  });
+  // Cap the list so a large batch stays inside the browser's dialog.
+  const _MAX = 25;
+  const _shown = _lines.slice(0, _MAX).join('\n')
+               + (_lines.length > _MAX ? `\n…and ${_lines.length - _MAX} more` : '');
+  if (!confirm(`Assign ${ids.length} task(s) to ${personName}?\n\n${_shown}\n\n`
+             + `This writes to Breezeway and sets the assignee.`)) return;
 
   const eb  = document.getElementById('errorBox');
   const box = document.getElementById('assignResult');
