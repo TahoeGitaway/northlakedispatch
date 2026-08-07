@@ -29,7 +29,7 @@ from flask_login import login_required
 
 from routes.auth import admin_required
 from routes.group_assign import _assignee_names
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_patch, bw_delete
 from routes.bear_fence import (
     BW_BASE,
     _get_token,
@@ -118,7 +118,7 @@ def _delete_task(token: str, task_id) -> tuple[bool, str]:
     headers = {"Authorization": f"JWT {token}"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
-        r = requests.delete(url, headers=headers, timeout=15)
+        r = bw_delete(url, headers=headers, timeout=15)
         ok = r.status_code in (200, 202, 204)
         detail = f"status={r.status_code}"
         if not ok:
@@ -144,7 +144,7 @@ def _unassign_task(token: str, task_id, meta: dict = None) -> tuple[bool, str]:
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
-        r = requests.patch(url, headers=headers, json={"assignments": []}, timeout=15)
+        r = bw_patch(url, headers=headers, json={"assignments": []}, timeout=15)
         ok = r.status_code in (200, 201, 202, 204)
         detail = f"status={r.status_code}"
         if not ok:

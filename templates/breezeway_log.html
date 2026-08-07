@@ -5,9 +5,11 @@
 
   <h1 class="text-xl font-semibold text-gray-900">Breezeway Log</h1>
   <p class="text-xs text-gray-500 mt-1 mb-4 leading-snug max-w-3xl">
-    Every request this app makes to Breezeway, newest first — successes and failures.
+    Every request this app makes to Breezeway, newest first — reads and writes, successes and failures.
     Use this to say exactly how many requests were refused, and when.
-    <span class="text-gray-400">(For what the app <i>changed</i>, see
+    Writes are shown in <span class="text-indigo-700 font-semibold">colour</span>, with the task they
+    targeted and the values they tried to set — including the ones that timed out before they changed anything.
+    <span class="text-gray-400">(For a clean before/after of what actually <i>changed</i>, see
     <a href="{{ url_for('bw_audit.task_changes_page') }}" class="text-indigo-600 hover:underline">Task Changes</a>.)</span>
   </p>
 
@@ -53,7 +55,8 @@
     <div>
       <label class="block text-xs font-medium text-gray-500 mb-1">Show</label>
       <select name="show" class="border border-gray-300 rounded px-2 py-1 text-sm">
-        {% for v, label in [('all','Successes and failures'), ('failed','Failures only'), ('ok','Successes only')] %}
+        {% for v, label in [('all','Successes and failures'), ('failed','Failures only'),
+                            ('ok','Successes only'), ('writes','Writes only (PATCH/POST/DELETE)')] %}
           <option value="{{ v }}" {% if f_show == v %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
@@ -87,7 +90,8 @@
           <th class="text-left font-semibold px-3 py-2">When</th>
           <th class="text-left font-semibold px-3 py-2">Result</th>
           <th class="text-left font-semibold px-3 py-2">Status</th>
-          <th class="text-left font-semibold px-3 py-2">Breezeway endpoint</th>
+          <th class="text-left font-semibold px-3 py-2">Method</th>
+          <th class="text-left font-semibold px-3 py-2">Breezeway endpoint &amp; query</th>
           <th class="text-left font-semibold px-3 py-2">For</th>
           <th class="text-left font-semibold px-3 py-2">Triggered by</th>
           <th class="text-right font-semibold px-3 py-2">Took</th>
@@ -105,8 +109,26 @@
           <td class="px-3 py-1 whitespace-nowrap {% if r.status == 429 %}text-amber-700 font-semibold{% else %}text-gray-600{% endif %}">
             {{ r.status if r.status is not none else 'no response' }}
           </td>
-          <td class="px-3 py-1 text-gray-600">{{ r.endpoint }}</td>
-          <td class="px-3 py-1 text-gray-500 whitespace-nowrap">{{ r.ref or '—' }}</td>
+          <td class="px-3 py-1 whitespace-nowrap font-semibold
+                     {% if r.method and r.method != 'GET' %}text-indigo-700{% else %}text-gray-400{% endif %}">
+            {{ r.method or 'GET' }}
+          </td>
+          <td class="px-3 py-1 text-gray-600 max-w-md">
+            {{ r.endpoint }}
+            {# The query is what identifies a call that names no house — without it a
+               whole-portfolio date sweep and a single-house lookup read identically. #}
+            {% if r.params %}
+              <div class="text-gray-400 text-[0.7rem] leading-tight break-all mt-0.5">{{ r.params }}</div>
+            {% endif %}
+          </td>
+          <td class="px-3 py-1 text-gray-500">
+            {% if r.ref_name %}
+              <span class="whitespace-nowrap">{{ r.ref_name }}</span>
+              <span class="text-gray-400 text-[0.7rem] block leading-tight">{{ r.ref }}</span>
+            {% else %}
+              <span class="whitespace-nowrap">{{ r.ref or '—' }}</span>
+            {% endif %}
+          </td>
           <td class="px-3 py-1 text-gray-500 whitespace-nowrap">{{ r.feature or '—' }}</td>
           <td class="px-3 py-1 text-gray-400 text-right whitespace-nowrap">{{ r.elapsed_ms }} ms</td>
           <td class="px-3 py-1 text-gray-500">{{ r.detail or '' }}</td>

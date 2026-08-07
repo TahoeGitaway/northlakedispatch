@@ -1437,6 +1437,7 @@ function _selectDailyRouteTab(routeId, label) {
   // Load the route, then render stops + the Breezeway comparison via the single
   // render path (_syncSidebarToSchedule), so later redraws can't wipe the panel.
   _routeChangesCache = { routeId: null, html: null };   // force a fresh check for this route
+  _rcAutoReset(routeId);                                // and a fresh retry schedule with it
   loadRouteById(routeId).then(() => {
     _syncSidebarToSchedule();
   }).catch(() => {
@@ -1447,7 +1448,7 @@ function _selectDailyRouteTab(routeId, label) {
 /* ── ROUTE DISCREPANCY CHECK (saved route vs live Breezeway) ─────── */
 
 let _routeChangesCache    = { routeId: null, html: null };
-let _routeChangesInflight = { routeId: null, promise: null };
+let _routeChangesInflight = { routeId: null, promise: null, controller: null };
 let _appliedRouteChanges  = new Set();   // route ids whose changes have been applied (hide the Apply button)
 // Per-route UI state for the "Changes vs Breezeway" box: after Apply we collapse it and
 // mark it applied (the shown list no longer reflects a fresh check). Check again clears both.
@@ -1459,7 +1460,184 @@ let _routeChangesUiState  = { routeId: null, collapsed: false, stale: false };
 // redraws within a session reuse the cache, so the check runs once per route load.
 function _invalidateRouteChanges() {
   _routeChangesCache    = { routeId: null, html: null };
-  _routeChangesInflight = { routeId: null, promise: null };
+  _routeChangesInflight = { routeId: null, promise: null, controller: null };
+}
+
+/* ── AUTOMATIC RETRY OF THE PROPERTIES BREEZEWAY DIDN'T RETURN ─────────────
+   The server holds the list of WHICH properties failed for 15 minutes
+   (_ROUTE_DISC_RETRY_WINDOW) so a retry can refetch just those few instead of
+   re-sweeping all ~442 houses. That list used to expire while the panel sat
+   there waiting for someone to click "load just the missing N" — and once it
+   was gone the only thing left was the expensive full re-scan the retry exists
+   to avoid ("The list of which properties failed has expired…").
+
+   So retry on our own, on a backoff that stays comfortably inside the window.
+   Every partial result re-stamps the held list server-side, so each attempt
+   rolls the window forward and it never expires while we're still working.
+
+   Retrying stops by itself when nothing is failing any more, when the failure
+   is one a retry cannot fix (401/403/404), when the attempts run out, or when
+   the panel is no longer on screen — no background hammering of Breezeway for
+   something nobody is looking at.
+
+   Stop cancels the pending timer AND aborts a retry already in flight. A Stop
+   that leaves a request running isn't a stop. */
+const _RC_RETRY_DELAYS_S = [15, 30, 60, 120, 240];   // 5 tries over ~7.5 min, all inside the 15-min window
+let _rcAuto = {
+  routeId:  null,   // route the schedule belongs to
+  attempt:  0,      // automatic retries already fired
+  timerId:  null,   // pending setTimeout for the next one
+  tickId:   null,   // countdown repaint interval
+  dueAt:    0,      // epoch ms of the next attempt
+  stopped:  false,  // user pressed Stop (or a retry came back unrecoverable)
+  inFlight: false,  // an automatic retry is running right now
+  note:     "",     // why we're no longer retrying, shown in the panel
+};
+
+function _rcAutoClearTimers() {
+  if (_rcAuto.timerId) clearTimeout(_rcAuto.timerId);
+  if (_rcAuto.tickId)  clearInterval(_rcAuto.tickId);
+  _rcAuto.timerId = _rcAuto.tickId = null;
+  _rcAuto.dueAt   = 0;
+}
+
+// A different route loaded, or the user asked for a fresh check: forget that
+// they ever pressed Stop and start the attempt count over.
+function _rcAutoReset(routeId) {
+  _rcAutoClearTimers();
+  _rcAuto.routeId  = routeId || null;
+  _rcAuto.attempt  = 0;
+  _rcAuto.stopped  = false;
+  _rcAuto.inFlight = false;
+  _rcAuto.note     = "";
+}
+
+// Stop retrying and say why, WITHOUT touching an in-flight request. Used when a
+// retry itself comes back unusable — the request is already finished.
+function _rcAutoHalt(note) {
+  _rcAutoClearTimers();
+  _rcAuto.stopped  = true;
+  _rcAuto.inFlight = false;
+  _rcAuto.note     = note || "";
+}
+
+// The panel body currently on screen, if any. The sidebar rebuilds this element
+// on every sync, so it has to be looked up at use time — a reference captured
+// when the timer was set would point at a detached node.
+function _rcBody() { return document.querySelector("[data-rc-body]"); }
+
+// Repaint the panel from the data we already have — no server call. Used when
+// only the retry status line changed (scheduled / stopped / resumed).
+function _rcRepaint() {
+  const body = _rcBody();
+  if (!body || _routeChangesCache.routeId !== _rcAuto.routeId || !_routeChangesCache.data) return;
+  body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+  _rcTick();
+}
+
+function _rcTick() {
+  const el = document.querySelector("[data-rc-countdown]");
+  if (!el) return;
+  const s = Math.max(0, Math.round((_rcAuto.dueAt - Date.now()) / 1000));
+  el.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+
+// Decide what happens after any check/retry result lands. Called BEFORE the
+// panel is painted so the status line it renders is already correct.
+function _rcAutoAfterResult(routeId, data) {
+  if (routeId !== _rcAuto.routeId) return;   // panel has moved to another route
+  _rcAuto.inFlight = false;
+  _rcAutoClearTimers();
+
+  if (!data.failed_properties) {             // everything loaded — nothing to chase
+    _rcAuto.attempt = 0;
+    _rcAuto.note    = "";
+    return;
+  }
+  const f = (typeof bwFailureCause === "function") ? bwFailureCause(data) : { retry: false };
+  if (!f.retry) {                            // 401/403/404 — retrying cannot fix it
+    _rcAuto.note = "";
+    return;
+  }
+  if (_rcAuto.stopped) return;
+  if (_rcAuto.attempt >= _RC_RETRY_DELAYS_S.length) {
+    _rcAuto.note = `Stopped after ${_RC_RETRY_DELAYS_S.length} automatic tries — Breezeway is still refusing these.`;
+    return;
+  }
+  const wait = _RC_RETRY_DELAYS_S[_rcAuto.attempt] * 1000;
+  _rcAuto.dueAt   = Date.now() + wait;
+  _rcAuto.timerId = setTimeout(() => _rcAutoFire(routeId), wait);
+  _rcAuto.tickId  = setInterval(_rcTick, 1000);
+}
+
+function _rcAutoFire(routeId) {
+  _rcAutoClearTimers();
+  const body = _rcBody();
+  // Panel closed, or a different route is loaded: give up rather than keep
+  // spending Breezeway calls on a result nobody can see.
+  if (_rcAuto.stopped || !body || currentRouteId !== routeId) {
+    if (!_rcAuto.stopped) _rcAutoHalt("the panel was closed");
+    return;
+  }
+  // Changes were applied: the shown list has been superseded, and a retry would
+  // paint an old comparison over the "these have been applied" message.
+  if (_routeChangesUiState.routeId === routeId && _routeChangesUiState.stale) {
+    _rcAutoHalt("the changes were applied");
+    return;
+  }
+  _rcAuto.attempt++;
+  _rcAuto.inFlight = true;
+  _rcRepaint();                                    // "Retrying now…" in place of the countdown
+  _renderRouteChangesInto(routeId, body, false, true, true);
+}
+
+// The Stop button. Kills the timer and the request that's already out.
+function _rcAutoStop() {
+  _rcAutoHalt("");
+  if (_routeChangesInflight.controller) {
+    try { _routeChangesInflight.controller.abort(); } catch (_) {}
+  }
+  _routeChangesInflight = { routeId: null, promise: null, controller: null };
+  _rcRepaint();
+}
+
+function _rcAutoResume() {
+  _rcAuto.stopped = false;
+  _rcAuto.note    = "";
+  _rcAuto.attempt = 0;
+  if (_routeChangesCache.routeId === _rcAuto.routeId && _routeChangesCache.data) {
+    _rcAutoAfterResult(_rcAuto.routeId, _routeChangesCache.data);
+  }
+  _rcRepaint();
+}
+
+// The line under the "couldn't be loaded" warning that says what the retrying is
+// doing right now, and offers the button to stop it.
+function _rcAutoStatusHtml(d) {
+  if (_rcAuto.routeId !== currentRouteId) return "";
+  const btn = (attr, label) =>
+    `<button ${attr} style="text-decoration:underline;font-weight:700;color:#b45309;background:none;`
+    + `border:none;padding:0;cursor:pointer;font-size:11px;">${label}</button>`;
+
+  if (_rcAuto.inFlight) {
+    return `<div class="mt-1 text-[11px] text-amber-800">↻ Retrying the missing ${d.failed_properties} now… `
+         + `${btn("data-rc-stop", "Stop")}</div>`;
+  }
+  if (_rcAuto.stopped) {
+    return `<div class="mt-1 text-[11px] text-gray-600">Automatic retries stopped`
+         + (_rcAuto.note ? ` — ${_escHtml(_rcAuto.note)}` : "")
+         + `. ${btn("data-rc-resume", "Resume")}</div>`;
+  }
+  if (_rcAuto.timerId) {
+    return `<div class="mt-1 text-[11px] text-amber-800">Retrying automatically in `
+         + `<span data-rc-countdown>…</span> `
+         + `<span class="text-gray-500">(try ${_rcAuto.attempt + 1} of ${_RC_RETRY_DELAYS_S.length})</span> `
+         + `${btn("data-rc-stop", "Stop")}</div>`;
+  }
+  if (_rcAuto.note) {
+    return `<div class="mt-1 text-[11px] text-gray-600">${_escHtml(_rcAuto.note)}</div>`;
+  }
+  return "";
 }
 
 // Append the "Changes vs Breezeway" block for the currently-loaded saved route.
@@ -1473,6 +1651,9 @@ function _appendRouteChanges(content) {
   if (_routeChangesUiState.routeId !== rid) {
     _routeChangesUiState = { routeId: rid, collapsed: false, stale: false };
   }
+  // Same rule for the retry schedule: only when the route actually changes, or
+  // every sidebar sync would wipe a pending countdown and un-press Stop.
+  if (_rcAuto.routeId !== rid) _rcAutoReset(rid);
   const box = document.createElement("div");
   box.className = "mt-3 pt-3 border-t border-gray-200";
   box.innerHTML = `
@@ -1484,7 +1665,7 @@ function _appendRouteChanges(content) {
       </button>
       <button data-refresh class="text-xs text-indigo-500 hover:text-indigo-700 font-medium"></button>
     </div>
-    <div data-body class="text-xs text-gray-400"></div>`;
+    <div data-body data-rc-body class="text-xs text-gray-400"></div>`;
   content.appendChild(box);
   const body   = box.querySelector("[data-body]");
   const caret  = box.querySelector("[data-caret]");
@@ -1516,6 +1697,7 @@ function _appendRouteChanges(content) {
     }
     if (_hasResult()) {
       body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+      _rcTick();          // the countdown span is brand new — fill it before the next second ticks
       return;
     }
     body.innerHTML =
@@ -1532,6 +1714,7 @@ function _appendRouteChanges(content) {
     refreshB.disabled = true;
     refreshB.textContent = "Checking…";
     _invalidateRouteChanges();
+    _rcAutoReset(rid);                         // fresh check → fresh retry budget, and Stop is forgotten
     _appliedRouteChanges.delete(rid);          // a fresh check brings the Apply button back
     _routeChangesUiState.stale     = false;    // fresh data → no longer applied-and-stale
     _routeChangesUiState.collapsed = false;    // and re-open it to show the result
@@ -1565,25 +1748,52 @@ document.addEventListener("click", function (ev) {
     ev.preventDefault();
     retry.disabled = true;
     retry.textContent = "Loading the missing ones…";
+    // Hand the pending automatic attempt over to this one, or both would fire.
+    _rcAutoClearTimers();
+    _rcAuto.inFlight = true;
     _renderRouteChangesInto(currentRouteId, body, false, true);
+    return;
+  }
+
+  // Stop the automatic retrying — the pending timer AND whatever is already out.
+  if (t.closest("[data-rc-stop]")) {
+    ev.preventDefault();
+    _rcAutoStop();
+    return;
+  }
+
+  if (t.closest("[data-rc-resume]")) {
+    ev.preventDefault();
+    _rcAutoResume();
     return;
   }
 
 });
 
-function _renderRouteChangesInto(routeId, body, force, retryFailed) {
+function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
   // Re-render from cached DATA (not a frozen html string) so the panel reflects
   // the CURRENT list each time — manual or applied fixes clear resolved changes.
   // A retry must always go to the server, or it would just repaint the same gaps.
   if (!retryFailed && _routeChangesCache.routeId === routeId && _routeChangesCache.data) {
     body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+    _rcTick();
     return;
   }
-  if (retryFailed) _invalidateRouteChanges();
-  body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
+  // A retry only needs the in-flight slot cleared so it actually goes out. Dropping
+  // the CACHED RESULT too (as this used to) means an aborted or failed retry leaves
+  // the panel with nothing to fall back on — and Stop would blank the very list the
+  // user was reading. The guard above already keeps a retry from being short-circuited.
+  if (retryFailed) _routeChangesInflight = { routeId: null, promise: null, controller: null };
+  // quiet: an automatic retry repaints in place (the status line says it's running)
+  // instead of wiping the whole comparison every time the timer fires.
+  if (!quiet) body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
   if (_routeChangesInflight.routeId !== routeId || !_routeChangesInflight.promise) {
+    // AbortController so Stop can actually cut a retry that's already out. Without
+    // it "Stop" only cancelled the NEXT one and the current sweep ran to completion.
+    const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
     _routeChangesInflight = {
       routeId,
+      controller: ctrl,
       // no-store: the GET is otherwise HTTP-cacheable, which made a page reload show
       // the stale browser-cached result instead of a live re-check. force=1 (explicit
       // an explicit re-check only) tells the server to skip ITS short-lived cache; passive
@@ -1591,7 +1801,8 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
       // scan (which is what was timing out at the gateway → HTTP 503).
       promise: fetch(`/api/route-discrepancies?route_id=${routeId}`
                      + (force ? "&force=1" : "")
-                     + (retryFailed ? "&retry_failed=1" : ""), { cache: "no-store" })
+                     + (retryFailed ? "&retry_failed=1" : ""),
+                     { cache: "no-store", signal: ctrl ? ctrl.signal : undefined })
         .then(r => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
@@ -1601,6 +1812,14 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
   _routeChangesInflight.promise.then(data => {
     if (data.error) {
       console.error("[route-changes] route", routeId, "server error:", data.error);
+      // A retry that comes back unusable stops the schedule and says why, but must
+      // NOT throw away the comparison we already have on screen.
+      if (retryFailed && _routeChangesCache.routeId === routeId && _routeChangesCache.data) {
+        _rcAutoHalt(data.error);
+        body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+        return;
+      }
+      _rcAutoHalt(data.error);
       body.innerHTML = `<span class="text-red-500">${_escHtml(data.error)} — reopen the sidebar or use Check again.</span>`;
       _invalidateRouteChanges();   // never cache an error — let a reopen/recheck retry
       return;
@@ -1609,8 +1828,12 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
       console.warn("[route-changes] route", routeId, "—", data.failed_properties,
                    "propert(y/ies) failed to load from Breezeway; task list may be incomplete");
     }
+    // Settle the retry schedule BEFORE painting, so the status line the panel
+    // renders already knows whether another attempt is queued.
+    _rcAutoAfterResult(routeId, data);
     const html = _renderChangesHtml(data);
     body.innerHTML = html;
+    _rcTick();
     _routeChangesCache = { routeId, html, data };
     _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
     // Remember each house's Breezeway property_id from the live scan so the saved-route
@@ -1620,7 +1843,17 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed) {
     }
     _syncSidebarToSchedule();   // re-paint stops now that we have each property's tasks
   }).catch(e => {
+    // Stop aborted it on purpose — that path has already repainted the panel.
+    if (e && e.name === "AbortError") return;
     console.error("[route-changes] route", routeId, "fetch failed:", e);
+    _rcAuto.inFlight = false;
+    // Same as the server-error path: a failed retry keeps the result it was
+    // trying to improve, and just reports that the retrying has stopped.
+    if (retryFailed && _routeChangesCache.routeId === routeId && _routeChangesCache.data) {
+      _rcAutoHalt(`Couldn't reach Breezeway (${e.message})`);
+      body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+      return;
+    }
     body.innerHTML = `<span class="text-red-500">Could not check Breezeway: ${_escHtml(e.message)} — reopen the sidebar or use Check again.</span>`;
     _invalidateRouteChanges();   // don't cache the failed promise, or every retry reuses it
   });
@@ -1721,7 +1954,9 @@ function _renderChangesHtml(d) {
             ? `<br><button data-retry-missing="${d.failed_properties}"`
               + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:#b45309;`
               + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
-              + `👉 Click here to load just the missing ${d.failed_properties}</button>`
+              + `👉 Click here to load just the missing ${d.failed_properties} now</button>`
+              // What the automatic retrying is doing, and the button to stop it.
+              + _rcAutoStatusHtml(d)
               + `<div class="text-gray-500 mt-1">Only re-checks the ones that failed — much faster, and far less likely`
               + ` to be throttled again. (Check again at the top re-scans all ${d.scanned_properties || "the"} properties.)</div>`
             : ` Checking again won't help; this needs a fix in Breezeway or the app's settings.`)

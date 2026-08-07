@@ -43,7 +43,7 @@ from flask_login import login_required, current_user
 
 from db import get_db, get_cursor
 from routes.auth import admin_required
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_post
 
 bw_comments_bp = Blueprint("bw_comments", __name__)
 
@@ -363,7 +363,7 @@ def bw_comments_subscribe():
         return jsonify({"error": f"APP_BASE_URL is not public ({url}); Breezeway "
                         "must be able to reach it. Set APP_BASE_URL first."}), 400
     try:
-        r = requests.post(f"{BW_BASE}/public/webhook/v1/subscribe",
+        r = bw_post(f"{BW_BASE}/public/webhook/v1/subscribe",
                           headers={"Authorization": f"JWT {token}"},
                           json={"url": url, "webhook_type": "task"}, timeout=20)
         try:

@@ -52,6 +52,7 @@ _owner_cleaned_cache: dict  = {}   # {date_str: (ts, payload, ttl)} — owner-cl
 _OWNER_CLEAN_TTL         = 600     # complete scan
 _OWNER_CLEAN_PARTIAL_TTL = 45      # incomplete scan: absorbs clicking between days
                                    # without pinning missing flags for long
+_OWNER_CLEAN_JOB_WORKERS = 8       # scheduled scan: gentler than a one-off day-click
 _prop_status_cache:   dict  = {}   # {property_id: (timestamp, payload)}
 _PROP_STATUS_TTL            = 20 * 60   # 20 minutes per property
 _bw_token:            dict  = {"value": None, "expires_at": 0}
@@ -278,6 +279,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     all_results = []
     page, limit = 1, 100
     last_status = None
+    _t0 = time.time()          # so the except branches can time a failed call too
     try:
         while True:
             # Hold until the gate allows a send. If it can't grant one quickly,
@@ -297,10 +299,11 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
             )
             last_status = resp.status_code
             gate.on_response(last_status)
-            # One line, one direction. routes/bw_api_log.py owns everything else.
+            # One line, one direction. routes/bw_api_log.py owns everything else —
+            # including working out which house the call was for, from the params.
             bw_api_log.record(path, last_status, resp.ok,
-                              ref=str(params.get("reference_property_id") or ""),
-                              elapsed_ms=int((time.time() - _t0) * 1000))
+                              elapsed_ms=int((time.time() - _t0) * 1000),
+                              params={**params, "limit": limit, "page": page})
             if not resp.ok:
                 try:
                     detail = resp.json()
@@ -315,10 +318,14 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 break
             page += 1
     except requests.exceptions.Timeout:
-        bw_api_log.record(path, None, False, detail="timed out after 15 s")
+        bw_api_log.record(path, None, False, detail="timed out after 15 s",
+                          elapsed_ms=int((time.time() - _t0) * 1000),
+                          params={**params, "limit": limit, "page": page})
         return [], "Request timed out — Breezeway API did not respond within 15 s", last_status
     except Exception as ex:
-        bw_api_log.record(path, None, False, detail=f"{type(ex).__name__}: {ex}")
+        bw_api_log.record(path, None, False, detail=f"{type(ex).__name__}: {ex}",
+                          elapsed_ms=int((time.time() - _t0) * 1000),
+                          params={**params, "limit": limit, "page": page})
         return [], str(ex), last_status
     return all_results, "", last_status
 
@@ -1010,6 +1017,9 @@ def day_summary():
 
     Priority: 1) saved DB snapshot  2) in-memory cache  3) live Breezeway fetch
     Pass ?refresh=1 to force a live re-fetch (overwrites neither DB nor cache automatically).
+
+    A saved snapshot carries its owner-clean flags in `owner_cleaned`, so the page
+    renders them with the list instead of firing a second, far more expensive request.
     """
     date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
     force    = request.args.get("refresh") == "1"
@@ -1020,19 +1030,26 @@ def day_summary():
             conn = get_db()
             cur  = get_cursor(conn)
             cur.execute(
-                "SELECT arrivals, departures, saved_at FROM saved_day_summaries WHERE route_date = %s",
+                "SELECT arrivals, departures, saved_at, owner_cleaned, owner_cleaned_at "
+                "FROM saved_day_summaries WHERE route_date = %s",
                 (date_str,)
             )
             row = cur.fetchone()
             cur.close(); conn.rollback(); conn.close()
             if row:
-                return jsonify({
+                payload = {
                     "date":       date_str,
                     "arrivals":   json.loads(row["arrivals"]),
                     "departures": json.loads(row["departures"]),
                     "cached_at":  row["saved_at"],
                     "source":     "saved",
-                })
+                }
+                if row["owner_cleaned"]:
+                    payload["owner_cleaned"] = {
+                        **json.loads(row["owner_cleaned"]),
+                        "cached_at": row["owner_cleaned_at"],
+                    }
+                return jsonify(payload)
         except Exception:
             pass
 
@@ -1152,6 +1169,66 @@ def _write_day_summary(date_str: str, arrivals: dict, departures: dict) -> None:
     _day_summary_cache.pop(date_str, None)   # next read comes from the DB
 
 
+def _dates_with_owner_cleaned(dates: list) -> set:
+    """Which of `dates` already have a stored owner-clean scan. A date can have its
+    arrivals stored but not its scan — the fan-out is far more likely to be throttled
+    than the two reservation calls — so this is asked separately from
+    _dates_with_snapshots, letting the retry job redo only the missing half."""
+    from db import get_db, get_cursor
+    if not dates:
+        return set()
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            cur.execute(
+                "SELECT route_date FROM saved_day_summaries "
+                "WHERE route_date = ANY(%s) AND owner_cleaned IS NOT NULL",
+                (list(dates),))
+            return {r["route_date"] for r in cur.fetchall()}
+        finally:
+            cur.close(); conn.rollback(); conn.close()
+    except Exception:
+        return set()
+
+
+def _read_owner_cleaned(date_str: str) -> dict:
+    """The stored owner-clean scan for a date, or {} when there isn't one."""
+    from db import get_db, get_cursor
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            cur.execute("SELECT owner_cleaned, owner_cleaned_at FROM saved_day_summaries "
+                        "WHERE route_date = %s", (date_str,))
+            row = cur.fetchone()
+        finally:
+            cur.close(); conn.rollback(); conn.close()
+        if not row or not row["owner_cleaned"]:
+            return {}
+        return {**json.loads(row["owner_cleaned"]), "cached_at": row["owner_cleaned_at"]}
+    except Exception:
+        return {}
+
+
+def _write_owner_cleaned(date_str: str, payload: dict) -> None:
+    """Store a COMPLETE owner-clean scan next to the date's arrivals.
+
+    UPDATE only, never INSERT: a row here is what makes day_summary() serve a date
+    from the DB instead of Breezeway, so creating one with the empty arrivals default
+    would pin "None" for the whole day. No arrivals row yet means the snapshot job
+    hasn't gotten to this date — it will write both together when it does."""
+    from db import get_db, get_cursor
+    conn = get_db(); cur = get_cursor(conn)
+    try:
+        cur.execute("""
+            UPDATE saved_day_summaries
+               SET owner_cleaned = %s, owner_cleaned_at = %s
+             WHERE route_date = %s
+        """, (json.dumps(payload), _fmt_pacific(time.time()), date_str))
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+
+
 def refresh_day_summaries(days: int = 8, only_missing: bool = False,
                           attempts: int = 2) -> dict:
     """Build and store arrivals/departures snapshots for today and the next `days`.
@@ -1174,9 +1251,13 @@ def refresh_day_summaries(days: int = 8, only_missing: bool = False,
     today   = date_cls.today()
     targets = [(today + timedelta(days=i)).isoformat() for i in range(days)]
 
+    have_summary, have_oc = set(), set()
     if only_missing:
-        have    = _dates_with_snapshots(targets)
-        targets = [d for d in targets if d not in have or d in _day_summary_pending]
+        have_summary = _dates_with_snapshots(targets)
+        have_oc      = _dates_with_owner_cleaned(targets)
+        targets = [d for d in targets
+                   if d not in have_summary or d not in have_oc
+                   or d in _day_summary_pending]
         if not targets:
             return out                      # everything covered — no API calls at all
 
@@ -1190,44 +1271,83 @@ def refresh_day_summaries(days: int = 8, only_missing: bool = False,
         return out
 
     for d in targets:
-        wrote = False
-        for attempt in range(max(1, attempts)):
-            try:
-                checkins  = _fetch_bw_reservations(token, {
-                    "checkin_date_ge": d, "checkin_date_le": d})
-                err_in    = _get_bw_resv_last_error()
-                checkouts = _fetch_bw_reservations(token, {
-                    "checkout_date_ge": d, "checkout_date_le": d})
-                err_out   = _get_bw_resv_last_error()
+        # A date can be half-covered: the arrivals stored fine this morning but the
+        # owner-clean fan-out got throttled. Don't re-fetch reservations we already
+        # have — go straight to the scan below.
+        stored   = only_missing and d in have_summary and d not in _day_summary_pending
+        wrote    = stored
+        checkins = None
 
-                if err_in or err_out:
-                    # Throttled or partial. One more try after a pause; beyond that
-                    # the date stays pending for a later scheduled catch-up rather
-                    # than hammering the same query now — Breezeway's limit resets
-                    # on the order of a minute, so retrying harder here won't help.
+        if not wrote:
+            for attempt in range(max(1, attempts)):
+                try:
+                    checkins  = _fetch_bw_reservations(token, {
+                        "checkin_date_ge": d, "checkin_date_le": d})
+                    err_in    = _get_bw_resv_last_error()
+                    checkouts = _fetch_bw_reservations(token, {
+                        "checkout_date_ge": d, "checkout_date_le": d})
+                    err_out   = _get_bw_resv_last_error()
+
+                    if err_in or err_out:
+                        # Throttled or partial. One more try after a pause; beyond that
+                        # the date stays pending for a later scheduled catch-up rather
+                        # than hammering the same query now — Breezeway's limit resets
+                        # on the order of a minute, so retrying harder here won't help.
+                        checkins = None
+                        if attempt < attempts - 1:
+                            time.sleep(10.0)
+                            continue
+                        out["skipped"].append(f"{d}: fetch incomplete ({err_in or err_out})")
+                        break
+
+                    arrivals, departures = _shape_day_summary(checkins, checkouts)
+                    _write_day_summary(d, arrivals, departures)
+                    wrote = True
+                    out["saved"].append(
+                        f"{d}: {sum(len(v) for v in arrivals.values())} arrivals, "
+                        f"{sum(len(v) for v in departures.values())} departures")
+                    break
+                except Exception as ex:
+                    checkins = None
                     if attempt < attempts - 1:
                         time.sleep(10.0)
                         continue
-                    out["skipped"].append(f"{d}: fetch incomplete ({err_in or err_out})")
-                    break
+                    out["errors"].append(f"{d}: {type(ex).__name__}: {ex}")
 
-                arrivals, departures = _shape_day_summary(checkins, checkouts)
-                _write_day_summary(d, arrivals, departures)
-                wrote = True
-                out["saved"].append(
-                    f"{d}: {sum(len(v) for v in arrivals.values())} arrivals, "
-                    f"{sum(len(v) for v in departures.values())} departures")
-                break
+            if wrote:
+                _day_summary_pending.discard(d)
+            else:
+                _day_summary_pending.add(d)  # the retry job will keep at it
+
+        # The owner-clean flags ride along with the list they annotate, so opening
+        # the page costs nothing. Same rule as the snapshot itself: store only a
+        # COMPLETE scan — a partial one would pin missing flags for the day, and
+        # leaving it unstored is what keeps the date in the retry job's sights.
+        # Needs the arrivals row to exist (_write_owner_cleaned only UPDATEs), hence
+        # `wrote`. Fewer workers than the interactive path: this runs eight dates
+        # back to back against a shared rate limit, where a day-click runs one.
+        #
+        # `not stored` covers the case where a retry just REPLACED the arrivals with
+        # freshly fetched ones: whatever flags are on that row describe the old list
+        # (today's row is written a day ahead, so they can be a day stale), and they
+        # have to be rebuilt with it — not skipped because the column is non-NULL.
+        if wrote and (not stored or d not in have_oc):
+            try:
+                oc = _scan_owner_cleaned(token, d, date_cls.fromisoformat(d),
+                                         checkins=checkins,
+                                         max_workers=_OWNER_CLEAN_JOB_WORKERS)
+                if oc.get("failed_properties"):
+                    out["skipped"].append(
+                        f"{d}: owner-clean scan incomplete — "
+                        f"{oc['failed_properties']} of {oc['scanned']} houses "
+                        f"({oc.get('failure_statuses') or 'no status'})")
+                else:
+                    _write_owner_cleaned(d, oc)
+                    _owner_cleaned_cache.pop(d, None)   # next read comes from the DB
+                    out["saved"].append(
+                        f"{d}: {len(oc['flagged'])} owner-cleaned of {oc['scanned']} arrivals")
             except Exception as ex:
-                if attempt < attempts - 1:
-                    time.sleep(10.0)
-                    continue
-                out["errors"].append(f"{d}: {type(ex).__name__}: {ex}")
-
-        if wrote:
-            _day_summary_pending.discard(d)
-        else:
-            _day_summary_pending.add(d)      # the retry job will keep at it
+                out["errors"].append(f"{d}: owner-clean scan {type(ex).__name__}: {ex}")
 
     out["pending"] = sorted(_day_summary_pending)
     return out
@@ -1393,44 +1513,27 @@ def _get_task_title(t: dict) -> str:
     return str(title)
 
 
-@briefing_bp.route("/briefing/owner-cleaned-check")
-@login_required
-def owner_cleaned_check():
-    """For the arrivals on a given date, flag houses whose LAST clean was owner-handled.
+def _scan_owner_cleaned(token, date_str: str, arrival_date, checkins: list = None,
+                        debug: bool = False, max_workers: int = 32) -> dict:
+    """Run the owner-clean fan-out for one date and return the payload.
 
-    Fans out one Breezeway task query per arriving property (the task API has no
-    company-wide day query — it needs a reference_property_id per call), so this runs
-    lazily after the arrivals panel renders rather than blocking it.
-    Returns {date, flagged: [{property_id, name}], scanned, failed_properties, error}.
+    Split out of the endpoint so the morning snapshot job can build the same result
+    without going through HTTP. This is the expensive half of the arrivals panel —
+    one Breezeway task call per arriving house — which is exactly why it belongs in
+    the overnight run rather than on every page open.
+
+    Pass `checkins` when the caller already fetched the date's reservations so this
+    doesn't fetch them a second time.
+    Returns {date, flagged: [{property_id, name}], scanned, failed_properties,
+             failure_statuses}.
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
-    debug    = request.args.get("debug") == "1"
-    force    = request.args.get("refresh") == "1" or debug
-
-    # Entries carry their own TTL — a complete scan is worth holding for 10 minutes,
-    # an incomplete one only briefly (see the write site below).
-    cached = _owner_cleaned_cache.get(date_str)
-    if cached and not force:
-        _ttl = cached[2] if len(cached) > 2 else _OWNER_CLEAN_TTL
-        if (time.time() - cached[0]) < _ttl:
-            return jsonify({**cached[1], "cached_at": _fmt_pacific(cached[0])})
-
-    try:
-        arrival_date = date_cls.fromisoformat(date_str)
-    except Exception:
-        return jsonify({"error": f"Bad date: {date_str}"}), 400
-
-    token = _get_breezeway_token()
-    if not token:
-        return jsonify({"date": date_str, "flagged": [], "scanned": 0,
-                        "failed_properties": 0, "error": "Breezeway not configured."})
-
     _ensure_property_cache()
-    checkins = _fetch_bw_reservations(token, {
-        "checkin_date_ge": date_str, "checkin_date_le": date_str,
-    })
+    if checkins is None:
+        checkins = _fetch_bw_reservations(token, {
+            "checkin_date_ge": date_str, "checkin_date_le": date_str,
+        })
 
     # property_id -> display name, for each non-block arrival
     arriving = {}
@@ -1442,10 +1545,9 @@ def owner_cleaned_check():
             arriving[pid] = _get_property_name(pid)
 
     if not arriving:
-        # No arrivals is a complete answer, not a partial one — full TTL.
-        payload = {"date": date_str, "flagged": [], "scanned": 0, "failed_properties": 0}
-        _owner_cleaned_cache[date_str] = (time.time(), payload, _OWNER_CLEAN_TTL)
-        return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
+        # No arrivals is a complete answer, not a partial one.
+        return {"date": date_str, "flagged": [], "scanned": 0,
+                "failed_properties": 0, "failure_statuses": {}}
 
     ref_cache = _get_live_ref_cache()
     start_str = (arrival_date - timedelta(days=14)).isoformat()
@@ -1462,7 +1564,7 @@ def owner_cleaned_check():
 
     flagged, failed, debug_details = [], 0, []
     failure_statuses: dict = {}
-    with ThreadPoolExecutor(max_workers=32) as ex:
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         for pid, result, tr, status in ex.map(_job, list(arriving.keys())):
             if result is None:
                 failed += 1
@@ -1484,6 +1586,51 @@ def owner_cleaned_check():
     }
     if debug:
         payload["debug_suppressed"] = debug_details
+    return payload
+
+
+@briefing_bp.route("/briefing/owner-cleaned-check")
+@login_required
+def owner_cleaned_check():
+    """Owner-clean flags for one date's arrivals.
+
+    Priority: 1) the scan stored by the morning snapshot job  2) in-memory cache
+    3) a live fan-out. The stored scan is the normal path and costs no API calls;
+    the live fan-out is the fallback for a date the job hasn't covered yet, and
+    what ?refresh=1 forces.
+    """
+    date_str = request.args.get("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    debug    = request.args.get("debug") == "1"
+    force    = request.args.get("refresh") == "1" or debug
+
+    # 1) Stored scan — built at 5:30am alongside the arrivals list.
+    if not force:
+        stored = _read_owner_cleaned(date_str)
+        if stored:
+            return jsonify({**stored, "source": "saved"})
+
+    # 2) Entries carry their own TTL — a complete scan is worth holding for 10 minutes,
+    # an incomplete one only briefly (see the write site below).
+    cached = _owner_cleaned_cache.get(date_str)
+    if cached and not force:
+        _ttl = cached[2] if len(cached) > 2 else _OWNER_CLEAN_TTL
+        if (time.time() - cached[0]) < _ttl:
+            return jsonify({**cached[1], "cached_at": _fmt_pacific(cached[0]),
+                            "source": "live"})
+
+    try:
+        arrival_date = date_cls.fromisoformat(date_str)
+    except Exception:
+        return jsonify({"error": f"Bad date: {date_str}"}), 400
+
+    token = _get_breezeway_token()
+    if not token:
+        return jsonify({"date": date_str, "flagged": [], "scanned": 0,
+                        "failed_properties": 0, "error": "Breezeway not configured."})
+
+    # 3) Live fan-out.
+    payload = _scan_owner_cleaned(token, date_str, arrival_date, debug=debug)
+    failed  = payload.get("failed_properties", 0)
     # A clean scan is worth holding for 10 minutes. An incomplete one used to be
     # discarded entirely — correct in spirit (don't pin missing flags) but it meant
     # that while Breezeway is throttling, when this scan ALWAYS has failures, every
@@ -1496,7 +1643,11 @@ def owner_cleaned_check():
         _owner_cleaned_cache[date_str] = (
             time.time(), payload,
             _OWNER_CLEAN_TTL if not failed else _OWNER_CLEAN_PARTIAL_TTL)
-    return jsonify({**payload, "cached_at": _fmt_pacific(time.time())})
+    # A complete live scan is worth persisting too — a date the job missed then
+    # stops costing every later visitor the same fan-out.
+    if not debug and not failed:
+        _write_owner_cleaned(date_str, payload)
+    return jsonify({**payload, "cached_at": _fmt_pacific(time.time()), "source": "live"})
 
 
 @briefing_bp.route("/briefing/property-status")

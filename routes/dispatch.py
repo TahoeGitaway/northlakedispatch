@@ -16,7 +16,7 @@ from flask_login import login_required, current_user
 from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_patch, bw_post
 from db import (get_db, get_cursor, DEFAULT_START,
                 CHECKIN_DEADLINE_HHMM, PRIORITY_CHECKIN_DEADLINE_HHMM,
                 hhmm_to_minutes, minutes_to_hhmm)
@@ -1734,10 +1734,12 @@ def route_discrepancies():
         # trying to avoid. Say so and let them choose Recheck deliberately.
         _p = _route_disc_partial.get(route_id)
         if not _p or _dt_time.time() - _p[0] >= _ROUTE_DISC_RETRY_WINDOW:
+            # Name the button that actually exists. There is no "Recheck" — the
+            # header button reads "Check now" / "Check again".
             return jsonify({
                 "error": "The list of which properties failed has expired, so there's "
-                         "nothing left to retry on its own. Click ↻ Recheck to run a "
-                         "full check of all properties."
+                         "nothing left to retry on its own. Use Check again at the top "
+                         "of the panel to run a full check of all properties."
             }), 200
     if not force and not retry_failed:
         hit = _route_disc_cache.get(route_id)
@@ -2258,7 +2260,7 @@ def bw_assign_test():
     from routes.bw_audit import log_bw_write
     for p in payloads:
         try:
-            r = requests.patch(url, headers=headers, json=p, timeout=15)
+            r = bw_patch(url, headers=headers, json=p, timeout=15)
             after = _assignees_now()
             stuck = bool(after and assignee_id in after)
             # A diagnostic, but every attempt is a REAL write to a real task —
@@ -2278,7 +2280,7 @@ def bw_assign_test():
     if not winner:
         for sub in (f"{url}/assignment", f"{url}/assignments"):
             try:
-                r = requests.post(sub, headers=headers,
+                r = bw_post(sub, headers=headers,
                                   json={"assignee_id": assignee_id}, timeout=15)
                 after = _assignees_now()
                 stuck = bool(after and assignee_id in after)
@@ -2392,7 +2394,7 @@ def _clear_task_time(token: str, task_id, meta: dict = None) -> tuple:
                      task_date=meta.get("date"), old_value=meta.get("old_time"),
                      new_value="(cleared)", ok=ok, detail=detail)
     try:
-        r = requests.patch(url, headers=headers, json={"scheduled_time": None}, timeout=15)
+        r = bw_patch(url, headers=headers, json={"scheduled_time": None}, timeout=15)
         ok = r.status_code in (200, 201)
         msg = f"status={r.status_code}" + ("" if ok else f" {r.text[:160]}")
         _audit(ok, msg)
@@ -2588,7 +2590,7 @@ def bw_task_template_test():
     url     = f"https://api.breezeway.io/public/inventory/v1/task/{task_id}"
     patch   = {}
     try:
-        pr = requests.patch(url, headers=headers, json={"template_id": template_id}, timeout=15)
+        pr = bw_patch(url, headers=headers, json={"template_id": template_id}, timeout=15)
         patch["status"] = pr.status_code
         from routes.bw_audit import log_bw_write
         log_bw_write("template_probe", "template_id", task_id=task_id,

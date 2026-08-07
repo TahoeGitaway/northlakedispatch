@@ -32,7 +32,7 @@ BW_BASE = "https://api.breezeway.io"
 
 # Per date-range scan cache — survives a proxy timeout so a retry is instant.
 import time as _time
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_patch
 _scan_cache: dict = {}      # (start_iso, end_iso) -> (timestamp, result_dict)
 _SCAN_TTL = 90
 
@@ -151,7 +151,7 @@ def _patch_task_name(token, task_id, new_name, meta: dict = None):
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
-        r = requests.patch(url, headers=headers, json={"name": new_name}, timeout=15)
+        r = bw_patch(url, headers=headers, json={"name": new_name}, timeout=15)
         ok = r.status_code in (200, 201)
         try:
             returned = r.json().get("name") or "(not in response)"

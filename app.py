@@ -241,6 +241,18 @@ scheduler.add_job(
     id="day_summaries_retry_2",
     replace_existing=True,
 )
+# Two more, well after the morning cluster. The snapshot's other half — the
+# owner-clean scan — is one Breezeway call per arriving house, so it's the part most
+# likely to still be short a house or two when the API is having a bad morning, and
+# a date left uncovered means every page open re-runs that fan-out live. Spaced
+# hours apart, not hourly: a date that keeps failing shouldn't be re-attempted all
+# day. Still free (one SQL query, zero API calls) when everything is covered.
+scheduler.add_job(
+    _scheduled_day_summaries_retry,
+    CronTrigger(hour="8,11", minute=0, timezone="America/Los_Angeles"),
+    id="day_summaries_retry_3",
+    replace_existing=True,
+)
 scheduler.add_job(
     _scheduled_pri_check,
     CronTrigger(hour=7, minute=30, timezone="America/Los_Angeles"),

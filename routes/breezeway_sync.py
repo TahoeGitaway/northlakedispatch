@@ -14,7 +14,7 @@ import requests
 from flask import Blueprint, request, jsonify
 from flask_login import login_required
 from routes.auth import admin_required
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_patch
 
 bw_sync_bp = Blueprint("bw_sync", __name__)
 
@@ -204,7 +204,7 @@ def _patch_task_time(token: str, task_id: int, start_time_hhmm: str, date_str: s
             if not gate.acquire():
                 _audit(False, "held back by this app's rate limiter — not sent")
                 return False, "held back by this app's rate limiter — not sent"
-            r = requests.patch(url, headers=headers, json=payload, timeout=15)
+            r = bw_patch(url, headers=headers, json=payload, timeout=15)
             gate.on_response(r.status_code)
             try:
                 body = r.json()

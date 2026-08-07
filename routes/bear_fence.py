@@ -22,7 +22,7 @@ from flask_login import login_required
 
 from routes.auth import admin_required
 from routes.group_assign import _assignee_names
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_patch
 
 bear_fence_bp = Blueprint("bear_fence", __name__)
 
@@ -151,7 +151,7 @@ def _patch_task(token: str, task_id, payload: dict, meta: dict = None) -> tuple:
     headers = {"Authorization": f"JWT {token}", "Content-Type": "application/json"}
     url = f"{BW_BASE}/public/inventory/v1/task/{task_id}"
     try:
-        r = requests.patch(url, headers=headers, json=payload, timeout=15)
+        r = bw_patch(url, headers=headers, json=payload, timeout=15)
         ok = r.status_code in (200, 201)
         try:
             body = r.json()

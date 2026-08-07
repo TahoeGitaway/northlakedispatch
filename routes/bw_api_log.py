@@ -1,11 +1,12 @@
 """
 routes/bw_api_log.py — a record of every Breezeway REQUEST, success or failure.
 
-Standalone. Nothing else imports from here except a single call in
-briefing._fetch_bw_endpoint and the blueprint registration in app.py. It owns its
-own table, its own buffer and its own page, and it holds no reference to any
-other feature's state — so it can be deleted by removing this file, its template,
-two lines in app.py and one call site, with nothing else to unpick.
+Standalone. Features import the bw_get / bw_patch / bw_post / bw_delete wrappers
+and nothing else; the one exception is a name lookup on the admin page, which
+reads briefing's property cache and degrades to a bare id if it isn't there. It
+owns its own table, its own buffer and its own page, so it can be deleted by
+removing this file, its template, two lines in app.py and swapping the wrappers
+back for plain `requests` calls, with nothing else to unpick.
 
 What it is for
 --------------
@@ -30,6 +31,7 @@ Nothing here may raise. A logging failure must never surface in a feature that
 was merely making an API call.
 """
 
+import re
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -66,15 +68,66 @@ def _feature() -> str:
         return ""            # scheduled job — no request context
 
 
+# Every write puts the thing it is changing in the path, not the query:
+# /public/inventory/v1/task/526104. Params can't see those, so read both.
+_PATH_ID_RE = re.compile(r"/(task|reservation|home|property)/(\d+)")
+
+# The JWT travels in a header, not the query — but a future caller may be less
+# careful, and this table is read by humans in a browser.
+_SECRET_HINT = ("token", "key", "secret", "auth", "password")
+
+
+def _ref_from(endpoint: str, params) -> str:
+    """What the call was about, labelled so a task id can't be mistaken for a
+    property id. Empty when the call is not scoped to one thing — a date-window
+    reservation sweep covers the whole portfolio, and saying so beats a number
+    that would be a guess."""
+    try:
+        p = params if isinstance(params, dict) else {}
+        # reference_property_id and property_id are DIFFERENT id spaces — the task
+        # API takes the external reference, the inventory API takes Breezeway's own.
+        # Labelling them apart is what lets the name lookup pick the right map.
+        for key, label in (("reference_property_id", "property ref"),
+                           ("home_id",               "property"),
+                           ("property_id",           "property"),
+                           ("task_id",               "task")):
+            if p.get(key):
+                return f"{label} {p[key]}"[:80]
+        m = _PATH_ID_RE.search(endpoint or "")
+        return f"{m.group(1)} {m.group(2)}"[:80] if m else ""
+    except Exception:
+        return ""
+
+
+def _params_text(params) -> str:
+    """The query as sent. For a call with no property filter this is the only
+    thing that identifies it — without it, every reservation fetch in the table
+    is the same row repeated."""
+    try:
+        parts = []
+        for k, v in (params if isinstance(params, dict) else {}).items():
+            if any(h in str(k).lower() for h in _SECRET_HINT):
+                v = "***"
+            parts.append(f"{k}={v}")
+        return ", ".join(parts)[:300]
+    except Exception:
+        return ""
+
+
 def record(endpoint: str, status, ok: bool, ref: str = "",
-           elapsed_ms: int = 0, detail: str = "") -> None:
-    """Buffer one Breezeway request outcome. Never raises, never blocks on I/O."""
+           elapsed_ms: int = 0, detail: str = "",
+           method: str = "GET", params=None) -> None:
+    """Buffer one Breezeway request outcome. Never raises, never blocks on I/O.
+
+    `ref` is derived from `params` and `endpoint` when the caller doesn't pass
+    one, so a new call site gets it right by doing nothing."""
     try:
         with _buf_lock:
             _buf.append((_now_iso(), _feature(), (endpoint or "")[:120],
                          int(status) if isinstance(status, int) else None,
-                         bool(ok), (ref or "")[:80], int(elapsed_ms or 0),
-                         (detail or "")[:300]))
+                         bool(ok), (ref or _ref_from(endpoint, params))[:80],
+                         int(elapsed_ms or 0), (detail or "")[:300],
+                         (method or "GET")[:10], _params_text(params)))
             due = len(_buf) >= _FLUSH_ROWS or (time.time() - _last_flush) > _FLUSH_SECONDS
         if due:
             flush()
@@ -98,8 +151,9 @@ def flush() -> int:
         try:
             cur.executemany("""
                 INSERT INTO bw_api_log
-                       (ts, feature, endpoint, status, ok, ref, elapsed_ms, detail)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                       (ts, feature, endpoint, status, ok, ref, elapsed_ms,
+                        detail, method, params)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, rows)
             # Keep the table from growing without bound. Once an hour is plenty.
             if time.time() - _last_prune > 3600:
@@ -126,19 +180,71 @@ def bw_get(url, **kwargs):
     import requests
     t0 = time.time()
     params = kwargs.get("params") or {}
-    ref = str(params.get("reference_property_id") or params.get("home_id")
-              or params.get("property_id") or "")[:80]
     path = url.split("breezeway.io", 1)[-1] if "breezeway.io" in url else url
     try:
         r = requests.get(url, **kwargs)
-        record(path, r.status_code, r.ok, ref,
-               int((time.time() - t0) * 1000),
-               "" if r.ok else (r.text or "")[:200])
+        record(path, r.status_code, r.ok,
+               elapsed_ms=int((time.time() - t0) * 1000),
+               detail="" if r.ok else (r.text or "")[:200], params=params)
         return r
     except Exception as e:
-        record(path, None, False, ref, int((time.time() - t0) * 1000),
-               f"{type(e).__name__}: {e}")
+        record(path, None, False, elapsed_ms=int((time.time() - t0) * 1000),
+               detail=f"{type(e).__name__}: {e}", params=params)
         raise
+
+
+def bw_write(method: str, url, **kwargs):
+    """requests.<method> for Breezeway writes, recorded. Drop-in replacement:
+    identical arguments, return value and exceptions.
+
+    Same wrapper shape as bw_get, for a sharper reason. bw_audit records a write
+    once it knows what changed — so a PATCH that times out, or is refused, is the
+    one write that leaves no trace, and it is precisely the one you go looking for
+    afterwards. Here it lands next to the reads, with the task id and the payload.
+
+    Costs no extra database work: record() buffers in memory and the existing
+    batch flush carries these rows along with the reads.
+
+    Deliberately does NOT touch the rate gate. Callers that pace themselves
+    (breezeway_sync) already do it around their own call; making this wrapper
+    gate too would double-charge the budget and change behaviour, and this is
+    meant to be observational only.
+    """
+    import requests
+    t0 = time.time()
+    path = url.split("breezeway.io", 1)[-1] if "breezeway.io" in url else url
+    # For a write the identity is the body, not the query string — "which task"
+    # comes from the path, "what did we try to set" only from the payload.
+    sent = dict(kwargs.get("params") or {})
+    body = kwargs.get("json")
+    if isinstance(body, dict):
+        sent.update(body)
+    elif body is not None:
+        sent["body"] = body
+    verb = (method or "").upper()
+    try:
+        r = requests.request(verb, url, **kwargs)
+        record(path, r.status_code, r.ok,
+               elapsed_ms=int((time.time() - t0) * 1000),
+               detail="" if r.ok else (r.text or "")[:200],
+               method=verb, params=sent)
+        return r
+    except Exception as e:
+        record(path, None, False, elapsed_ms=int((time.time() - t0) * 1000),
+               detail=f"{type(e).__name__}: {e}", method=verb, params=sent)
+        raise
+
+
+def bw_patch(url, **kwargs):
+    return bw_write("PATCH", url, **kwargs)
+
+
+def bw_post(url, **kwargs):
+    return bw_write("POST", url, **kwargs)
+
+
+def bw_delete(url, **kwargs):
+    return bw_write("DELETE", url, **kwargs)
 
 
 # ── Reading ───────────────────────────────────────────────────────
@@ -151,6 +257,10 @@ def _rows(show: str = "all", day: str = "", status: str = "", limit: int = 500) 
         where.append("ok = TRUE")
     elif show == "failed":
         where.append("ok = FALSE")
+    elif show == "writes":
+        # Rows predating the method column are all reads, hence NOT NULL rather
+        # than <> 'GET' alone — a NULL would otherwise be counted as a write.
+        where.append("method IS NOT NULL AND method <> 'GET'")
     day_sql, day_args = _day_clause(day)
     if day_sql:
         where.append(day_sql); args += day_args
@@ -168,9 +278,45 @@ def _rows(show: str = "all", day: str = "", status: str = "", limit: int = 500) 
     conn = get_db(); cur = get_cursor(conn)
     try:
         cur.execute(sql, tuple(args))
-        return [dict(r) for r in cur.fetchall()]
+        return _name_properties([dict(r) for r in cur.fetchall()])
     finally:
         cur.close(); conn.rollback(); conn.close()
+
+
+def _name_properties(rows: list) -> list:
+    """Fill r["ref_name"] with the house name for rows scoped to a property.
+
+    Done here, on the admin page, and not in record(): record() runs on the hot
+    path of every Breezeway call and is buffered precisely so it touches no I/O.
+    A cache miss here costs one admin page view; there it would cost a scan."""
+    try:
+        from routes.briefing import _get_live_property_cache, _get_live_ref_cache
+        names = _get_live_property_cache() or {}      # {property_id: house name}
+        # {property_id: reference_property_id} — inverted, because the task API
+        # logs the reference and the names are keyed by the Breezeway id.
+        by_ref = {str(v): k for k, v in (_get_live_ref_cache() or {}).items()}
+    except Exception:
+        return rows                       # names are a nicety; the id still shows
+
+    def _name(pid):
+        return names.get(pid) or names.get(int(pid) if str(pid).isdigit() else pid)
+
+    for r in rows:
+        ref = str(r.get("ref") or "")
+        label, _, ident = ref.partition(" ")
+        if not ident:
+            continue
+        if ref.startswith("property ref "):
+            ident = ref.split(" ", 2)[2]
+            pid = by_ref.get(ident)
+            nm = _name(pid) if pid is not None else None
+        elif label == "property":
+            nm = _name(ident)
+        else:
+            continue                      # a task id — no house name to give
+        if nm:
+            r["ref_name"] = nm
+    return rows
 
 
 def _day_clause(day: str) -> tuple:

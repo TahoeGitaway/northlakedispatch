@@ -26,7 +26,7 @@ from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required
 
 from routes.auth import admin_required
-from routes.bw_api_log import bw_get
+from routes.bw_api_log import bw_get, bw_patch
 
 group_assign_bp = Blueprint("group_assign", __name__)
 
@@ -665,7 +665,7 @@ def group_assign_apply():
         # silently dropped because Breezeway was momentarily busy.
         for attempt in range(3):
             try:
-                r = requests.patch(url, headers=headers,
+                r = bw_patch(url, headers=headers,
                                    json={"assignments": [assignee_id]}, timeout=20)
                 last = f"status={r.status_code}"
                 if r.status_code in (200, 201):
@@ -867,7 +867,7 @@ def group_assign_change_date():
         # dropped because Breezeway was momentarily busy.
         for attempt in range(3):
             try:
-                r = requests.patch(url, headers=headers,
+                r = bw_patch(url, headers=headers,
                                    json={"scheduled_date": new_date}, timeout=20)
                 last = f"status={r.status_code}"
                 if r.status_code in (200, 201):

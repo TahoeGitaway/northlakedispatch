@@ -595,10 +595,13 @@ async function loadDaySummary(ds, force = false) {
     renderGroup(depEl, data.departures || {});
     panel.classList.remove("hidden");
 
-    // Lazily flag arrivals whose LAST clean was owner-handled ("Owner Cleaned"),
-    // so she can schedule those Walk Thrus earlier. Runs after the panel renders
-    // (it fans out one Breezeway task call per arriving house) and never blocks it.
-    decorateOwnerCleaned(ds, force);
+    // Flag arrivals whose LAST clean was owner-handled ("Owner Cleaned"), so she can
+    // schedule those Walk Thrus earlier. The morning snapshot job stores these with
+    // the list, so the normal load just paints what came back — no second request,
+    // no Breezeway calls. Only a date the job hasn't covered (or an explicit Refresh)
+    // falls back to scanning live, which is the one-call-per-arriving-house fan-out.
+    if (data.owner_cleaned) applyOwnerCleaned(data.owner_cleaned, ds, "saved");
+    else                    decorateOwnerCleaned(ds, force);
   } catch (e) {
     loading.classList.add("hidden");
   }
@@ -614,23 +617,22 @@ function setOcStatus(state, text, title = "") {
   el.title = title || "";
 }
 
-/* Flag arrivals whose last clean was "Owner Cleaned". Best-effort DOM overlay —
-   a failure here never disturbs the arrivals list itself. */
-async function decorateOwnerCleaned(ds, force = false) {
+/* Paint owner-clean flags onto the arrivals list and set the header status.
+   Pure DOM work — the data is either the scan stored with the snapshot or a live
+   re-scan. Best-effort overlay: a failure here never disturbs the arrivals list. */
+function applyOwnerCleaned(data, ds, source = "live") {
   const arrEl = document.getElementById("daySummaryArrivals");
   if (!arrEl) return;
-  setOcStatus("checking", "checking cleans…", "Scanning each arriving house's last clean in Breezeway");
   try {
-    const url = `/briefing/owner-cleaned-check?date=${ds}` + (force ? "&refresh=1" : "");
-    const res = await fetch(url);
-    const data = await res.json();
-    // A later day-click may have superseded this fetch — bail if the day changed.
+    // A later day-click may have superseded this — bail if the day changed.
     if (currentSummaryDate !== ds) return;
     if (!data || !Array.isArray(data.flagged)) {
       setOcStatus("warn", "⚠ clean check unavailable",
                   (data && data.error) ? data.error : "The owner-clean scan did not return.");
       return;
     }
+    // Stored scans say when they ran, so a stale flag is visibly stale.
+    const when = (source === "saved" && data.cached_at) ? ` Checked ${data.cached_at}.` : "";
 
     const byPid  = new Set(data.flagged.map(f => String(f.property_id)).filter(Boolean));
     const byName = new Set(data.flagged.map(f => f.name).filter(Boolean));
@@ -660,7 +662,7 @@ async function decorateOwnerCleaned(ds, force = false) {
       else li.appendChild(badge);
     });
 
-    // Done — tell her the scan finished and what it found.
+    // Done — tell her what the scan found.
     const n      = data.flagged.length;
     const failed = data.failed_properties || 0;
     if (failed > 0) {
@@ -673,11 +675,26 @@ async function decorateOwnerCleaned(ds, force = false) {
                   + (f.retry ? ` — hit Refresh to retry.` : ` — Refresh won't help; this needs a fix in Breezeway or the app's configuration.`));
     } else if (n > 0) {
       setOcStatus("found", `🧹 ${n} owner-cleaned`,
-                  "These arrivals' last clean was owner-handled — schedule their Walk Thrus early.");
+                  "These arrivals' last clean was owner-handled — schedule their Walk Thrus early." + when);
     } else {
       setOcStatus("clear", "✓ no owner cleans",
-                  "No arriving house's last clean was owner-handled.");
+                  "No arriving house's last clean was owner-handled." + when);
     }
+  } catch (e) {
+    setOcStatus("warn", "⚠ clean check unavailable", "The owner-clean scan errored.");
+  }
+}
+
+/* Scan live for owner-handled last cleans — one Breezeway call per arriving house.
+   The fallback path only: a date the morning job hasn't stored yet, or a Refresh. */
+async function decorateOwnerCleaned(ds, force = false) {
+  if (!document.getElementById("daySummaryArrivals")) return;
+  setOcStatus("checking", "checking cleans…", "Scanning each arriving house's last clean in Breezeway");
+  try {
+    const url  = `/briefing/owner-cleaned-check?date=${ds}` + (force ? "&refresh=1" : "");
+    const res  = await fetch(url);
+    const data = await res.json();
+    applyOwnerCleaned(data, ds, data && data.source === "saved" ? "saved" : "live");
   } catch (e) {
     setOcStatus("warn", "⚠ clean check unavailable", "The owner-clean scan errored.");
   }
