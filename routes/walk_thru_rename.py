@@ -32,6 +32,11 @@ import time as _time
 from routes.bw_api_log import bw_get, bw_patch
 _scan_cache: dict = {}      # (start_iso, end_iso) -> (timestamp, result_dict)
 _SCAN_TTL = 90
+# How long the held partial stays retryable. Same idea as the import's
+# _BW_RETRY_WINDOW: the cache keeps the tasks that DID load plus the pids that
+# failed, so "load just the missing N" can ask about only those and merge the
+# answers in, instead of re-sweeping every property from scratch.
+_RETRY_WINDOW = 900
 
 WALK_THRU_PATTERNS = re.compile(
     r"\b(walk[\s\-]?thru|walk[\s\-]?through|lease[\s\-]?walk|move[\s\-]?in[\s\-]?inspection|"
@@ -118,8 +123,10 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
 
 def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
                           end: date) -> tuple:
-    """Sweep many properties. Returns (tasks, failed_count, failure_statuses).
+    """Sweep many properties. Returns (tasks, failed_pids, failure_statuses).
 
+    failed_pids is WHICH properties could not be read, not just how many — that is
+    what lets a retry ask about only those instead of re-sweeping everything.
     failure_statuses is the {"429": n, "timeout": n} tally static/bw-failure.js
     turns into a sentence, the same shape the map import already returns.
     """
@@ -129,23 +136,24 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
 
     all_tasks = []
     seen_ids: set = set()
-    failed = 0
+    failed_pids: list = []
     statuses: dict = {}
 
     with ThreadPoolExecutor(max_workers=16) as ex:
         futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
                    for pid in pids}
         for future in as_completed(futures):
+            pid = futures[future]
             try:
                 tasks, ok, status = future.result()
             except Exception:
                 # The helper catches its own errors, so this is a worker that died
-                # some other way. Count it rather than let it vanish.
-                failed += 1
+                # some other way. Record it rather than let it vanish.
+                failed_pids.append(pid)
                 statuses["timeout"] = statuses.get("timeout", 0) + 1
                 continue
             if not ok:
-                failed += 1
+                failed_pids.append(pid)
                 key = "timeout" if status is None else str(status)
                 statuses[key] = statuses.get(key, 0) + 1
                 continue
@@ -155,7 +163,7 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
                     if tid is not None:
                         seen_ids.add(tid)
                     all_tasks.append(t)
-    return all_tasks, failed, statuses
+    return all_tasks, failed_pids, statuses
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:
@@ -241,32 +249,62 @@ def walk_thru_scan():
     except ValueError:
         start, end = today, today + timedelta(days=7)
 
-    # Serve a fresh cached result instantly (also rescues a prior proxy timeout).
     ck     = (start.isoformat(), end.isoformat())
     force  = bool(body.get("force"))
+    # "Load just the missing N" — ask about ONLY the properties that failed last
+    # time and merge them into what already loaded. A plain rescan re-reads every
+    # property, which is the expensive thing the user is trying to avoid.
+    retry_failed = bool(body.get("retry_failed"))
     cached = _scan_cache.get(ck)
-    if cached and not force and _time.time() - cached[0] < _SCAN_TTL:
+
+    if cached and not force and not retry_failed and _time.time() - cached[0] < _SCAN_TTL:
         return jsonify(cached[1])
 
-    reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
+    held_tasks, retry_pids, reso_by_prop = [], None, None
+    if retry_failed and cached and _time.time() - cached[0] < _RETRY_WINDOW:
+        # cached = (ts, result, tasks, failed_pids, reso_by_prop, arrival_pids)
+        held_tasks  = list(cached[2])
+        retry_pids  = list(cached[3])
+        reso_by_prop = cached[4]
+        arrival_pids = cached[5]
+    if retry_failed and not retry_pids:
+        # Never let "just the missing ones" silently become a full re-sweep — that
+        # is the expensive call this exists to avoid. Say so instead.
+        return jsonify({"error": "The list of which properties failed has expired. "
+                                 "Scan again to do a full re-check."})
 
-    reso_by_prop: dict[str, list[date]] = {}
-    for r in reservations:
-        pid     = str(r.get("property_id") or r.get("home_id") or "")
-        checkin = r.get("checkin_date") or ""
-        if pid and checkin:
-            try:
-                d = date.fromisoformat(checkin[:10])
-                reso_by_prop.setdefault(pid, []).append(d)
-            except ValueError:
-                pass
-    for pid in reso_by_prop:
-        reso_by_prop[pid].sort()
+    if reso_by_prop is None:
+        reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
 
-    arrival_pids = list(reso_by_prop.keys())
-    tasks, failed_props, failure_statuses = (
-        _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids
-        else ([], 0, {}))
+        reso_by_prop = {}
+        for r in reservations:
+            pid     = str(r.get("property_id") or r.get("home_id") or "")
+            checkin = r.get("checkin_date") or ""
+            if pid and checkin:
+                try:
+                    d = date.fromisoformat(checkin[:10])
+                    reso_by_prop.setdefault(pid, []).append(d)
+                except ValueError:
+                    pass
+        for pid in reso_by_prop:
+            reso_by_prop[pid].sort()
+        arrival_pids = list(reso_by_prop.keys())
+
+    # A retry sweeps only the failed pids; a normal scan sweeps them all.
+    sweep_pids = retry_pids if retry_pids else arrival_pids
+    new_tasks, failed_pids, failure_statuses = (
+        _fetch_tasks_for_pids(token, sweep_pids, start, end) if sweep_pids
+        else ([], [], {}))
+
+    # Merge, de-duplicating by task id so a retry cannot double-add.
+    tasks, _seen = list(held_tasks), {t.get("id") for t in held_tasks if t.get("id") is not None}
+    for t in new_tasks:
+        tid = t.get("id")
+        if tid is None or tid not in _seen:
+            if tid is not None:
+                _seen.add(tid)
+            tasks.append(t)
+    failed_props = len(failed_pids)
 
     proposals = []
     for t in tasks:
@@ -312,9 +350,12 @@ def walk_thru_scan():
               "failed_properties":  failed_props,
               "failure_statuses":   failure_statuses,
               "scanned_properties": len(arrival_pids)}
-    # Cache before returning — even if the proxy already timed out, the backend
-    # finishes and a retry gets this instantly.
-    _scan_cache[ck] = (_time.time(), result)
+    # Hold the TASKS and the FAILED PIDS, not just the finished payload — that is
+    # what makes "load just the missing N" possible. Holding only the payload (as
+    # this used to) left nothing to merge into and nothing to narrow to, so the
+    # only option was re-reading every property.
+    _scan_cache[ck] = (_time.time(), result, tasks, failed_pids,
+                       reso_by_prop, arrival_pids)
     return jsonify(result)
 
 

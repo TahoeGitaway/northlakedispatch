@@ -122,7 +122,7 @@ function updateCount() {
   document.getElementById('applyBtn').disabled = checked === 0;
 }
 
-async function runScan() {
+async function runScan(retryFailed) {
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('tableWrap').classList.add('hidden');
   document.getElementById('emptyBox').classList.add('hidden');
@@ -137,7 +137,7 @@ async function runScan() {
     const resp  = await fetch('/admin/walk-thru-rename/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start, end }),
+      body: JSON.stringify({ start, end, retry_failed: !!retryFailed }),
     });
     const rawBody = await resp.text();
     document.getElementById('loading').classList.add('hidden');
@@ -177,10 +177,14 @@ async function runScan() {
       wb.innerHTML =
         `<div>${f.text} — Walk Thru tasks on those properties are missing from this list.</div>`
         + (f.retry
-             ? `<div style="margin-top:3px;">Scan again to retry them`
-               + (data.scanned_properties ? ` (${data.scanned_properties} checked in total)` : '')
-               + `.</div>`
-             : `<div style="margin-top:3px;">Scanning again won't help; this needs a fix in `
+             ? `<div style="margin-top:3px;">`
+               + `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;`
+               + `color:#b45309;background:none;border:none;padding:0;cursor:pointer;font:inherit;">`
+               + `👉 Load just the missing ${data.failed_properties}</button>`
+               + ` — asks about only those, and keeps what already loaded.`
+               + (data.scanned_properties ? ` (${data.scanned_properties} checked in total.)` : '')
+               + `</div>`
+             : `<div style="margin-top:3px;">Retrying won't help; this needs a fix in `
                + `Breezeway or the app's settings.</div>`);
       wb.classList.remove('hidden');
     }
