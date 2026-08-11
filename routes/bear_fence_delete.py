@@ -24,7 +24,9 @@ import time as _time
 import requests
 from datetime import date, timedelta
 
-from flask import Blueprint, render_template, request, jsonify
+from functools import wraps
+
+from flask import Blueprint, render_template, request, jsonify, abort
 from flask_login import login_required
 
 from routes.auth import admin_required
@@ -40,6 +42,30 @@ from routes.bear_fence import (
 )
 
 bear_fence_delete_bp = Blueprint("bear_fence_delete", __name__)
+
+# ── HIDDEN: this tool is unfinished and not being built out for now ──────────
+# Set to True to bring it back. Hiding the nav tabs alone wasn't enough: the URLs
+# are short and guessable (/admin/bear-fence-delete), and the delete endpoint
+# permanently removes Breezeway tasks with no undo — a tool nobody is maintaining
+# should not be one lucky URL away from running. The tabs are commented out in
+# templates/{walk_thru_rename,bear_fence,bear_fence_delete,projects_list}.html;
+# uncomment those AND flip this flag to restore it.
+BEAR_FENCE_DELETE_ENABLED = False
+
+
+def _enabled_only(fn):
+    """404 every endpoint in this module while the tool is hidden.
+
+    404 rather than 403: a 403 confirms the tool exists and is merely off, which
+    invites poking at it. As far as anything outside is concerned, these routes
+    simply aren't there.
+    """
+    @wraps(fn)
+    def _wrapped(*args, **kwargs):
+        if not BEAR_FENCE_DELETE_ENABLED:
+            abort(404)
+        return fn(*args, **kwargs)
+    return _wrapped
 
 # The candidate window around the chosen day. A "Disarm Bear Fence" task is an
 # arrival task, so its property has a reservation checking in on (or right
@@ -171,6 +197,7 @@ def _unassign_task(token: str, task_id, meta: dict = None) -> tuple[bool, str]:
 @bear_fence_delete_bp.route("/admin/bear-fence-delete")
 @login_required
 @admin_required
+@_enabled_only
 def bear_fence_delete_page():
     return render_template("bear_fence_delete.html")
 
@@ -178,6 +205,7 @@ def bear_fence_delete_page():
 @bear_fence_delete_bp.route("/admin/bear-fence-delete/scan", methods=["POST"])
 @login_required
 @admin_required
+@_enabled_only
 def bear_fence_delete_scan():
     token = _get_token()
     if not token:
@@ -248,6 +276,7 @@ def bear_fence_delete_scan():
 @bear_fence_delete_bp.route("/admin/bear-fence-delete/delete", methods=["POST"])
 @login_required
 @admin_required
+@_enabled_only
 def bear_fence_delete_apply():
     token = _get_token()
     if not token:
@@ -314,6 +343,7 @@ def bear_fence_delete_apply():
 @bear_fence_delete_bp.route("/admin/bear-fence-delete/unassign", methods=["POST"])
 @login_required
 @admin_required
+@_enabled_only
 def bear_fence_delete_unassign():
     """Softer alternative to delete: drop the selected Disarm Bear Fence tasks back
     to Unassigned, keeping them on the same day. Reversible; nothing is removed.

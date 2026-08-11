@@ -29,11 +29,13 @@
                 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors">
         🐻 Bear Fence Date Change
       </a>
+      {# HIDDEN — see routes/bear_fence_delete.py → BEAR_FENCE_DELETE_ENABLED.
       <a href="{{ url_for('bear_fence_delete.bear_fence_delete_page') }}"
          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-lime-200
                 bg-lime-50 text-lime-700 text-sm font-medium hover:bg-lime-100 transition-colors">
         🗑️ Delete Bear Fence
       </a>
+      #}
       <a href="{{ url_for('hot_tub.hot_tub_page') }}"
          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-green-200
                 bg-green-50 text-green-700 text-sm font-medium hover:bg-green-100 transition-colors">
