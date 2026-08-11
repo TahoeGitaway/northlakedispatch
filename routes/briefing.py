@@ -26,6 +26,23 @@ from routes.auth import admin_required
 from routes.bw_ratelimit import LOCAL_THROTTLE_STATUS as _LOCAL_THROTTLE
 from routes.bw_api_log import bw_get
 
+# How long to wait on a single Breezeway read before calling it a timeout.
+#
+# Raised 15 -> 20 s because timeouts dominate the failures on a full-day sweep
+# (one run: 206 timed out vs 33 actual 429s), which means Breezeway is answering
+# slowly rather than refusing — and a property that would have answered at 16 s
+# was being thrown away and then retried, costing three slow attempts to learn
+# nothing. Every user-facing "did not respond within N s" string derives from
+# this, so the number cannot drift out of sync with the behaviour.
+#
+# NOTE: the sweep's own wall-clock budget (dispatch.py _BW_IMPORT_BUDGET_S) is
+# unchanged at 45 s, and it is deliberately NOT raised to match — the request has
+# to come back before the hosting proxy gives up on it. A longer per-call timeout
+# therefore means slightly fewer properties get attempted inside that budget; the
+# trade is worth it only while timeouts outnumber refusals. Recheck in the API log
+# before raising it again.
+BW_READ_TIMEOUT_S = 20
+
 briefing_bp = Blueprint("briefing", __name__)
 
 _PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -185,7 +202,7 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
                 "https://api.breezeway.io/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={**params, "limit": limit, "page": page},
-                timeout=15,
+                timeout=BW_READ_TIMEOUT_S,
             )
             data = resp.json()
             page_results = (data.get("results", data.get("data", [])) or []) \
@@ -229,7 +246,7 @@ def _fetch_bw_reservations_checked(token: str, params: dict,
                     "https://api.breezeway.io/public/inventory/v1/reservation",
                     headers={"Authorization": f"JWT {token}"},
                     params={**params, "limit": limit, "page": page},
-                    timeout=15,
+                    timeout=BW_READ_TIMEOUT_S,
                 )
                 # A throttled or errored page is NOT an empty page. Without this,
                 # a 429 whose body happens to parse as JSON yields no "results",
@@ -261,6 +278,7 @@ def _fetch_bw_reservations_checked(token: str, params: dict,
             break
         page += 1
     return all_results, True
+
 
 
 def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
@@ -295,7 +313,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 f"https://api.breezeway.io{path}",
                 headers={"Authorization": f"JWT {token}"},
                 params={**params, "limit": limit, "page": page},
-                timeout=15,
+                timeout=BW_READ_TIMEOUT_S,
             )
             last_status = resp.status_code
             gate.on_response(last_status)
@@ -318,10 +336,11 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 break
             page += 1
     except requests.exceptions.Timeout:
-        bw_api_log.record(path, None, False, detail="timed out after 15 s",
+        bw_api_log.record(path, None, False, detail=f"timed out after {BW_READ_TIMEOUT_S} s",
                           elapsed_ms=int((time.time() - _t0) * 1000),
                           params={**params, "limit": limit, "page": page})
-        return [], "Request timed out — Breezeway API did not respond within 15 s", last_status
+        return [], ("Request timed out — Breezeway API did not respond within "
+                    f"{BW_READ_TIMEOUT_S} s"), last_status
     except Exception as ex:
         bw_api_log.record(path, None, False, detail=f"{type(ex).__name__}: {ex}",
                           elapsed_ms=int((time.time() - _t0) * 1000),
@@ -427,7 +446,7 @@ def _load_property_cache() -> str:
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
                 params={"limit": limit, "page": page, "status": "active"},
-                timeout=15,
+                timeout=BW_READ_TIMEOUT_S,
             )
             if not resp.ok:
                 _property_cache_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
@@ -1814,7 +1833,7 @@ def debug_properties():
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
                 params={"limit": 1, "page": 1},
-                timeout=15,
+                timeout=BW_READ_TIMEOUT_S,
             )
             data  = resp.json()
             items = data.get("results", data.get("data", data if isinstance(data, list) else []))
