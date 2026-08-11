@@ -60,12 +60,34 @@ def _build_proposed_title(title: str, arrival: date) -> str:
     return f"{title} for {arrival.month}/{arrival.day}"
 
 
-def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
+def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
+                              start: date, end: date) -> tuple:
+    """One property's tasks. Returns (tasks, ok, status).
+
+    ok=False means the lookup FAILED and the empty list must not be read as "this
+    property has no Walk Thru task". Previously every failure — a 429, a timeout,
+    a rejected token — was swallowed by `except Exception: pass` and returned as
+    [], identical to a property that genuinely had nothing. Under throttling this
+    tool therefore reported fewer tasks than exist and looked complete: a real
+    Walk Thru task went missing from a scan with nothing on screen to say a third
+    of the portfolio had never loaded.
+
+    `status` is the last failing HTTP status, or None for a timeout/transport
+    error, so the UI can name the cause.
+
+    The request count per property is UNCHANGED (at most one call per id key, no
+    retries). Breezeway is already refusing about a third of what this app sends;
+    adding retries here would multiply the load on the exact resource that is
+    scarce. Recovering a throttled property is the scan-again path's job.
+    """
     date_range = f"{start.isoformat()},{end.isoformat()}"
     id_pairs = []
     if ref_id:
         id_pairs.append(("reference_property_id", ref_id))
     id_pairs += [("property_id", pid), ("home_id", pid)]
+
+    saw_empty_200 = False
+    last_status = None
     for key, val in id_pairs:
         try:
             r = bw_get(
@@ -74,35 +96,66 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
                 params={"scheduled_date": date_range, key: val, "limit": 100},
                 timeout=15,
             )
+            last_status = r.status_code
             if r.status_code == 200:
                 body = r.json()
                 results = body.get("results", body.get("data", body if isinstance(body, list) else []))
                 if results:
-                    return results
+                    return results, True, 200
+                # A 200 with nothing may just mean we asked in the wrong id space
+                # (the task API takes the external reference, other calls take
+                # Breezeway's own), so keep trying the remaining keys — but
+                # remember that something did answer.
+                saw_empty_200 = True
         except Exception:
-            pass
-    return []
+            last_status = None          # timeout / transport, not an HTTP status
+
+    # Every id space answered and none had tasks: a real "nothing here".
+    if saw_empty_200:
+        return [], True, 200
+    return [], False, last_status
 
 
-def _fetch_tasks_for_pids(token: str, pids: list[str], start: date, end: date) -> list:
+def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
+                          end: date) -> tuple:
+    """Sweep many properties. Returns (tasks, failed_count, failure_statuses).
+
+    failure_statuses is the {"429": n, "timeout": n} tally static/bw-failure.js
+    turns into a sentence, the same shape the map import already returns.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from routes.briefing import _get_live_ref_cache
     ref_cache = _get_live_ref_cache()
 
     all_tasks = []
     seen_ids: set = set()
+    failed = 0
+    statuses: dict = {}
 
     with ThreadPoolExecutor(max_workers=16) as ex:
         futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
                    for pid in pids}
         for future in as_completed(futures):
-            for t in (future.result() or []):
+            try:
+                tasks, ok, status = future.result()
+            except Exception:
+                # The helper catches its own errors, so this is a worker that died
+                # some other way. Count it rather than let it vanish.
+                failed += 1
+                statuses["timeout"] = statuses.get("timeout", 0) + 1
+                continue
+            if not ok:
+                failed += 1
+                key = "timeout" if status is None else str(status)
+                statuses[key] = statuses.get(key, 0) + 1
+                continue
+            for t in tasks:
                 tid = t.get("id")
                 if tid is None or tid not in seen_ids:
                     if tid is not None:
                         seen_ids.add(tid)
                     all_tasks.append(t)
-    return all_tasks
+    return all_tasks, failed, statuses
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:
@@ -211,7 +264,9 @@ def walk_thru_scan():
         reso_by_prop[pid].sort()
 
     arrival_pids = list(reso_by_prop.keys())
-    tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
+    tasks, failed_props, failure_statuses = (
+        _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids
+        else ([], 0, {}))
 
     proposals = []
     for t in tasks:
@@ -250,7 +305,13 @@ def walk_thru_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    result = {"proposals": proposals}
+    # Report what could NOT be read alongside what could. Without these the page
+    # can only ever say "here are your proposals" — never "and 57 properties never
+    # loaded", which is how a real task went missing without a trace.
+    result = {"proposals": proposals,
+              "failed_properties":  failed_props,
+              "failure_statuses":   failure_statuses,
+              "scanned_properties": len(arrival_pids)}
     # Cache before returning — even if the proxy already timed out, the backend
     # finishes and a retry gets this instantly.
     _scan_cache[ck] = (_time.time(), result)
