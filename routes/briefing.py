@@ -28,12 +28,15 @@ from routes.bw_api_log import bw_get
 
 # How long to wait on a single Breezeway read before calling it a timeout.
 #
-# Raised 15 -> 20 s because timeouts dominate the failures on a full-day sweep
-# (one run: 206 timed out vs 33 actual 429s), which means Breezeway is answering
-# slowly rather than refusing — and a property that would have answered at 16 s
-# was being thrown away and then retried, costing three slow attempts to learn
-# nothing. Every user-facing "did not respond within N s" string derives from
-# this, so the number cannot drift out of sync with the behaviour.
+# Held at 15 s. It was briefly raised to 20 on the reasoning that timeouts
+# dominated a full-day sweep's failures — "206 timed out vs 33 refused". That
+# reading was wrong: the import filed every property it never got around to
+# asking (budget expired) under "timeout", so the 206 was overwhelmingly
+# not-reached, not slow. The API log's all-time totals settle it — 74 real
+# timeouts against 22,433 refusals. Raising this makes the real problem worse,
+# because a property retrying through 429s holds its worker slot longer and
+# fewer properties get attempted inside the sweep budget. Every user-facing
+# "did not respond within N s" string derives from this constant.
 #
 # NOTE: the sweep's own wall-clock budget (dispatch.py _BW_IMPORT_BUDGET_S) is
 # unchanged at 45 s, and it is deliberately NOT raised to match — the request has
@@ -41,7 +44,7 @@ from routes.bw_api_log import bw_get
 # therefore means slightly fewer properties get attempted inside that budget; the
 # trade is worth it only while timeouts outnumber refusals. Recheck in the API log
 # before raising it again.
-BW_READ_TIMEOUT_S = 20
+BW_READ_TIMEOUT_S = 15
 
 briefing_bp = Blueprint("briefing", __name__)
 
@@ -1966,3 +1969,112 @@ def reservation_chart():
         "lease": [counts[ds]["lease"] for ds in dates],
         "block": [counts[ds]["block"] for ds in dates],
     })
+
+
+# ── SHARED PER-PROPERTY TASK SWEEP ──────────────────────────────────────────
+# Lifted out of walk_thru_rename.py and bear_fence.py, which held byte-identical
+# copies of both functions below — and therefore identical copies of the same bug:
+# every failure was swallowed by `except Exception: pass` and returned as an empty
+# list, indistinguishable from "this property genuinely has no tasks". Under the
+# throttling this app routinely sees (one log window: 22,433 of 69,211 requests
+# refused), a scan quietly reported fewer tasks than exist and looked complete.
+# That is how a Walk Thru task on a real property failed to appear in the rename
+# tool with nothing on screen to say a third of the portfolio never loaded.
+#
+# The import path fixed this long ago (dispatch.py _robust_property_tasks: retry,
+# then report the real status so the UI can warn). These are the same fix for the
+# tools that were left behind. One copy, because two copies is what produced the
+# bug.
+
+def fetch_property_tasks_range(token: str, pid: str, ref_id: str,
+                               start: date, end: date) -> tuple:
+    """One property's tasks over a date range. Returns (tasks, ok, status).
+
+    ok=False means it genuinely could not be loaded and the caller must NOT treat
+    the empty list as "no tasks". `status` is the last failing HTTP status, or
+    None for a timeout, so callers can name the real cause.
+
+    Preserves the original id-fallback: Breezeway's task API takes the external
+    reference id, while other calls take Breezeway's own, and a 200 carrying no
+    results may just mean we asked in the wrong id space — so an empty 200 falls
+    through to the next key rather than being accepted as an answer.
+    """
+    import time as _t
+    date_range = f"{start.isoformat()},{end.isoformat()}"
+    id_pairs = ([("reference_property_id", ref_id)] if ref_id else []) \
+             + [("property_id", pid), ("home_id", pid)]
+
+    saw_empty_200 = False
+    last_status = None
+    for key, val in id_pairs:
+        for attempt in range(3):
+            try:
+                r = bw_get(
+                    "https://api.breezeway.io/public/inventory/v1/task/",
+                    headers={"Authorization": f"JWT {token}"},
+                    params={"scheduled_date": date_range, key: val, "limit": 100},
+                    timeout=BW_READ_TIMEOUT_S,
+                )
+                last_status = r.status_code
+                if r.status_code == 200:
+                    body = r.json()
+                    results = body.get("results",
+                                       body.get("data", body if isinstance(body, list) else []))
+                    if results:
+                        return results, True, 200
+                    saw_empty_200 = True
+                    break                       # this id space answered; try the next
+                if r.status_code == 429 or r.status_code >= 500:
+                    _t.sleep(0.3 * (attempt + 1))
+                    continue                    # transient — worth another go
+                break                           # 4xx that won't change; try the next id key
+            except Exception:
+                last_status = None              # timeout / transport — retryable
+                _t.sleep(0.3 * (attempt + 1))
+
+    # Every id space answered 200 with nothing: a real "no tasks here".
+    if saw_empty_200:
+        return [], True, 200
+    return [], False, last_status
+
+
+def fetch_tasks_for_pids(token: str, pids: list, start: date, end: date,
+                         max_workers: int = 16) -> tuple:
+    """Sweep many properties. Returns (tasks, failed_count, failure_statuses).
+
+    failure_statuses is the {"429": n, "timeout": n} tally the UI needs to say
+    WHY, via static/bw-failure.js — the same shape the import already returns.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from routes.bw_api_log import bw_worker_context
+
+    ref_cache = _get_live_ref_cache()
+    all_tasks, seen_ids = [], set()
+    failed, statuses = 0, {}
+    ctx = bw_worker_context()      # captured here; worker threads have no request
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {
+            ex.submit(ctx.run, fetch_property_tasks_range,
+                      token, pid, ref_cache.get(pid, ""), start, end): pid
+            for pid in pids
+        }
+        for future in as_completed(futures):
+            try:
+                tasks, ok, status = future.result()
+            except Exception:
+                failed += 1
+                statuses["timeout"] = statuses.get("timeout", 0) + 1
+                continue
+            if not ok:
+                failed += 1
+                k = "timeout" if status is None else str(status)
+                statuses[k] = statuses.get(k, 0) + 1
+                continue
+            for t in tasks:
+                tid = t.get("id")
+                if tid is None or tid not in seen_ids:
+                    if tid is not None:
+                        seen_ids.add(tid)
+                    all_tasks.append(t)
+    return all_tasks, failed, statuses

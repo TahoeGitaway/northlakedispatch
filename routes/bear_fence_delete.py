@@ -233,7 +233,8 @@ def bear_fence_delete_scan():
         if r.get("checkin_date")
     } - {""})
 
-    tasks = _fetch_tasks_for_pids(token, pids, day, day) if pids else []
+    tasks, _failed, _statuses = (
+        _fetch_tasks_for_pids(token, pids, day, day) if pids else ([], 0, {}))
 
     # Keep only tasks actually scheduled on the chosen day, grouped by property.
     day_iso = day.isoformat()
