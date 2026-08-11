@@ -892,10 +892,22 @@ const _BW_AUTO_BACKOFF_S  = [20, 45, 90, 120, 120];  // recovered nothing → st
 // Whole run finishes in ~1 min if every attempt makes progress, ~10.5 min in the
 // worst case where none of them do. Both are unattended, which is the point.
 const _BW_AUTO_MAX_TRIES  = 7;
+// A dropped connection is the most transient failure there is — a redeploy, a
+// flaky link, a request the proxy gave up on. Halting the whole schedule on the
+// first one put you straight back to clicking, which is what this replaced. So
+// tolerate a few, then stop.
+//
+// Its own ladder, because "we never reached the server" wants shorter waits than
+// "Breezeway refused us" — but NOT its own budget: every fire still increments
+// _bwAuto.attempt, so a flaky connection eats into the same _BW_AUTO_MAX_TRIES
+// cap. That's deliberate — the cap is a ceiling on total work, and a run that
+// spent 3 attempts failing to connect shouldn't then get 7 more at the throttle.
+const _BW_AUTO_NET_RETRY_S = [10, 25, 60];
 
 let _bwAuto = {
   attempt:  0,      // automatic retries fired for this import
   stalls:   0,      // consecutive retries that recovered nothing (indexes the backoff)
+  netFails: 0,      // consecutive transport failures (indexes _BW_AUTO_NET_RETRY_S)
   timerId:  null,
   tickId:   null,
   dueAt:    0,
@@ -914,7 +926,7 @@ function _bwAutoClearTimers() {
 // A brand-new import: forget that Stop was ever pressed and start counting over.
 function _bwAutoReset() {
   _bwAutoClearTimers();
-  _bwAuto.attempt = _bwAuto.stalls = 0;
+  _bwAuto.attempt = _bwAuto.stalls = _bwAuto.netFails = 0;
   _bwAuto.stopped = _bwAuto.inFlight = false;
   _bwAuto.note    = "";
 }
@@ -939,6 +951,7 @@ function _bwAutoTick() {
    the pacing is built on. Pass null for the first import (nothing to compare). */
 function _bwAutoAfterResult(stillFailed, retryable, recovered) {
   _bwAuto.inFlight = false;
+  _bwAuto.netFails = 0;      // we reached the server — transport budget resets
   _bwAutoClearTimers();
 
   if (!stillFailed) {                 // everything loaded — nothing left to chase
@@ -1085,7 +1098,10 @@ async function bwRetryMissingImport(btn) {
     const res  = await fetch("/api/bw-import", {
       method:  "POST",
       headers: {"Content-Type": "application/json"},
-      body:    JSON.stringify({date, assignee, retry_failed: true}),
+      // auto tells the server this came from the schedule, not a click — it only
+      // feeds the API log's "triggered by", so a 429 storm can be pinned on the
+      // right caller instead of guessed at.
+      body:    JSON.stringify({date, assignee, retry_failed: true, auto: !btn}),
     });
     const text = await res.text();
     let data;
@@ -1168,10 +1184,27 @@ async function bwRetryMissingImport(btn) {
       btn.disabled = false;
       btn.textContent = original;
     }
-    // Don't count down to another attempt after a transport failure — say it
-    // stopped and leave the manual button as the way back in.
-    _bwAutoHalt(`couldn't reach the server (${e.message})`);
-    _bwImportMsg(`Retry failed: ${e.message}`, "red");
+    _bwAuto.inFlight = false;
+    _bwAuto.netFails++;
+    const left = (_bwLastImport && _bwLastImport.failed) || 0;
+    // ONE message, not two. This used to print "Retry failed: Failed to fetch"
+    // AND a status line saying "couldn't reach the server (Failed to fetch)" —
+    // the same sentence twice, in two colours. The message states the problem;
+    // the status line below it carries the countdown and the Stop button.
+    if (!_bwAuto.stopped && _bwAuto.netFails <= _BW_AUTO_NET_RETRY_S.length) {
+      const wait = _BW_AUTO_NET_RETRY_S[_bwAuto.netFails - 1];
+      _bwAuto.dueAt   = Date.now() + wait * 1000;
+      _bwAuto.timerId = setTimeout(_bwAutoFire, wait * 1000);
+      _bwAuto.tickId  = setInterval(_bwAutoTick, 1000);
+      _bwImportMsg(`Couldn't reach the server (${e.message}) — ${left} still to load.`, "amber");
+    } else {
+      // Note left empty on purpose: the red message above already says what
+      // happened, so the status line only needs to offer the way back in.
+      _bwAutoHalt("");
+      _bwImportMsg(
+        `Couldn't reach the server after ${_bwAuto.netFails} tries (${e.message}) — `
+        + `${left} still to load.`, "red");
+    }
     _bwAutoRepaintStatus();
   }
 }

@@ -16,7 +16,7 @@ from flask_login import login_required, current_user
 from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-from routes.bw_api_log import bw_get, bw_patch, bw_post
+from routes.bw_api_log import bw_get, bw_patch, bw_post, bw_worker_context
 from db import (get_db, get_cursor, DEFAULT_START,
                 CHECKIN_DEADLINE_HHMM, PRIORITY_CHECKIN_DEADLINE_HHMM,
                 hhmm_to_minutes, minutes_to_hhmm)
@@ -1346,6 +1346,10 @@ def bw_import():
     assignees = [a.strip() for a in raw if a.strip()]
     # "Try the missing N again" — refetch only the properties that failed last time.
     retry_failed = bool(body.get("retry_failed"))
+    # Only for the API log's "triggered by" column: an import and its retries all
+    # POST the same endpoint, so without this a 429 storm can't be pinned on the
+    # automatic schedule rather than a person clicking.
+    auto_retry   = bool(body.get("auto"))
 
     if not date_str:
         return jsonify({"error": "date is required"}), 400
@@ -1435,8 +1439,12 @@ def bw_import():
         and "try the missing N again" fills the rest a few calls at a time."""
         from concurrent.futures import as_completed
         out, nfail, tally, refs = list(seed_results), 0, {}, []
+        # Captured on the REQUEST thread — worker threads have no Flask request
+        # context, so without this every call below logs a blank trigger.
+        _ctx = bw_worker_context(
+            ("retry-auto" if auto_retry else "retry") if retry_failed else "")
         with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = {executor.submit(_robust_property_tasks, token, ref, date_str): ref
+            futures = {executor.submit(_ctx.run, _robust_property_tasks, token, ref, date_str): ref
                        for ref in keys}
             # Take results AS THEY LAND, up to the budget. (Polling each future with
             # a tiny timeout instead would mark every still-running property as
@@ -1832,10 +1840,12 @@ def route_discrepancies():
     # the list, and the UI would offer to delete a stop that is still assigned.
     unverified_pids: set = set()
     failed_refs: list = []
+    _ctx = bw_worker_context("retry" if retry_failed else "")
     with ThreadPoolExecutor(max_workers=16) as ex:
         for ref_id, (tasks, ok, status) in zip(
                 _sweep_keys,
-                ex.map(lambda ref: _robust_property_tasks(token, ref, date_str), _sweep_keys)):
+                ex.map(lambda ref: _ctx.run(_robust_property_tasks, token, ref, date_str),
+                       _sweep_keys)):
             all_tasks.extend(tasks)
             if not ok:
                 failed_props += 1
@@ -2448,9 +2458,11 @@ def clear_task_times():
     # Per-property fetch with retry/backoff (shared helper) so a throttled house
     # isn't silently dropped — same fix as the import.
     all_tasks = []
+    _ctx = bw_worker_context()
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, _ok, _status in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
-                                 list(pid_candidates.keys())):
+        for tasks, _ok, _status in ex.map(
+                lambda ref: _ctx.run(_robust_property_tasks, token, ref, date_str),
+                list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 
     seen, mine = set(), []
