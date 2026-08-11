@@ -69,22 +69,20 @@ def _now_iso() -> str:
 # the request thread, which made the log useless for the one question it exists
 # to answer: which feature is burning the rate limit.
 #
-# A ContextVar carries the label instead. ThreadPoolExecutor does NOT propagate
-# context automatically, so callers snapshot it with bw_worker_context() below
-# and run the worker inside that copy.
+# A ContextVar carries the label instead: bw_worker_label() reads it on the request
+# thread, bw_run_labeled() applies it inside each worker. Do NOT go back to sharing
+# one contextvars.Context across the pool — see bw_run_labeled for why that broke.
 _feature_cv: contextvars.ContextVar = contextvars.ContextVar("bw_feature", default="")
 
 
 def _feature() -> str:
     """Which page/endpoint triggered the call.
 
-    The ContextVar is checked FIRST, and that order is load-bearing. copy_context()
-    also copies Flask's request context (Flask implements it with ContextVars), so
-    inside a worker's ctx.run() `request` still resolves — checking it first meant
-    the endpoint name won and the ":retry" / ":retry-auto" suffix was silently
-    dropped, which is the entire reason for capturing a label. The ContextVar is
-    only ever set by bw_worker_context(), so on a normal request thread it is empty
-    and this falls through to Flask exactly as before.
+    The ContextVar is checked FIRST so an explicitly captured label always beats
+    the ambient endpoint name — otherwise the ":retry" / ":retry-auto" suffix is
+    silently dropped, which is the entire reason for capturing one. It is only ever
+    set by bw_run_labeled(), so on a request thread it is empty and this falls
+    through to Flask exactly as before.
     """
     explicit = _feature_cv.get()
     if explicit:
@@ -95,17 +93,12 @@ def _feature() -> str:
         return ""            # scheduled job — no request context, nothing captured
 
 
-def bw_worker_context(suffix: str = ""):
-    """Snapshot the current trigger label into a context worker threads can run under.
-
-    Call on the REQUEST thread, then submit work as `ctx.run(fn, ...)`:
-
-        ctx = bw_worker_context()
-        futures = {executor.submit(ctx.run, fn, a, b): a for a in items}
+def bw_worker_label(suffix: str = "") -> str:
+    """Capture the trigger label on the REQUEST thread, as a plain string.
 
     `suffix` distinguishes callers that share one Flask endpoint — an import and
     its retry both POST /api/bw-import, and telling them apart is the whole point
-    of looking at this log after a 429 storm.
+    of reading this log after a 429 storm.
     """
     try:
         label = (request.endpoint or request.path or "")[:80]
@@ -113,9 +106,29 @@ def bw_worker_context(suffix: str = ""):
         label = _feature_cv.get() or ""
     if suffix:
         label = f"{label}:{suffix}"[:80]
-    ctx = contextvars.copy_context()
-    ctx.run(_feature_cv.set, label)
-    return ctx
+    return label
+
+
+def bw_run_labeled(label: str, fn, *args, **kwargs):
+    """Run `fn` in a worker thread with its Breezeway calls tagged `label`.
+
+    Sets the ContextVar inside the worker rather than sharing one
+    contextvars.Context across threads. That distinction is not stylistic: a
+    single Context CANNOT be entered by two threads at once — Context.run()
+    raises RuntimeError("cannot enter context: ... is already entered").
+    Handing one ctx.run to 16 executor workers therefore meant the first
+    property won the race and EVERY other one raised before its request was
+    ever made, which surfaced as "441 properties couldn't be loaded" beside a
+    single row in this log. The failures were ours, and they happened before
+    any HTTP call — which is also why they never appeared here.
+
+    Each thread gets its own empty context, so a plain set() is thread-safe and
+    cheap. Executor threads are reused, but every task sets the label before
+    doing anything else, so a stale value cannot leak between sweeps.
+    """
+    if label:
+        _feature_cv.set(label)
+    return fn(*args, **kwargs)
 
 
 # Every write puts the thing it is changing in the path, not the query:

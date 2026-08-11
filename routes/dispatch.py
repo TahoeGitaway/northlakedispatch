@@ -16,7 +16,8 @@ from flask_login import login_required, current_user
 from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-from routes.bw_api_log import bw_get, bw_patch, bw_post, bw_worker_context
+from routes.bw_api_log import (bw_get, bw_patch, bw_post,
+                               bw_worker_label, bw_run_labeled)
 from db import (get_db, get_cursor, DEFAULT_START,
                 CHECKIN_DEADLINE_HHMM, PRIORITY_CHECKIN_DEADLINE_HHMM,
                 hhmm_to_minutes, minutes_to_hhmm)
@@ -1454,10 +1455,11 @@ def bw_import():
         out, nfail, tally, refs = list(seed_results), 0, {}, []
         # Captured on the REQUEST thread — worker threads have no Flask request
         # context, so without this every call below logs a blank trigger.
-        _ctx = bw_worker_context(
+        _label = bw_worker_label(
             ("retry-auto" if auto_retry else "retry") if retry_failed else "")
         with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = {executor.submit(_ctx.run, _robust_property_tasks, token, ref, date_str): ref
+            futures = {executor.submit(bw_run_labeled, _label,
+                                       _robust_property_tasks, token, ref, date_str): ref
                        for ref in keys}
             # Take results AS THEY LAND, up to the budget. (Polling each future with
             # a tiny timeout instead would mark every still-running property as
@@ -1871,7 +1873,7 @@ def route_discrepancies():
         failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
     _deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
-    _ctx = bw_worker_context("retry" if retry_failed else "")
+    _label = bw_worker_label("retry" if retry_failed else "")
     # NOT a `with` block, on purpose. Exiting one calls shutdown(wait=True), which
     # blocks until every already-running request finishes — up to 3 attempts x the
     # read timeout each. That is how a bounded sweep still produced a two-minute
@@ -1880,7 +1882,8 @@ def route_discrepancies():
     # is safe; they are GETs whose results we have already given up on.
     ex = ThreadPoolExecutor(max_workers=16)
     try:
-        futures = {ex.submit(_ctx.run, _robust_property_tasks, token, ref, date_str): ref
+        futures = {ex.submit(bw_run_labeled, _label,
+                             _robust_property_tasks, token, ref, date_str): ref
                    for ref in _sweep_keys}
         # Take results AS THEY LAND, up to the budget — same shape as the import.
         try:
@@ -2510,10 +2513,11 @@ def clear_task_times():
     # Per-property fetch with retry/backoff (shared helper) so a throttled house
     # isn't silently dropped — same fix as the import.
     all_tasks = []
-    _ctx = bw_worker_context()
+    _label = bw_worker_label()
     with ThreadPoolExecutor(max_workers=16) as ex:
         for tasks, _ok, _status in ex.map(
-                lambda ref: _ctx.run(_robust_property_tasks, token, ref, date_str),
+                lambda ref: bw_run_labeled(_label, _robust_property_tasks,
+                                           token, ref, date_str),
                 list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 

@@ -2056,16 +2056,16 @@ def fetch_tasks_for_pids(token: str, pids: list, start: date, end: date,
     WHY, via static/bw-failure.js — the same shape the import already returns.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from routes.bw_api_log import bw_worker_context
+    from routes.bw_api_log import bw_worker_label, bw_run_labeled
 
     ref_cache = _get_live_ref_cache()
     all_tasks, seen_ids = [], set()
     failed, statuses = 0, {}
-    ctx = bw_worker_context()      # captured here; worker threads have no request
+    label = bw_worker_label()      # captured here; worker threads have no request
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {
-            ex.submit(ctx.run, fetch_property_tasks_range,
+            ex.submit(bw_run_labeled, label, fetch_property_tasks_range,
                       token, pid, ref_cache.get(pid, ""), start, end): pid
             for pid in pids
         }
