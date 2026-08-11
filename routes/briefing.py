@@ -308,6 +308,16 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
             # long requests to a gateway timeout, and callers now surface a
             # throttled property honestly instead of silently showing no tasks.
             if not gate.acquire():
+                # LOG IT. This used to return before reaching bw_api_log, so a
+                # request this app declined to send left no trace anywhere — and
+                # when the gate sheds almost everything, the log showed a single
+                # row while the UI reported 441 failures. Debugging that meant
+                # guessing. A shed request is still a request we decided not to
+                # make, and the log exists to say exactly that.
+                bw_api_log.record(path, LOCAL_THROTTLE_STATUS, False,
+                                  detail="held back by this app's rate limiter — not sent",
+                                  elapsed_ms=0,
+                                  params={**params, "limit": limit, "page": page})
                 return [], ("Held back by this app's rate limiter — not sent to "
                             "Breezeway"), LOCAL_THROTTLE_STATUS
 

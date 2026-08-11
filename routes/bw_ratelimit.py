@@ -61,7 +61,15 @@ _COOL_BASE     = 0.4    # first pause after a 429
 _COOL_MAX      = 2.0    # cap — a 20s global pause cannot fit inside one scan
 _QUIET_DECAY_S = 3.0    # no 429 for this long → step the interval back down
 _RELAX_AFTER   = 10     # consecutive successes also step it down
-_MAX_GATE_WAIT = 10.0   # never block a request longer than this
+# Must exceed the time a FULL sweep needs to drain through the gate, or the gate
+# itself fails the tail of every sweep regardless of what Breezeway does. The gate
+# serialises globally at _MAX_INTERVAL, so ~442 properties need 442 x 0.04 ~= 18 s
+# just to get slots. At the old 10 s, every request queued past the halfway point
+# was shed by us — and because a shed request was never logged, that looked like
+# Breezeway refusing 441 properties. 28 s covers a full drain with headroom while
+# staying under the sweeps' own wall-clock budgets (30 s route check / 45 s import),
+# so a thread waiting here is still cancelled by the budget rather than hanging.
+_MAX_GATE_WAIT = 28.0
 
 # Status used when THIS APP declines to send, rather than Breezeway refusing.
 # Reporting both as 429 makes the UI blame Breezeway for our own shedding, which
