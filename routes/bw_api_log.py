@@ -31,7 +31,6 @@ Nothing here may raise. A logging failure must never surface in a feature that
 was merely making an API call.
 """
 
-import contextvars
 import re
 import threading
 import time
@@ -60,62 +59,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-# Fallback trigger label for calls made OFF the request thread.
-#
-# The per-property sweeps run inside ThreadPoolExecutor workers, and a worker
-# thread has no Flask request context — so `request.endpoint` raised and every
-# one of the ~442 task calls in every sweep logged a blank "triggered by". The
-# column was only ever populated for the handful of calls that happen to run on
-# the request thread, which made the log useless for the one question it exists
-# to answer: which feature is burning the rate limit.
-#
-# A ContextVar carries the label instead. ThreadPoolExecutor does NOT propagate
-# context automatically, so callers snapshot it with bw_worker_context() below
-# and run the worker inside that copy.
-_feature_cv: contextvars.ContextVar = contextvars.ContextVar("bw_feature", default="")
-
-
 def _feature() -> str:
-    """Which page/endpoint triggered the call.
-
-    The ContextVar is checked FIRST, and that order is load-bearing. copy_context()
-    also copies Flask's request context (Flask implements it with ContextVars), so
-    inside a worker's ctx.run() `request` still resolves — checking it first meant
-    the endpoint name won and the ":retry" / ":retry-auto" suffix was silently
-    dropped, which is the entire reason for capturing a label. The ContextVar is
-    only ever set by bw_worker_context(), so on a normal request thread it is empty
-    and this falls through to Flask exactly as before.
-    """
-    explicit = _feature_cv.get()
-    if explicit:
-        return explicit
+    """Which page/endpoint triggered the call. Flask already knows; no feature
+    needs to pass it in, which keeps the call site to one line."""
     try:
         return (request.endpoint or request.path or "")[:80]
     except Exception:
-        return ""            # scheduled job — no request context, nothing captured
-
-
-def bw_worker_context(suffix: str = ""):
-    """Snapshot the current trigger label into a context worker threads can run under.
-
-    Call on the REQUEST thread, then submit work as `ctx.run(fn, ...)`:
-
-        ctx = bw_worker_context()
-        futures = {executor.submit(ctx.run, fn, a, b): a for a in items}
-
-    `suffix` distinguishes callers that share one Flask endpoint — an import and
-    its retry both POST /api/bw-import, and telling them apart is the whole point
-    of looking at this log after a 429 storm.
-    """
-    try:
-        label = (request.endpoint or request.path or "")[:80]
-    except Exception:
-        label = _feature_cv.get() or ""
-    if suffix:
-        label = f"{label}:{suffix}"[:80]
-    ctx = contextvars.copy_context()
-    ctx.run(_feature_cv.set, label)
-    return ctx
+        return ""            # scheduled job — no request context
 
 
 # Every write puts the thing it is changing in the path, not the query:
