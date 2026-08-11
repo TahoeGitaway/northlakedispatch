@@ -820,6 +820,7 @@ async function runBwImport() {
       // defaulted it to TODAY, and a route planned for another day got saved and
       // synced to the wrong date. Failures change the message, nothing else.
       let retryCount = 0;
+      _bwAutoReset();   // a fresh import gets a fresh retry budget, and Stop is forgotten
       if (data.failed_properties) {
         const f = bwFailureCause(data);
         // Offer to retry just the ones that failed. A full re-import spends ~442
@@ -829,6 +830,9 @@ async function runBwImport() {
         msg  += ` ${f.text}.`;
         color = "amber";
         if (f.retry) retryCount = data.failed_properties;
+        // Queue the first automatic retry. recovered=null means "first pass" —
+        // nothing to compare against yet, so it starts at the prompt cadence.
+        _bwAutoAfterResult(data.failed_properties, f.retry, null);
       }
       _bwImportMsg(msg, color);
       if (retryCount) _bwAddRetryMissingBtn(retryCount);   // must follow _bwImportMsg — it appends
@@ -861,23 +865,222 @@ async function runBwImport() {
    that a retry falls back to a full import. */
 let _bwLastImport = null;
 
+/* ── AUTOMATIC RETRY FOR THE IMPORT ─────────────────────────────────────────
+   The import used to leave you watching the panel and clicking "try the missing
+   N again" until the count reached zero. Nothing about that needed a human: the
+   click always did the same thing, and the only judgement involved was how long
+   to wait first.
+
+   So it retries itself. The server re-stamps the held failed-refs list on every
+   retry (dispatch.py → _bw_day_cache), so each attempt rolls the 15-minute
+   window forward and it never expires underneath us — every gap below is far
+   short of that.
+
+   Pacing is PROGRESS-AWARE rather than a fixed ladder, because the two failure
+   situations want opposite things. A retry that recovered houses means Breezeway
+   is answering again — go again promptly while that holds. A retry that recovered
+   nothing means the window is still shut, and hammering it is what caused the
+   throttling in the first place — so back off hard. A fixed escalating ladder
+   gets this wrong in both directions: too slow when it's working, too fast when
+   it isn't. */
+// Measured, not guessed: a retry only refetches the handful that failed, and the
+// app's own rate gate relaxes after ~3s of quiet (bw_ratelimit.py → _QUIET_DECAY_S),
+// so 8s is ample when Breezeway is answering. The backoff tail is capped at 120s
+// because the held failed-refs list only survives 15 min between attempts.
+const _BW_AUTO_PROGRESS_S = 8;                       // recovered something → go again soon
+const _BW_AUTO_BACKOFF_S  = [20, 45, 90, 120, 120];  // recovered nothing → step back
+// Whole run finishes in ~1 min if every attempt makes progress, ~10.5 min in the
+// worst case where none of them do. Both are unattended, which is the point.
+const _BW_AUTO_MAX_TRIES  = 7;
+
+let _bwAuto = {
+  attempt:  0,      // automatic retries fired for this import
+  stalls:   0,      // consecutive retries that recovered nothing (indexes the backoff)
+  timerId:  null,
+  tickId:   null,
+  dueAt:    0,
+  stopped:  false,  // user pressed Stop, or we gave up
+  inFlight: false,
+  note:     "",
+};
+
+function _bwAutoClearTimers() {
+  if (_bwAuto.timerId) clearTimeout(_bwAuto.timerId);
+  if (_bwAuto.tickId)  clearInterval(_bwAuto.tickId);
+  _bwAuto.timerId = _bwAuto.tickId = null;
+  _bwAuto.dueAt   = 0;
+}
+
+// A brand-new import: forget that Stop was ever pressed and start counting over.
+function _bwAutoReset() {
+  _bwAutoClearTimers();
+  _bwAuto.attempt = _bwAuto.stalls = 0;
+  _bwAuto.stopped = _bwAuto.inFlight = false;
+  _bwAuto.note    = "";
+}
+
+// Stop retrying and say why, without touching an in-flight request.
+function _bwAutoHalt(note) {
+  _bwAutoClearTimers();
+  _bwAuto.stopped  = true;
+  _bwAuto.inFlight = false;
+  _bwAuto.note     = note || "";
+}
+
+function _bwAutoTick() {
+  const el = document.querySelector("[data-bw-countdown]");
+  if (!el) return;
+  const s = Math.max(0, Math.round((_bwAuto.dueAt - Date.now()) / 1000));
+  el.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+
+/* Decide what happens after an import or retry result lands.
+   `recovered` is how many properties that attempt actually pulled in — the signal
+   the pacing is built on. Pass null for the first import (nothing to compare). */
+function _bwAutoAfterResult(stillFailed, retryable, recovered) {
+  _bwAuto.inFlight = false;
+  _bwAutoClearTimers();
+
+  if (!stillFailed) {                 // everything loaded — nothing left to chase
+    _bwAutoReset();
+    return;
+  }
+  if (!retryable) {                   // 401/403/404 — retrying cannot fix it
+    _bwAuto.note = "";
+    return;
+  }
+  if (_bwAuto.stopped) return;
+  if (_bwAuto.attempt >= _BW_AUTO_MAX_TRIES) {
+    _bwAuto.note = `Stopped after ${_BW_AUTO_MAX_TRIES} automatic tries — `
+                 + `Breezeway is still refusing these ${stillFailed}.`;
+    return;
+  }
+
+  // recovered === null is the first import: treat it as progress so the first
+  // retry goes out promptly rather than starting part-way up the backoff.
+  if (recovered === null || recovered > 0) _bwAuto.stalls = 0;
+  else                                     _bwAuto.stalls++;
+
+  const wait = _bwAuto.stalls === 0
+    ? _BW_AUTO_PROGRESS_S
+    : _BW_AUTO_BACKOFF_S[Math.min(_bwAuto.stalls - 1, _BW_AUTO_BACKOFF_S.length - 1)];
+
+  _bwAuto.dueAt   = Date.now() + wait * 1000;
+  _bwAuto.timerId = setTimeout(_bwAutoFire, wait * 1000);
+  _bwAuto.tickId  = setInterval(_bwAutoTick, 1000);
+}
+
+function _bwAutoFire() {
+  _bwAutoClearTimers();
+  const el = document.getElementById("bwImportResult");
+  // Panel gone, or the import context was replaced — stop rather than keep
+  // spending Breezeway calls on a result nobody can see.
+  if (_bwAuto.stopped || !el || el.classList.contains("hidden") || !_bwLastImport) {
+    if (!_bwAuto.stopped) _bwAutoHalt("the import panel closed");
+    return;
+  }
+  _bwAuto.attempt++;
+  _bwAuto.inFlight = true;
+  bwRetryMissingImport(null);          // null = automatic, no button to disable
+}
+
+function _bwAutoStop() {
+  _bwAutoHalt("");
+  _bwAutoRepaintStatus();
+}
+
+function _bwAutoResume() {
+  _bwAuto.stopped = false;
+  _bwAuto.stalls  = _bwAuto.attempt = 0;
+  _bwAuto.note    = "";
+  _bwAutoAfterResult((_bwLastImport && _bwLastImport.failed) || 0, true, null);
+  _bwAutoRepaintStatus();
+}
+
+/* The status line under the import message, plus the button to stop it. Appended
+   to #bwImportResult — _bwImportMsg sets textContent and so wipes children, which
+   is why this always runs AFTER the message, never before. */
+function _bwAutoStatusHtml(n) {
+  const btn = (attr, label) =>
+    `<button ${attr} style="text-decoration:underline;font-weight:700;color:#b45309;`
+    + `background:none;border:none;padding:0;cursor:pointer;font-size:12px;">${label}</button>`;
+
+  if (_bwAuto.inFlight) {
+    return `<div style="margin-top:5px;font-size:12px;">↻ Loading the missing ${n} now… `
+         + `${btn("data-bw-stop", "Stop")}</div>`;
+  }
+  if (_bwAuto.stopped) {
+    return `<div style="margin-top:5px;font-size:12px;color:#4b5563;">Automatic retries stopped`
+         + (_bwAuto.note ? ` — ${_escHtml(_bwAuto.note)}` : "")
+         + `. ${btn("data-bw-resume", "Resume")}</div>`;
+  }
+  if (_bwAuto.timerId) {
+    return `<div style="margin-top:5px;font-size:12px;">Loading the missing ${n} automatically in `
+         + `<span data-bw-countdown>…</span> `
+         + `<span style="color:#6b7280;">(try ${_bwAuto.attempt + 1} of ${_BW_AUTO_MAX_TRIES})</span> `
+         + `${btn("data-bw-stop", "Stop")}</div>`;
+  }
+  if (_bwAuto.note) {
+    return `<div style="margin-top:5px;font-size:12px;color:#4b5563;">${_escHtml(_bwAuto.note)}</div>`;
+  }
+  return "";
+}
+
+// Repaint just the status line from state, leaving the message above it alone.
+function _bwAutoRepaintStatus() {
+  const el = document.getElementById("bwImportResult");
+  if (!el) return;
+  const old = el.querySelector("[data-bw-status]");
+  if (old) old.remove();
+  const n    = (_bwLastImport && _bwLastImport.failed) || 0;
+  const html = n ? _bwAutoStatusHtml(n) : "";
+  if (!html) return;
+  const wrap = document.createElement("div");
+  wrap.setAttribute("data-bw-status", "");
+  wrap.innerHTML = html;
+  el.appendChild(wrap);
+  _bwAutoTick();
+}
+
+document.addEventListener("click", function (ev) {
+  const t = ev.target;
+  if (!t || !t.closest) return;
+  if (t.closest("[data-bw-stop]"))   { ev.preventDefault(); _bwAutoStop();   return; }
+  if (t.closest("[data-bw-resume]")) { ev.preventDefault(); _bwAutoResume(); return; }
+});
+
+/* The manual button stays. Auto-retry handles the normal case, but the button is
+   what you reach for after pressing Stop, or when you don't want to wait out the
+   countdown — and it's the fallback if the schedule ever gives up. */
 function _bwAddRetryMissingBtn(n) {
   const el = document.getElementById("bwImportResult");
   if (!el || !_bwLastImport) return;
   const btn = document.createElement("button");
-  btn.textContent = `👉 Try the missing ${n} again`;
+  btn.textContent = `👉 Try the missing ${n} now`;
   btn.style.cssText = "display:block;margin-top:5px;text-decoration:underline;font-weight:700;"
                     + "background:none;border:none;padding:0;cursor:pointer;color:#b45309;font-size:12px;";
-  btn.onclick = () => bwRetryMissingImport(btn);
+  btn.onclick = () => {
+    _bwAutoClearTimers();          // hand the pending automatic attempt to this one
+    _bwAuto.inFlight = true;
+    bwRetryMissingImport(btn);
+  };
   el.appendChild(btn);
+  _bwAutoRepaintStatus();
 }
 
+/* btn is null when the retry was fired by the automatic schedule rather than a
+   click — there is no button to disable, and the status line reports progress
+   instead. */
 async function bwRetryMissingImport(btn) {
   if (!_bwLastImport) return;
   const { date, assignee } = _bwLastImport;
-  const original = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Retrying…";
+  const original = btn ? btn.textContent : null;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Retrying…";
+  }
+  _bwAuto.inFlight = true;
+  _bwAutoRepaintStatus();
   try {
     const res  = await fetch("/api/bw-import", {
       method:  "POST",
@@ -895,7 +1098,13 @@ async function bwRetryMissingImport(btn) {
                     "The retry didn't come back as data.");
       return;
     }
-    if (data.error) { _bwImportMsg(data.error, "red"); return; }
+    if (data.error) {
+      // A retry that comes back unusable stops the schedule and says why, rather
+      // than counting down to another attempt that will fail the same way.
+      _bwAutoHalt(data.error);
+      _bwImportMsg(data.error, "red");
+      return;
+    }
 
     // Add ONLY the stops this retry actually recovered.
     //
@@ -935,26 +1144,35 @@ async function bwRetryMissingImport(btn) {
     if (still) {
       const f = bwFailureCause(data);
       _bwLastImport = {date, assignee, failed: still};
-      // Say whether it made progress. No enforced wait — Breezeway's reset window
-      // is a guess from one data point, so blocking the button on it would take
-      // control away on the strength of an assumption.
+      // Settle the schedule BEFORE painting, so the status line already knows
+      // whether another attempt is queued and how long the wait is.
+      _bwAutoAfterResult(still, f.retry, recovered);
+      // Say whether it made progress. The wording no longer tells you to click —
+      // the schedule handles that — but it still reports honestly either way.
       _bwImportMsg(
         recovered === 0
-          ? `Still ${still} to go — Breezeway refused them again. `
-            + `Waiting a bit before trying again usually works better.`
+          ? `Still ${still} to go — Breezeway refused them again. Backing off before the next try.`
           : `Loaded ${recovered} more propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}. `
-            + `${still} still couldn't be loaded. Click again to keep going.`,
+            + `${still} still to load.`,
         "amber");
-      if (f.retry) _bwAddRetryMissingBtn(still);
+      if (f.retry) _bwAddRetryMissingBtn(still);   // appends, then repaints the status line
+      else         _bwAutoRepaintStatus();
     } else {
+      _bwAutoAfterResult(0, false, recovered);     // done — clears the schedule
       _bwImportMsg(
         `Loaded the last ${recovered} propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}. `
         + `All properties loaded.`, "green");
     }
   } catch (e) {
-    btn.disabled = false;
-    btn.textContent = original;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    // Don't count down to another attempt after a transport failure — say it
+    // stopped and leave the manual button as the way back in.
+    _bwAutoHalt(`couldn't reach the server (${e.message})`);
     _bwImportMsg(`Retry failed: ${e.message}`, "red");
+    _bwAutoRepaintStatus();
   }
 }
 
@@ -1527,12 +1745,27 @@ function _rcAutoHalt(note) {
 function _rcBody() { return document.querySelector("[data-rc-body]"); }
 
 // Repaint the panel from the data we already have — no server call. Used when
-// only the retry status line changed (scheduled / stopped / resumed).
+// only the retry status line changed (scheduled / stopped / resumed). Returns
+// false when there's nothing cached to paint, so callers can say something else
+// rather than leave a stale "Checking…" on screen.
 function _rcRepaint() {
   const body = _rcBody();
-  if (!body || _routeChangesCache.routeId !== _rcAuto.routeId || !_routeChangesCache.data) return;
+  if (!body || _routeChangesCache.routeId !== _rcAuto.routeId || !_routeChangesCache.data) return false;
   body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
   _rcTick();
+  return true;
+}
+
+// The header button disables itself on click and relies on the success path
+// rebuilding the whole panel to come back. A stopped or aborted check never
+// reaches that path, which left the button dead and the panel unusable.
+function _rcRestoreRefreshBtn() {
+  const body = _rcBody();
+  const btn  = body && body.parentElement && body.parentElement.querySelector("[data-refresh]");
+  if (!btn) return;
+  btn.disabled = false;
+  const has = _routeChangesCache.routeId === _rcAuto.routeId && !!_routeChangesCache.data;
+  btn.textContent = (has || _routeChangesUiState.stale) ? "Check again" : "Check now";
 }
 
 function _rcTick() {
@@ -1598,7 +1831,15 @@ function _rcAutoStop() {
     try { _routeChangesInflight.controller.abort(); } catch (_) {}
   }
   _routeChangesInflight = { routeId: null, promise: null, controller: null };
-  _rcRepaint();
+  _rcRestoreRefreshBtn();
+  if (!_rcRepaint()) {
+    // Nothing cached to fall back on — a first-ever check was stopped part-way.
+    const body = _rcBody();
+    if (body) {
+      body.innerHTML = `<span class="text-gray-500 leading-snug">Stopped. Nothing was checked — `
+                     + `use <b>Check now</b> above to start again.</span>`;
+    }
+  }
 }
 
 function _rcAutoResume() {
@@ -1746,12 +1987,17 @@ document.addEventListener("click", function (ev) {
     const body = retry.closest("[data-body]");
     if (!body || !currentRouteId) return;
     ev.preventDefault();
-    retry.disabled = true;
-    retry.textContent = "Loading the missing ones…";
     // Hand the pending automatic attempt over to this one, or both would fire.
     _rcAutoClearTimers();
     _rcAuto.inFlight = true;
-    _renderRouteChangesInto(currentRouteId, body, false, true);
+    // quiet: repaint in place so the warning box — and its Stop button — stay on
+    // screen while the retry runs. Wiping the body to "Checking Breezeway…" took
+    // Stop away at exactly the moment there was something to stop.
+    if (!_rcRepaint()) {
+      retry.disabled = true;
+      retry.textContent = "Loading the missing ones…";
+    }
+    _renderRouteChangesInto(currentRouteId, body, false, true, true);
     return;
   }
 
@@ -1786,7 +2032,13 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
   if (retryFailed) _routeChangesInflight = { routeId: null, promise: null, controller: null };
   // quiet: an automatic retry repaints in place (the status line says it's running)
   // instead of wiping the whole comparison every time the timer fires.
-  if (!quiet) body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span>`;
+  if (!quiet) {
+    // Stop stays reachable during a full check too. Without it the only way out of
+    // a long all-houses sweep was to close the sidebar and hope.
+    body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span> `
+      + `<button data-rc-stop style="text-decoration:underline;font-weight:700;color:#6b7280;`
+      + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">Stop</button>`;
+  }
   if (_routeChangesInflight.routeId !== routeId || !_routeChangesInflight.promise) {
     // AbortController so Stop can actually cut a retry that's already out. Without
     // it "Stop" only cancelled the NEXT one and the current sweep ran to completion.
