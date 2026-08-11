@@ -1951,10 +1951,18 @@ function _renderChangesHtml(d) {
        + (f.retry
             // Name the button and say what it does. "Click Recheck" sent people to
             // a full re-scan of all 442 houses, which usually just failed again.
-            ? `<br><button data-retry-missing="${d.failed_properties}"`
-              + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:#b45309;`
-              + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
-              + `👉 Click here to load just the missing ${d.failed_properties} now</button>`
+            // Hide the click-me button while a retry is actually running — the
+            // status line below already says "Retrying the missing N now", and
+            // showing both told you to start something that was already going.
+            // While a countdown is pending the button still shows, which is fine:
+            // clicking it just skips the wait, and nothing is in flight to
+            // contradict.
+            ? `<br>`
+              + (_rcAuto.inFlight ? ""
+                   : `<button data-retry-missing="${d.failed_properties}"`
+                     + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:#b45309;`
+                     + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
+                     + `👉 Click here to load just the missing ${d.failed_properties} now</button>`)
               // What the automatic retrying is doing, and the button to stop it.
               + _rcAutoStatusHtml(d)
               + `<div class="text-gray-500 mt-1">Only re-checks the ones that failed — much faster, and far less likely`
