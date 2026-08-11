@@ -1265,6 +1265,14 @@ def routes_for_date():
 import time as _dt_time
 _route_disc_cache: dict[int, dict] = {}   # route_id -> {"ts": float, "data": dict}
 _ROUTE_DISC_TTL = 120
+# Wall-clock budget for the saved-route sweep. Without one, ex.map() blocked until
+# every one of ~442 properties finished, so under throttling the request outran the
+# hosting proxy and the browser got "Failed to fetch" / HTTP 502 with NOTHING —
+# no partial comparison, no failed-refs list, because the function never returned.
+# Tighter than the import's 45 s: this endpoint fetches reservations first and does
+# heavier post-processing, and a fast partial answer beats a complete one that
+# never arrives.
+_ROUTE_DISC_BUDGET_S = 30
 # Tasks collected so far + the refs that failed, so "try the missing N again" can
 # refetch only those instead of re-running the whole ~442-call sweep.
 _route_disc_partial: dict = {}            # route_id -> (ts, tasks, failed_refs)
@@ -1832,17 +1840,49 @@ def route_discrepancies():
     # the list, and the UI would offer to delete a stop that is still assigned.
     unverified_pids: set = set()
     failed_refs: list = []
-    with ThreadPoolExecutor(max_workers=16) as ex:
-        for ref_id, (tasks, ok, status) in zip(
-                _sweep_keys,
-                ex.map(lambda ref: _robust_property_tasks(token, ref, date_str), _sweep_keys)):
-            all_tasks.extend(tasks)
-            if not ok:
-                failed_props += 1
-                failed_refs.append(ref_id)
-                unverified_pids.add(str(pid_candidates.get(ref_id)))
-                k = _failure_key(status)
-                failure_statuses[k] = failure_statuses.get(k, 0) + 1
+    from concurrent.futures import as_completed as _as_completed
+
+    def _note_failure(ref_id, status):
+        nonlocal failed_props
+        failed_props += 1
+        failed_refs.append(ref_id)
+        unverified_pids.add(str(pid_candidates.get(ref_id)))
+        k = _failure_key(status)
+        failure_statuses[k] = failure_statuses.get(k, 0) + 1
+
+    _deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
+    # NOT a `with` block, deliberately. Exiting one calls shutdown(wait=True), which
+    # blocks until every already-running request finishes — so the budget would stop
+    # us collecting results and the teardown would then wait for the stragglers
+    # anyway. Measured with a stand-in: 8 s to return against a 3 s budget with
+    # `with`, versus exactly 3 s with shutdown(wait=False, cancel_futures=True).
+    # Abandoning them is safe; they are GETs whose results we have given up on.
+    ex = ThreadPoolExecutor(max_workers=16)
+    try:
+        futures = {ex.submit(_robust_property_tasks, token, ref, date_str): ref
+                   for ref in _sweep_keys}
+        try:
+            for fut in _as_completed(
+                    futures, timeout=max(0.0, _deadline - _dt_time.monotonic())):
+                ref_id = futures[fut]
+                try:
+                    tasks, ok, status = fut.result()
+                except Exception:
+                    _note_failure(ref_id, None)
+                    continue
+                all_tasks.extend(tasks)
+                if not ok:
+                    _note_failure(ref_id, status)
+        except Exception:
+            pass        # budget reached — leftovers handled below
+        # Unfinished properties are reported as not-reached rather than silently
+        # missing, so the panel warns and the retry knows what to ask for again.
+        for fut, ref_id in futures.items():
+            if not fut.done():
+                fut.cancel()
+                _note_failure(ref_id, None)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
     # Hold what loaded plus what failed, so the next click can retry only the gaps.
     if failed_props:
