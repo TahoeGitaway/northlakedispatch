@@ -1010,46 +1010,66 @@ function _bwAutoResume() {
   _bwAutoRepaintStatus();
 }
 
-/* The status line under the import message, plus the button to stop it. Appended
-   to #bwImportResult — _bwImportMsg sets textContent and so wipes children, which
-   is why this always runs AFTER the message, never before. */
-function _bwAutoStatusHtml(n) {
-  const btn = (attr, label) =>
-    `<button ${attr} style="text-decoration:underline;font-weight:700;color:#b45309;`
-    + `background:none;border:none;padding:0;cursor:pointer;font-size:12px;">${label}</button>`;
+/* ONE render owns the whole call-to-action area.
 
+   This was two functions each appending their own DOM — _bwAddRetryMissingBtn
+   added the manual button, _bwAutoRepaintStatus added the status line — and
+   neither could see the other's state. So the panel told you to click "Try the
+   missing 242 now" while simultaneously reporting "Loading the missing 242
+   now...", two contradictory instructions stacked on top of each other. There is
+   only ever one true state here, so only one function may draw it.
+
+   Appended to #bwImportResult, which _bwImportMsg wipes via textContent — so this
+   always runs AFTER the message, never before. */
+function _bwAutoActionsHtml(n) {
+  const link = (attr, label, colour) =>
+    `<button ${attr} style="text-decoration:underline;font-weight:700;color:${colour || "#b45309"};`
+    + `background:none;border:none;padding:0;cursor:pointer;font-size:12px;">${label}</button>`;
+  const row = (inner, colour) =>
+    `<div style="margin-top:5px;font-size:12px;${colour ? `color:${colour};` : ""}">${inner}</div>`;
+  // The manual trigger, only where it means something different from what the
+  // schedule is already doing.
+  const manual = (label) => row(link("data-bw-now", `👉 ${label}`));
+
+  // Running right now: Stop is the only sensible action. Offering "load them now"
+  // here is what produced the contradiction — it is already loading.
   if (_bwAuto.inFlight) {
-    return `<div style="margin-top:5px;font-size:12px;">↻ Loading the missing ${n} now… `
-         + `${btn("data-bw-stop", "Stop")}</div>`;
+    return row(`↻ Loading the missing ${n} now… ${link("data-bw-stop", "Stop")}`);
   }
-  if (_bwAuto.stopped) {
-    return `<div style="margin-top:5px;font-size:12px;color:#4b5563;">Automatic retries stopped`
-         + (_bwAuto.note ? ` — ${_escHtml(_bwAuto.note)}` : "")
-         + `. ${btn("data-bw-resume", "Resume")}</div>`;
-  }
+  // Waiting to fire: the manual link SKIPS the wait, so it is worded as such
+  // rather than repeating the countdown's job.
   if (_bwAuto.timerId) {
-    return `<div style="margin-top:5px;font-size:12px;">Loading the missing ${n} automatically in `
-         + `<span data-bw-countdown>…</span> `
-         + `<span style="color:#6b7280;">(try ${_bwAuto.attempt + 1} of ${_BW_AUTO_MAX_TRIES})</span> `
-         + `${btn("data-bw-stop", "Stop")}</div>`;
+    return row(`Loading the missing ${n} automatically in <span data-bw-countdown>…</span> `
+             + `<span style="color:#6b7280;">(try ${_bwAuto.attempt + 1} of ${_BW_AUTO_MAX_TRIES})</span> `
+             + `${link("data-bw-stop", "Stop")}`)
+         + manual("Don't wait — load them now");
+  }
+  // Stopped or given up: nothing is scheduled, so the manual link is the way back
+  // in and no longer contradicts anything.
+  if (_bwAuto.stopped) {
+    return row(`Automatic retries stopped${_bwAuto.note ? ` — ${_escHtml(_bwAuto.note)}` : ""}. `
+             + `${link("data-bw-resume", "Resume")}`, "#4b5563")
+         + manual(`Try the missing ${n} now`);
   }
   if (_bwAuto.note) {
-    return `<div style="margin-top:5px;font-size:12px;color:#4b5563;">${_escHtml(_bwAuto.note)}</div>`;
+    return row(_escHtml(_bwAuto.note), "#4b5563") + manual(`Try the missing ${n} now`);
   }
-  return "";
+  // Retryable but nothing scheduled (schedule never started) — offer the manual
+  // path. Non-retryable causes never get here: the caller skips this entirely.
+  return _bwAuto.retryable ? manual(`Try the missing ${n} now`) : "";
 }
 
-// Repaint just the status line from state, leaving the message above it alone.
+// Repaint the actions from state, leaving the message above them alone.
 function _bwAutoRepaintStatus() {
   const el = document.getElementById("bwImportResult");
   if (!el) return;
-  const old = el.querySelector("[data-bw-status]");
+  const old = el.querySelector("[data-bw-actions]");
   if (old) old.remove();
   const n    = (_bwLastImport && _bwLastImport.failed) || 0;
-  const html = n ? _bwAutoStatusHtml(n) : "";
+  const html = n ? _bwAutoActionsHtml(n) : "";
   if (!html) return;
   const wrap = document.createElement("div");
-  wrap.setAttribute("data-bw-status", "");
+  wrap.setAttribute("data-bw-actions", "");
   wrap.innerHTML = html;
   el.appendChild(wrap);
   _bwAutoTick();
@@ -1060,24 +1080,21 @@ document.addEventListener("click", function (ev) {
   if (!t || !t.closest) return;
   if (t.closest("[data-bw-stop]"))   { ev.preventDefault(); _bwAutoStop();   return; }
   if (t.closest("[data-bw-resume]")) { ev.preventDefault(); _bwAutoResume(); return; }
+  const now = t.closest("[data-bw-now]");
+  if (now && !now.disabled) {
+    ev.preventDefault();
+    _bwAutoClearTimers();            // hand the pending automatic attempt to this one
+    bwRetryMissingImport(now);       // passing the element marks it manual, not :retry-auto
+    return;
+  }
 });
 
-/* The manual button stays. Auto-retry handles the normal case, but the button is
-   what you reach for after pressing Stop, or when you don't want to wait out the
-   countdown — and it's the fallback if the schedule ever gives up. */
+/* Kept as the name the import path already calls. The button itself is drawn by
+   _bwAutoActionsHtml now — this just records that a manual path is offered and
+   lets the single render decide what to show. */
 function _bwAddRetryMissingBtn(n) {
-  const el = document.getElementById("bwImportResult");
-  if (!el || !_bwLastImport) return;
-  const btn = document.createElement("button");
-  btn.textContent = `👉 Try the missing ${n} now`;
-  btn.style.cssText = "display:block;margin-top:5px;text-decoration:underline;font-weight:700;"
-                    + "background:none;border:none;padding:0;cursor:pointer;color:#b45309;font-size:12px;";
-  btn.onclick = () => {
-    _bwAutoClearTimers();          // hand the pending automatic attempt to this one
-    _bwAuto.inFlight = true;
-    bwRetryMissingImport(btn);
-  };
-  el.appendChild(btn);
+  if (!_bwLastImport) return;
+  _bwAuto.retryable = true;
   _bwAutoRepaintStatus();
 }
 
