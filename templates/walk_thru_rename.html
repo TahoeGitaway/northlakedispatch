@@ -92,8 +92,6 @@
   </div>
 
   <!-- Apply results -->
-  <div id="warnBox" class="hidden mt-4 text-xs rounded-lg px-3 py-2 leading-relaxed"
-       style="background:#fffbeb; color:#b45309; border:1px solid #fde68a;"></div>
   <div id="resultsBox" class="hidden mt-6 space-y-2"></div>
 
 </div>
@@ -127,7 +125,6 @@ async function runScan() {
   document.getElementById('tableWrap').classList.add('hidden');
   document.getElementById('emptyBox').classList.add('hidden');
   document.getElementById('errorBox').classList.add('hidden');
-  document.getElementById('warnBox').classList.add('hidden');   // stale count must not survive a rescan
   document.getElementById('resultsBox').classList.add('hidden');
   document.getElementById('resultsBox').innerHTML = '';
 
@@ -165,25 +162,6 @@ async function runScan() {
     }
 
     proposals = data.proposals || [];
-
-    // Say what could NOT be read, before showing what could. Until now a throttled
-    // property was indistinguishable from a property with no Walk Thru task, so the
-    // page could report "nothing to rename" while a third of the portfolio had never
-    // loaded. bwFailureCause() is the shared wording used by the map import.
-    if (data.failed_properties && typeof bwFailureCause === 'function') {
-      const f  = bwFailureCause(data);
-      const wb = document.getElementById('warnBox');
-      wb.innerHTML =
-        `<div>${esc(f.text)} — some Walk Thru tasks may be missing from this list.</div>`
-        + (f.retry
-             ? `<div style="margin-top:3px;">Scan again to retry them`
-               + (data.scanned_properties ? ` (of ${data.scanned_properties} checked)` : '')
-               + `.</div>`
-             : `<div style="margin-top:3px;">Scanning again won't help; this needs a fix in `
-               + `Breezeway or the app's settings.</div>`);
-      wb.classList.remove('hidden');
-    }
-
     if (proposals.length === 0) {
       document.getElementById('emptyBox').classList.remove('hidden');
       return;

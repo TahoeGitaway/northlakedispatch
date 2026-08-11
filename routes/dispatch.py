@@ -16,8 +16,7 @@ from flask_login import login_required, current_user
 from routes.auth import admin_required
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-from routes.bw_api_log import (bw_get, bw_patch, bw_post,
-                               bw_worker_label, bw_run_labeled)
+from routes.bw_api_log import bw_get, bw_patch, bw_post, bw_worker_context
 from db import (get_db, get_cursor, DEFAULT_START,
                 CHECKIN_DEADLINE_HHMM, PRIORITY_CHECKIN_DEADLINE_HHMM,
                 hhmm_to_minutes, minutes_to_hhmm)
@@ -1266,17 +1265,6 @@ def routes_for_date():
 import time as _dt_time
 _route_disc_cache: dict[int, dict] = {}   # route_id -> {"ts": float, "data": dict}
 _ROUTE_DISC_TTL = 120
-# Wall-clock budget for the saved-route sweep. Deliberately TIGHTER than the
-# import's 45 s: this endpoint also fetches reservations first (~2 s) and does
-# more post-processing, and a partial comparison returned quickly is worth more
-# than a complete one that never arrives — the panel's auto-retry drains the rest.
-# Without one, ex.map() blocked until all ~442 properties finished; under heavy
-# throttling that outran the hosting proxy, which returned a bare 502 to the
-# browser. The user saw "Could not check Breezeway: HTTP 502" and got NOTHING —
-# no partial comparison, no failed-refs list, nothing for the auto-retry to drain,
-# because the function never returned at all. Returning 300 of 442 with an honest
-# count beats returning nothing after two minutes of work.
-_ROUTE_DISC_BUDGET_S = 30
 # Tasks collected so far + the refs that failed, so "try the missing N again" can
 # refetch only those instead of re-running the whole ~442-call sweep.
 _route_disc_partial: dict = {}            # route_id -> (ts, tasks, failed_refs)
@@ -1332,8 +1320,6 @@ def _robust_property_tasks(token, ref_id, date_str):
 def _failure_key(status):
     """Bucket a failed fetch's status for the UI tally: 'timeout' when there was
     no response at all, otherwise the HTTP status as a string."""
-    if status == "unreached":
-        return "unreached"          # explicit bucket, not an HTTP status
     return "timeout" if status is None else str(status)
 
 
@@ -1455,11 +1441,10 @@ def bw_import():
         out, nfail, tally, refs = list(seed_results), 0, {}, []
         # Captured on the REQUEST thread — worker threads have no Flask request
         # context, so without this every call below logs a blank trigger.
-        _label = bw_worker_label(
+        _ctx = bw_worker_context(
             ("retry-auto" if auto_retry else "retry") if retry_failed else "")
         with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = {executor.submit(bw_run_labeled, _label,
-                                       _robust_property_tasks, token, ref, date_str): ref
+            futures = {executor.submit(_ctx.run, _robust_property_tasks, token, ref, date_str): ref
                        for ref in keys}
             # Take results AS THEY LAND, up to the budget. (Polling each future with
             # a tiny timeout instead would mark every still-running property as
@@ -1493,14 +1478,7 @@ def bw_import():
                     unreached += 1
                     nfail += 1
                     refs.append(ref_id)
-                    # Its OWN bucket, not "timeout". These properties were never
-                    # asked — the budget expired first — so they never appear in
-                    # the API log at all. Filing them as timeouts made the UI
-                    # report "206 did not respond within 15 s" for requests that
-                    # were never sent, which is how a 429 problem got misread as a
-                    # slow-endpoint problem and the per-call timeout got raised in
-                    # exactly the wrong direction.
-                    tally["unreached"] = tally.get("unreached", 0) + 1
+                    tally["timeout"] = tally.get("timeout", 0) + 1
         if unreached:
             current_app.logger.warning(
                 "[bw-import] %s: budget reached, %d properties not reached",
@@ -1862,52 +1840,19 @@ def route_discrepancies():
     # the list, and the UI would offer to delete a stop that is still assigned.
     unverified_pids: set = set()
     failed_refs: list = []
-    from concurrent.futures import as_completed as _as_completed
-
-    def _note_failure(ref_id, status):
-        nonlocal failed_props
-        failed_props += 1
-        failed_refs.append(ref_id)
-        unverified_pids.add(str(pid_candidates.get(ref_id)))
-        k = _failure_key(status)
-        failure_statuses[k] = failure_statuses.get(k, 0) + 1
-
-    _deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
-    _label = bw_worker_label("retry" if retry_failed else "")
-    # NOT a `with` block, on purpose. Exiting one calls shutdown(wait=True), which
-    # blocks until every already-running request finishes — up to 3 attempts x the
-    # read timeout each. That is how a bounded sweep still produced a two-minute
-    # request and a gateway 502: the budget stopped us collecting results, then the
-    # executor teardown quietly waited for the stragglers anyway. Abandoning them
-    # is safe; they are GETs whose results we have already given up on.
-    ex = ThreadPoolExecutor(max_workers=16)
-    try:
-        futures = {ex.submit(bw_run_labeled, _label,
-                             _robust_property_tasks, token, ref, date_str): ref
-                   for ref in _sweep_keys}
-        # Take results AS THEY LAND, up to the budget — same shape as the import.
-        try:
-            for fut in _as_completed(
-                    futures, timeout=max(0.0, _deadline - _dt_time.monotonic())):
-                ref_id = futures[fut]
-                try:
-                    tasks, ok, status = fut.result()
-                except Exception:
-                    _note_failure(ref_id, None)
-                    continue
-                all_tasks.extend(tasks)
-                if not ok:
-                    _note_failure(ref_id, status)
-        except Exception:
-            pass        # budget reached — the leftovers are handled below
-        # Anything still unfinished is reported as not-reached rather than silently
-        # missing, so the panel can warn and the retry knows what to ask for again.
-        for fut, ref_id in futures.items():
-            if not fut.done():
-                fut.cancel()
-                _note_failure(ref_id, "unreached")   # never asked, not slow
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+    _ctx = bw_worker_context("retry" if retry_failed else "")
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for ref_id, (tasks, ok, status) in zip(
+                _sweep_keys,
+                ex.map(lambda ref: _ctx.run(_robust_property_tasks, token, ref, date_str),
+                       _sweep_keys)):
+            all_tasks.extend(tasks)
+            if not ok:
+                failed_props += 1
+                failed_refs.append(ref_id)
+                unverified_pids.add(str(pid_candidates.get(ref_id)))
+                k = _failure_key(status)
+                failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
     # Hold what loaded plus what failed, so the next click can retry only the gaps.
     if failed_props:
@@ -2513,11 +2458,10 @@ def clear_task_times():
     # Per-property fetch with retry/backoff (shared helper) so a throttled house
     # isn't silently dropped — same fix as the import.
     all_tasks = []
-    _label = bw_worker_label()
+    _ctx = bw_worker_context()
     with ThreadPoolExecutor(max_workers=16) as ex:
         for tasks, _ok, _status in ex.map(
-                lambda ref: bw_run_labeled(_label, _robust_property_tasks,
-                                           token, ref, date_str),
+                lambda ref: _ctx.run(_robust_property_tasks, token, ref, date_str),
                 list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 

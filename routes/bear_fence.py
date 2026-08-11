@@ -51,12 +51,46 @@ def _get_property_name(pid):
             str(pid))
 
 
-# Shared sweep — see routes/briefing.fetch_tasks_for_pids. The copy that used to
-# live here reported every failure as "no tasks", silently under-reporting under
-# throttling. Returns (tasks, failed_count, failure_statuses).
-def _fetch_tasks_for_pids(token: str, pids: list, start: date, end: date) -> tuple:
-    from routes.briefing import fetch_tasks_for_pids
-    return fetch_tasks_for_pids(token, pids, start, end, max_workers=10)
+def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
+    date_range = f"{start.isoformat()},{end.isoformat()}"
+    id_pairs = []
+    if ref_id:
+        id_pairs.append(("reference_property_id", ref_id))
+    id_pairs += [("property_id", pid), ("home_id", pid)]
+    for key, val in id_pairs:
+        try:
+            r = bw_get(
+                f"{BW_BASE}/public/inventory/v1/task/",
+                headers={"Authorization": f"JWT {token}"},
+                params={"scheduled_date": date_range, key: val, "limit": 100},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                body = r.json()
+                results = body.get("results", body.get("data", body if isinstance(body, list) else []))
+                if results:
+                    return results
+        except Exception:
+            pass
+    return []
+
+
+def _fetch_tasks_for_pids(token: str, pids: list, start: date, end: date) -> list:
+    from routes.briefing import _get_live_ref_cache
+    ref_cache = _get_live_ref_cache()
+    all_tasks = []
+    seen_ids: set = set()
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
+                   for pid in pids}
+        for future in as_completed(futures):
+            for t in (future.result() or []):
+                tid = t.get("id")
+                if tid is None or tid not in seen_ids:
+                    if tid is not None:
+                        seen_ids.add(tid)
+                    all_tasks.append(t)
+    return all_tasks
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:
@@ -175,9 +209,7 @@ def bear_fence_scan():
         if r.get("checkin_date")
     } - {""})
 
-    tasks, failed_props, failure_statuses = (
-        _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids
-        else ([], 0, {}))
+    tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
 
     # Index tasks by pid
     walk_thrus:  dict[str, list[dict]] = {}
@@ -268,10 +300,7 @@ def bear_fence_scan():
 
     # Sort: by property then current date
     proposals.sort(key=lambda x: (x["property"], x["current_date"]))
-    return jsonify({"proposals": proposals,
-                    "failed_properties":  failed_props,
-                    "failure_statuses":   failure_statuses,
-                    "scanned_properties": len(arrival_pids)})
+    return jsonify({"proposals": proposals})
 
 
 @bear_fence_bp.route("/admin/bear-fence/apply", methods=["POST"])

@@ -61,17 +61,7 @@ _COOL_BASE     = 0.4    # first pause after a 429
 _COOL_MAX      = 2.0    # cap — a 20s global pause cannot fit inside one scan
 _QUIET_DECAY_S = 3.0    # no 429 for this long → step the interval back down
 _RELAX_AFTER   = 10     # consecutive successes also step it down
-# Measured, not reasoned. Raising this was tried and reverted: against the real
-# gate with 16 workers and a 33% refusal rate, 28 s eliminated 44 locally-shed
-# requests but produced 42 MORE 429s and 24 s more wall clock — threads that would
-# have been shed instead waited and were refused by Breezeway anyway, so the only
-# effect was extra load. On a healthy API this sheds nothing at either setting.
-#
-# (The reasoning that prompted the change was wrong: it assumed all ~442 properties
-# queue here at once, needing 442 x _MAX_INTERVAL to drain. Only `max_workers`
-# threads ever wait — 16 — so a thread's wait is ~16 x _MAX_INTERVAL, well inside
-# this. Local shedding is not what loses a sweep; see _BW_IMPORT_BUDGET_S.)
-_MAX_GATE_WAIT = 10.0
+_MAX_GATE_WAIT = 10.0   # never block a request longer than this
 
 # Status used when THIS APP declines to send, rather than Breezeway refusing.
 # Reporting both as 429 makes the UI blame Breezeway for our own shedding, which

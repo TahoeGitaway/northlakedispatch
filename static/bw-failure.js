@@ -25,8 +25,6 @@
     '403':     { label: 'Breezeway refused access to these properties (HTTP 403)', short: 'HTTP 403 — access denied',  retry: false },
     '404':     { label: 'Breezeway did not recognise the property id (HTTP 404)',  short: 'HTTP 404 — unknown id',     retry: false },
     '400':     { label: 'Breezeway rejected the query as malformed (HTTP 400)',    short: 'HTTP 400 — bad query',      retry: false },
-    // Keep the number in step with BW_READ_TIMEOUT_S in routes/briefing.py — the
-    // server decides when a read has timed out, this only reports it.
     'timeout': { label: 'Breezeway did not respond within 15 s',                   short: 'no response (timeout)',     retry: true  },
     // 598 is OURS, not Breezeway's: the app's own limiter declined to send rather
     // than pile onto an API already refusing us. It is not a real status — the
@@ -34,11 +32,6 @@
     // Never print it: 598 is informally used elsewhere for "network read timeout",
     // which is close to the opposite of what it means here, so showing it misleads
     // anyone who recognises it.
-    // Never asked at all: the sweep's wall-clock budget expired first. Distinct
-    // from a timeout, which means we DID ask and got no answer — conflating them
-    // reported requests that were never sent as slow responses.
-    'unreached': { label: "not reached before the scan's time budget ran out",
-                   short: 'not reached (budget)', retry: true, noCode: true },
     '598':     { label: "held back by this app to avoid piling on",
                  short: 'held back by the app', retry: true, noCode: true },
   };

@@ -887,14 +887,6 @@ let _bwLastImport = null;
 // app's own rate gate relaxes after ~3s of quiet (bw_ratelimit.py → _QUIET_DECAY_S),
 // so 8s is ample when Breezeway is answering. The backoff tail is capped at 120s
 // because the held failed-refs list only survives 15 min between attempts.
-// KILL SWITCH. Set false to stop the import retrying on its own, leaving the
-// manual button exactly as it behaved before any of this. Reason it exists: an
-// automatic retry adds load to a rate gate that is already shedding requests, and
-// more requests means more 429s, longer global cooldowns, and more shedding. Until
-// the gate arithmetic is proven sound, being able to remove that variable in one
-// line — without reverting the diagnostics that make the log truthful — is worth
-// more than the convenience.
-const _BW_AUTO_ENABLED    = true;
 const _BW_AUTO_PROGRESS_S = 8;                       // recovered something → go again soon
 const _BW_AUTO_BACKOFF_S  = [20, 45, 90, 120, 120];  // recovered nothing → step back
 // Whole run finishes in ~1 min if every attempt makes progress, ~10.5 min in the
@@ -970,7 +962,7 @@ function _bwAutoAfterResult(stillFailed, retryable, recovered) {
     _bwAuto.note = "";
     return;
   }
-  if (_bwAuto.stopped || !_BW_AUTO_ENABLED) return;
+  if (_bwAuto.stopped) return;
   if (_bwAuto.attempt >= _BW_AUTO_MAX_TRIES) {
     _bwAuto.note = `Stopped after ${_BW_AUTO_MAX_TRIES} automatic tries — `
                  + `Breezeway is still refusing these ${stillFailed}.`;

@@ -60,14 +60,49 @@ def _build_proposed_title(title: str, arrival: date) -> str:
     return f"{title} for {arrival.month}/{arrival.day}"
 
 
-# The per-property sweep now lives in routes/briefing.py. This module used to hold
-# its own copy — byte-identical to bear_fence.py's — which swallowed every failure
-# as an empty list, so a throttled property was indistinguishable from a property
-# with no Walk Thru task. That is why a real task could be missing from the scan
-# with nothing on screen to say so.
-def _fetch_tasks_for_pids(token: str, pids: list, start: date, end: date) -> tuple:
-    from routes.briefing import fetch_tasks_for_pids
-    return fetch_tasks_for_pids(token, pids, start, end, max_workers=16)
+def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
+    date_range = f"{start.isoformat()},{end.isoformat()}"
+    id_pairs = []
+    if ref_id:
+        id_pairs.append(("reference_property_id", ref_id))
+    id_pairs += [("property_id", pid), ("home_id", pid)]
+    for key, val in id_pairs:
+        try:
+            r = bw_get(
+                f"{BW_BASE}/public/inventory/v1/task/",
+                headers={"Authorization": f"JWT {token}"},
+                params={"scheduled_date": date_range, key: val, "limit": 100},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                body = r.json()
+                results = body.get("results", body.get("data", body if isinstance(body, list) else []))
+                if results:
+                    return results
+        except Exception:
+            pass
+    return []
+
+
+def _fetch_tasks_for_pids(token: str, pids: list[str], start: date, end: date) -> list:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from routes.briefing import _get_live_ref_cache
+    ref_cache = _get_live_ref_cache()
+
+    all_tasks = []
+    seen_ids: set = set()
+
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
+                   for pid in pids}
+        for future in as_completed(futures):
+            for t in (future.result() or []):
+                tid = t.get("id")
+                if tid is None or tid not in seen_ids:
+                    if tid is not None:
+                        seen_ids.add(tid)
+                    all_tasks.append(t)
+    return all_tasks
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:
@@ -176,9 +211,7 @@ def walk_thru_scan():
         reso_by_prop[pid].sort()
 
     arrival_pids = list(reso_by_prop.keys())
-    tasks, failed_props, failure_statuses = (
-        _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids
-        else ([], 0, {}))
+    tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
 
     proposals = []
     for t in tasks:
@@ -217,12 +250,7 @@ def walk_thru_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    # Report what could NOT be read. Without these the page could only ever show
-    # "here are your proposals" — never "and a third of the portfolio never loaded".
-    result = {"proposals": proposals,
-              "failed_properties":  failed_props,
-              "failure_statuses":   failure_statuses,
-              "scanned_properties": len(arrival_pids)}
+    result = {"proposals": proposals}
     # Cache before returning — even if the proxy already timed out, the backend
     # finishes and a retry gets this instantly.
     _scan_cache[ck] = (_time.time(), result)

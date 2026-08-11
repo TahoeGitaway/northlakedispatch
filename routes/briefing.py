@@ -26,26 +26,6 @@ from routes.auth import admin_required
 from routes.bw_ratelimit import LOCAL_THROTTLE_STATUS as _LOCAL_THROTTLE
 from routes.bw_api_log import bw_get
 
-# How long to wait on a single Breezeway read before calling it a timeout.
-#
-# Held at 15 s. It was briefly raised to 20 on the reasoning that timeouts
-# dominated a full-day sweep's failures — "206 timed out vs 33 refused". That
-# reading was wrong: the import filed every property it never got around to
-# asking (budget expired) under "timeout", so the 206 was overwhelmingly
-# not-reached, not slow. The API log's all-time totals settle it — 74 real
-# timeouts against 22,433 refusals. Raising this makes the real problem worse,
-# because a property retrying through 429s holds its worker slot longer and
-# fewer properties get attempted inside the sweep budget. Every user-facing
-# "did not respond within N s" string derives from this constant.
-#
-# NOTE: the sweep's own wall-clock budget (dispatch.py _BW_IMPORT_BUDGET_S) is
-# unchanged at 45 s, and it is deliberately NOT raised to match — the request has
-# to come back before the hosting proxy gives up on it. A longer per-call timeout
-# therefore means slightly fewer properties get attempted inside that budget; the
-# trade is worth it only while timeouts outnumber refusals. Recheck in the API log
-# before raising it again.
-BW_READ_TIMEOUT_S = 15
-
 briefing_bp = Blueprint("briefing", __name__)
 
 _PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -205,7 +185,7 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
                 "https://api.breezeway.io/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={**params, "limit": limit, "page": page},
-                timeout=BW_READ_TIMEOUT_S,
+                timeout=15,
             )
             data = resp.json()
             page_results = (data.get("results", data.get("data", [])) or []) \
@@ -249,7 +229,7 @@ def _fetch_bw_reservations_checked(token: str, params: dict,
                     "https://api.breezeway.io/public/inventory/v1/reservation",
                     headers={"Authorization": f"JWT {token}"},
                     params={**params, "limit": limit, "page": page},
-                    timeout=BW_READ_TIMEOUT_S,
+                    timeout=15,
                 )
                 # A throttled or errored page is NOT an empty page. Without this,
                 # a 429 whose body happens to parse as JSON yields no "results",
@@ -283,7 +263,6 @@ def _fetch_bw_reservations_checked(token: str, params: dict,
     return all_results, True
 
 
-
 def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     """Generic paginated GET for any Breezeway endpoint.
     Returns (results_list, error_string, http_status).
@@ -308,16 +287,6 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
             # long requests to a gateway timeout, and callers now surface a
             # throttled property honestly instead of silently showing no tasks.
             if not gate.acquire():
-                # LOG IT. This used to return before reaching bw_api_log, so a
-                # request this app declined to send left no trace anywhere — and
-                # when the gate sheds almost everything, the log showed a single
-                # row while the UI reported 441 failures. Debugging that meant
-                # guessing. A shed request is still a request we decided not to
-                # make, and the log exists to say exactly that.
-                bw_api_log.record(path, LOCAL_THROTTLE_STATUS, False,
-                                  detail="held back by this app's rate limiter — not sent",
-                                  elapsed_ms=0,
-                                  params={**params, "limit": limit, "page": page})
                 return [], ("Held back by this app's rate limiter — not sent to "
                             "Breezeway"), LOCAL_THROTTLE_STATUS
 
@@ -326,7 +295,7 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 f"https://api.breezeway.io{path}",
                 headers={"Authorization": f"JWT {token}"},
                 params={**params, "limit": limit, "page": page},
-                timeout=BW_READ_TIMEOUT_S,
+                timeout=15,
             )
             last_status = resp.status_code
             gate.on_response(last_status)
@@ -349,11 +318,10 @@ def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
                 break
             page += 1
     except requests.exceptions.Timeout:
-        bw_api_log.record(path, None, False, detail=f"timed out after {BW_READ_TIMEOUT_S} s",
+        bw_api_log.record(path, None, False, detail="timed out after 15 s",
                           elapsed_ms=int((time.time() - _t0) * 1000),
                           params={**params, "limit": limit, "page": page})
-        return [], ("Request timed out — Breezeway API did not respond within "
-                    f"{BW_READ_TIMEOUT_S} s"), last_status
+        return [], "Request timed out — Breezeway API did not respond within 15 s", last_status
     except Exception as ex:
         bw_api_log.record(path, None, False, detail=f"{type(ex).__name__}: {ex}",
                           elapsed_ms=int((time.time() - _t0) * 1000),
@@ -459,7 +427,7 @@ def _load_property_cache() -> str:
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
                 params={"limit": limit, "page": page, "status": "active"},
-                timeout=BW_READ_TIMEOUT_S,
+                timeout=15,
             )
             if not resp.ok:
                 _property_cache_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
@@ -1846,7 +1814,7 @@ def debug_properties():
                 "https://api.breezeway.io/public/inventory/v1/property",
                 headers={"Authorization": f"JWT {token}"},
                 params={"limit": 1, "page": 1},
-                timeout=BW_READ_TIMEOUT_S,
+                timeout=15,
             )
             data  = resp.json()
             items = data.get("results", data.get("data", data if isinstance(data, list) else []))
@@ -1979,112 +1947,3 @@ def reservation_chart():
         "lease": [counts[ds]["lease"] for ds in dates],
         "block": [counts[ds]["block"] for ds in dates],
     })
-
-
-# ── SHARED PER-PROPERTY TASK SWEEP ──────────────────────────────────────────
-# Lifted out of walk_thru_rename.py and bear_fence.py, which held byte-identical
-# copies of both functions below — and therefore identical copies of the same bug:
-# every failure was swallowed by `except Exception: pass` and returned as an empty
-# list, indistinguishable from "this property genuinely has no tasks". Under the
-# throttling this app routinely sees (one log window: 22,433 of 69,211 requests
-# refused), a scan quietly reported fewer tasks than exist and looked complete.
-# That is how a Walk Thru task on a real property failed to appear in the rename
-# tool with nothing on screen to say a third of the portfolio never loaded.
-#
-# The import path fixed this long ago (dispatch.py _robust_property_tasks: retry,
-# then report the real status so the UI can warn). These are the same fix for the
-# tools that were left behind. One copy, because two copies is what produced the
-# bug.
-
-def fetch_property_tasks_range(token: str, pid: str, ref_id: str,
-                               start: date, end: date) -> tuple:
-    """One property's tasks over a date range. Returns (tasks, ok, status).
-
-    ok=False means it genuinely could not be loaded and the caller must NOT treat
-    the empty list as "no tasks". `status` is the last failing HTTP status, or
-    None for a timeout, so callers can name the real cause.
-
-    Preserves the original id-fallback: Breezeway's task API takes the external
-    reference id, while other calls take Breezeway's own, and a 200 carrying no
-    results may just mean we asked in the wrong id space — so an empty 200 falls
-    through to the next key rather than being accepted as an answer.
-    """
-    import time as _t
-    date_range = f"{start.isoformat()},{end.isoformat()}"
-    id_pairs = ([("reference_property_id", ref_id)] if ref_id else []) \
-             + [("property_id", pid), ("home_id", pid)]
-
-    saw_empty_200 = False
-    last_status = None
-    for key, val in id_pairs:
-        for attempt in range(3):
-            try:
-                r = bw_get(
-                    "https://api.breezeway.io/public/inventory/v1/task/",
-                    headers={"Authorization": f"JWT {token}"},
-                    params={"scheduled_date": date_range, key: val, "limit": 100},
-                    timeout=BW_READ_TIMEOUT_S,
-                )
-                last_status = r.status_code
-                if r.status_code == 200:
-                    body = r.json()
-                    results = body.get("results",
-                                       body.get("data", body if isinstance(body, list) else []))
-                    if results:
-                        return results, True, 200
-                    saw_empty_200 = True
-                    break                       # this id space answered; try the next
-                if r.status_code == 429 or r.status_code >= 500:
-                    _t.sleep(0.3 * (attempt + 1))
-                    continue                    # transient — worth another go
-                break                           # 4xx that won't change; try the next id key
-            except Exception:
-                last_status = None              # timeout / transport — retryable
-                _t.sleep(0.3 * (attempt + 1))
-
-    # Every id space answered 200 with nothing: a real "no tasks here".
-    if saw_empty_200:
-        return [], True, 200
-    return [], False, last_status
-
-
-def fetch_tasks_for_pids(token: str, pids: list, start: date, end: date,
-                         max_workers: int = 16) -> tuple:
-    """Sweep many properties. Returns (tasks, failed_count, failure_statuses).
-
-    failure_statuses is the {"429": n, "timeout": n} tally the UI needs to say
-    WHY, via static/bw-failure.js — the same shape the import already returns.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from routes.bw_api_log import bw_worker_label, bw_run_labeled
-
-    ref_cache = _get_live_ref_cache()
-    all_tasks, seen_ids = [], set()
-    failed, statuses = 0, {}
-    label = bw_worker_label()      # captured here; worker threads have no request
-
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {
-            ex.submit(bw_run_labeled, label, fetch_property_tasks_range,
-                      token, pid, ref_cache.get(pid, ""), start, end): pid
-            for pid in pids
-        }
-        for future in as_completed(futures):
-            try:
-                tasks, ok, status = future.result()
-            except Exception:
-                failed += 1
-                statuses["timeout"] = statuses.get("timeout", 0) + 1
-                continue
-            if not ok:
-                failed += 1
-                k = "timeout" if status is None else str(status)
-                statuses[k] = statuses.get(k, 0) + 1
-                continue
-            for t in tasks:
-                tid = t.get("id")
-                if tid is None or tid not in seen_ids:
-                    if tid is not None:
-                        seen_ids.add(tid)
-                    all_tasks.append(t)
-    return all_tasks, failed, statuses
