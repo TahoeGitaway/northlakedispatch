@@ -467,6 +467,71 @@ def init_db():
         archived_by INTEGER
     )""")
 
+    # Carpet cleaning — last COMPLETED "carpet clean" task per house, per year.
+    #
+    # This is a cache, not a record: every row is reconstructable from Breezeway.
+    # It exists because the scan is one paginated task query per house across a
+    # whole year, which is far too slow to run inside a page load — the request
+    # would hit the gateway timeout long before the last house was reached. So the
+    # page reads this table instantly and the scan fills it a batch at a time.
+    #
+    # Keyed per (user, year, property) rather than per scan run, so an interrupted
+    # scan keeps whatever it already finished and resuming only asks Breezeway for
+    # the houses still missing. `error` is stored alongside the result on purpose:
+    # a house that could not be READ must not be displayed as one with no cleaning.
+    #
+    # user_id scopes every row to the person who ran the scan. This page is
+    # deliberately private — nobody else's account sees these results, and there is
+    # no shared/global view of them.
+    cur.execute("""CREATE TABLE IF NOT EXISTS carpet_last_clean (
+        id              SERIAL PRIMARY KEY,
+        user_id         INTEGER NOT NULL,
+        year            INTEGER NOT NULL,
+        property_id     TEXT    NOT NULL,   -- Breezeway property id
+        house_name      TEXT    NOT NULL,   -- Breezeway property name, denormalised
+        last_clean_date TEXT,               -- YYYY-MM-DD, or NULL for none that year
+        task_id         TEXT,               -- Breezeway task id, for the deep link
+        task_title      TEXT,
+        task_status     TEXT,
+        -- Everyone assigned to that task, comma-joined. Stored as text because it
+        -- is only ever displayed: this table answers "who cleaned it", not "which
+        -- staff record". A completed task with nobody on it stays empty rather
+        -- than being dropped — unassigned is an answer, not a missing row.
+        assignees       TEXT,
+        clean_count     INTEGER NOT NULL DEFAULT 0,
+        truncated       INTEGER NOT NULL DEFAULT 0,  -- hit the page cap; may be incomplete
+        -- unread separates "we could not read this house" from "this house has no
+        -- cleaning". Both leave last_clean_date NULL, but only one of them is an
+        -- answer; merging them is how a throttled scan gets misread as a portfolio
+        -- with no carpet cleaning. `error` carries the text for either case.
+        unread          INTEGER NOT NULL DEFAULT 0,
+        error           TEXT,
+        scanned_at      TEXT,
+        UNIQUE (user_id, year, property_id)
+    )""")
+
+    # Which Breezeway property tag defines the set of houses to scan ("the STR
+    # section"), per user. Stored rather than hardcoded because the tag can be
+    # renamed in Breezeway, and a hardcoded name silently scans nothing when it is.
+    cur.execute("""CREATE TABLE IF NOT EXISTS carpet_scan_prefs (
+        user_id    INTEGER PRIMARY KEY,
+        tag_id     TEXT,
+        tag_name   TEXT,
+        updated_at TEXT
+    )""")
+
+    # Which properties carry that tag. Resolving this can cost one API call per
+    # property, so it is cached and shared across users — tag membership is a fact
+    # about Breezeway, not about who asked, and nothing here is user-visible except
+    # through the carpet page itself.
+    cur.execute("""CREATE TABLE IF NOT EXISTS carpet_tag_members (
+        tag_id        TEXT NOT NULL,
+        property_id   TEXT NOT NULL,
+        property_name TEXT,
+        resolved_at   TEXT,
+        PRIMARY KEY (tag_id, property_id)
+    )""")
+
     # Every write this app makes to Breezeway, attempted or successful.
     #
     # Breezeway's own task history/audit/activity endpoints all 404, so nothing

@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+{% block title %}Carpet Cleaning {{ year }} — North Lake Dispatch{% endblock %}
+{% block content %}
+
+<style>
+  .cs-wrap    { max-width: 1150px; margin: 0 auto; }
+  .cs-table   { width:100%; border-collapse:collapse; font-size:0.85rem; }
+  .cs-table th{ text-align:left; font-size:0.68rem; text-transform:uppercase;
+                letter-spacing:0.05em; color:#6b7280; font-weight:700;
+                padding:8px 10px; border-bottom:1px solid #e5e7eb; white-space:nowrap;
+                cursor:pointer; user-select:none; }
+  .cs-table th:hover { color:#4f46e5; }
+  .cs-table td{ padding:9px 10px; border-bottom:1px solid #f3f4f6; vertical-align:top; }
+  .cs-table tr:hover td { background:#fafafa; }
+  .cs-date    { font-variant-numeric: tabular-nums; font-weight:700; color:#111827; }
+  .cs-house   { font-weight:600; color:#111827; }
+  .cs-sub     { font-size:0.72rem; color:#9ca3af; margin-top:2px; }
+  .pill       { display:inline-block; padding:2px 8px; border-radius:999px;
+                font-size:0.68rem; font-weight:700; white-space:nowrap; }
+  .pill-none  { background:#fef3c7; color:#92400e; }
+  .pill-wait  { background:#f3f4f6; color:#6b7280; }
+  .pill-err   { background:#fee2e2; color:#991b1b; }
+  .cs-bar     { height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden; }
+  .cs-bar > i { display:block; height:100%; background:#4f46e5; width:0; transition:width .3s; }
+  .cs-btn     { padding:7px 14px; border-radius:8px; font-size:0.83rem; font-weight:600;
+                cursor:pointer; border:1px solid transparent; text-decoration:none;
+                display:inline-block; }
+  .cs-btn-p   { background:#4f46e5; color:#fff; }
+  .cs-btn-p:hover:not(:disabled) { background:#4338ca; }
+  .cs-btn-s   { background:#fff; color:#374151; border-color:#e5e7eb; }
+  .cs-btn-s:hover:not(:disabled) { background:#f3f4f6; }
+  .cs-btn-d   { background:#fff; color:#b91c1c; border-color:#fecaca; }
+  .cs-btn-d:hover:not(:disabled) { background:#fef2f2; }
+  .cs-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .cs-stat    { font-size:1.4rem; font-weight:800; color:#111827; line-height:1; }
+  .cs-statlbl { font-size:0.68rem; color:#6b7280; text-transform:uppercase;
+                letter-spacing:0.05em; font-weight:700; margin-top:4px; }
+  .cs-card    { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; }
+  .cs-priv    { background:#f5f3ff; border:1px solid #ddd6fe; color:#5b21b6;
+                border-radius:8px; padding:8px 12px; font-size:0.75rem; }
+</style>
+
+<div class="cs-wrap">
+
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px;">
+    <div>
+      <h1 style="font-size:1.5rem; font-weight:800; color:#111827;">Carpet Cleaning — {{ year }}</h1>
+      <p style="color:#6b7280; font-size:0.85rem; margin-top:4px;">
+        Last <strong>completed</strong> Breezeway task with “carpet clean” in the title,
+        for every house tagged <strong>{{ tag_name }}</strong>. {{ year }} only —
+        an earlier cleaning is not shown.
+      </p>
+    </div>
+    <a href="/carpet-log" style="font-size:0.8rem; color:#4f46e5; font-weight:600; white-space:nowrap;">Carpet Log →</a>
+  </div>
+
+  <div class="cs-priv" style="margin:12px 0;">
+    Private to your login. These results are saved against your account only — no one
+    else sees this page’s data, and it isn’t linked from the menu.
+  </div>
+
+  <!-- Setup: pick the tag / build the house list -->
+  <div class="cs-card" id="setupCard" style="margin:16px 0; {% if tag_chosen and rows %}display:none;{% endif %}">
+    <div style="font-weight:700; color:#111827; margin-bottom:4px;">Which houses?</div>
+    <p style="font-size:0.8rem; color:#6b7280; margin-bottom:12px;">
+      Every property carrying this Breezeway property tag gets checked. Reload the list
+      whenever houses are added to or removed from the tag.
+    </p>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="tagInput" list="tagList" value="{{ tag_name }}"
+             style="padding:7px 10px; border:1px solid #e5e7eb; border-radius:8px;
+                    font-size:0.85rem; min-width:200px;">
+      <datalist id="tagList"></datalist>
+      <button class="cs-btn cs-btn-p" id="btnTag">Load houses from tag</button>
+      <span id="tagMsg" style="font-size:0.78rem; color:#6b7280;"></span>
+    </div>
+  </div>
+
+  <!-- Summary + controls -->
+  <div class="cs-card" style="margin:16px 0;">
+    <div style="display:flex; gap:28px; flex-wrap:wrap; align-items:center;">
+      <div><div class="cs-stat" id="statCleaned">—</div><div class="cs-statlbl">Cleaned in {{ year }}</div></div>
+      <div><div class="cs-stat" id="statNone">—</div><div class="cs-statlbl">No {{ year }} clean</div></div>
+      <div><div class="cs-stat" id="statPending">—</div><div class="cs-statlbl">Not scanned</div></div>
+      <div><div class="cs-stat" id="statErr">—</div><div class="cs-statlbl">Couldn’t read</div></div>
+
+      <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="cs-btn cs-btn-p" id="btnScan">Scan remaining</button>
+        <button class="cs-btn cs-btn-s" id="btnStop" style="display:none;">Stop</button>
+        <a class="cs-btn cs-btn-s" id="btnCsv" href="/carpet/export.csv">Download CSV</a>
+        <button class="cs-btn cs-btn-s" id="btnSetup" title="Change the tag or reload the house list">Houses…</button>
+        <button class="cs-btn cs-btn-s" id="btnRetryErr" title="Re-read only the houses that failed">Retry failed</button>
+        <button class="cs-btn cs-btn-s" id="btnReset" title="Clear results and re-read every house">Rescan all</button>
+        <button class="cs-btn cs-btn-d" id="btnDelete" title="Delete everything this page has saved for you">Delete saved data</button>
+      </div>
+    </div>
+
+    <div id="progWrap" style="margin-top:14px; display:none;">
+      <div class="cs-bar"><i id="progBar"></i></div>
+      <div id="progMsg" style="font-size:0.75rem; color:#6b7280; margin-top:6px;"></div>
+    </div>
+
+    <div id="banner" style="display:none; margin-top:14px; padding:10px 12px; border-radius:8px;
+                            font-size:0.8rem; line-height:1.5;"></div>
+  </div>
+
+  <div class="cs-card" style="padding:0; overflow:hidden;">
+    <table class="cs-table">
+      <thead>
+        <tr>
+          <th style="width:28%;" data-sort="house">House</th>
+          <th style="width:13%;" data-sort="date">Last cleaned ▾</th>
+          <th style="width:17%;">Cleaned by</th>
+          <th style="width:7%;">Times</th>
+          <th style="width:35%;">Task / notes</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="emptyMsg" style="padding:24px; text-align:center; color:#9ca3af; font-size:0.85rem;"></div>
+  </div>
+
+  <p style="font-size:0.72rem; color:#9ca3af; margin:12px 0 40px;">
+    Results are cached, so opening this page costs no Breezeway calls. Scanning runs in
+    batches and each house is saved as it finishes — if a scan times out, nothing already
+    found is lost and “Scan remaining” picks up where it stopped.
+  </p>
+</div>
+
+<script>
+const YEAR = {{ year }};
+let ROWS = {{ rows | tojson }};
+let scanning = false, stopRequested = false;
+let sortMode = "list";
+
+const $  = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+function bannerShow(kind, html) {
+  const b = $("#banner");
+  const c = { err:  ["#fef2f2", "#991b1b", "#fecaca"],
+              warn: ["#fffbeb", "#92400e", "#fde68a"],
+              ok:   ["#f0fdf4", "#166534", "#bbf7d0"] }[kind];
+  b.style.display = "block";
+  b.style.background = c[0]; b.style.color = c[1]; b.style.border = "1px solid " + c[2];
+  b.innerHTML = html;
+}
+function bannerHide() { $("#banner").style.display = "none"; }
+
+function sorted() {
+  const rows = [...ROWS];
+  if (sortMode === "house") {
+    rows.sort((a, b) => (a.house_name || "").localeCompare(b.house_name || ""));
+  } else if (sortMode === "date") {
+    // Oldest cleaning first — that is the "who is overdue" order. Houses with no
+    // cleaning at all sort ahead of every date, because they need it most.
+    rows.sort((a, b) => (a.last_clean_date || "0000").localeCompare(b.last_clean_date || "0000"));
+  }
+  return rows;
+}
+
+function render() {
+  let cleaned = 0, none = 0, pending = 0, err = 0;
+  const html = [];
+
+  for (const r of sorted()) {
+    let dateCell, countCell = "", noteCell = "", whoCell = "";
+
+    // Links out to Breezeway so any row can be checked at the source. The calendar
+    // is available for every house; the task link only where we captured an id.
+    const calLink = r.property_id
+      ? ` <a href="https://app.breezeway.io/property/${encodeURIComponent(r.property_id)}/calendar"
+             target="_blank" rel="noopener" title="Open this house's calendar in Breezeway"
+             style="text-decoration:none;">📅</a>`
+      : "";
+
+    // A house that failed to read is NOT a house without a cleaning — the two are
+    // shown differently on purpose, so a bad scan can never read as "never done".
+    if (!r.scanned) {
+      pending++;
+      dateCell = `<span class="pill pill-wait">not scanned</span>`;
+    } else if (r.last_clean_date) {
+      cleaned++;
+      // The date doubles as the link to the task it came from, so the evidence for
+      // this row is one click away.
+      dateCell  = r.task_id
+        ? `<a class="cs-date" href="https://app.breezeway.io/task/${encodeURIComponent(r.task_id)}"
+              target="_blank" rel="noopener" title="Open this task in Breezeway"
+              >${esc(r.last_clean_date)} ↗</a>`
+        : `<span class="cs-date">${esc(r.last_clean_date)}</span>`;
+      countCell = r.clean_count > 1 ? `${r.clean_count}×` : "1×";
+      // "unassigned" is the answer for a completed task with nobody on it. Leaving
+      // the cell blank would read as "we didn't check".
+      whoCell   = r.assignees
+        ? `<span style="color:#374151;">${esc(r.assignees)}</span>`
+        : `<span style="color:#9ca3af; font-style:italic;">unassigned</span>`;
+      noteCell  = r.task_title ? `<span style="color:#374151;">${esc(r.task_title)}</span>` : "";
+      if (r.task_status) noteCell += ` <span style="color:#9ca3af;">(${esc(r.task_status)})</span>`;
+      if (r.error) noteCell += `<div class="cs-sub" style="color:#b45309;">${esc(r.error)}</div>`;
+    } else if (r.unread) {
+      // Counted as "couldn't read" ONLY. A house we failed to read is not a house
+      // with no cleaning — putting it in both totals double-counts it, and putting
+      // it in "no clean" turns a throttled scan into a false answer.
+      err++;
+      dateCell = `<span class="pill pill-err">couldn’t read</span>`;
+      noteCell = `<span style="color:#991b1b;">${esc(r.error)}</span>`;
+    } else {
+      none++;
+      dateCell = `<span class="pill pill-none">none in ${YEAR}</span>`;
+      noteCell = r.error
+        ? `<span style="color:#b45309;">${esc(r.error)}</span>`
+        : `<span style="color:#9ca3af;">no completed carpet clean found</span>`;
+    }
+    if (r.truncated) {
+      noteCell += `<div class="cs-sub" style="color:#b45309;">
+        hit the page limit — there may be older tasks this scan did not read</div>`;
+    }
+
+    html.push(`<tr>
+      <td><div class="cs-house">${esc(r.house_name)}${calLink}</div></td>
+      <td>${dateCell}</td><td>${whoCell}</td><td>${countCell}</td>
+      <td>${noteCell}</td></tr>`);
+  }
+
+  $("#rows").innerHTML = html.join("");
+  $("#emptyMsg").style.display = ROWS.length ? "none" : "block";
+  $("#emptyMsg").textContent = ROWS.length ? "" :
+    "No houses loaded yet — pick the tag above and press “Load houses from tag”.";
+
+  $("#statCleaned").textContent = cleaned;
+  $("#statNone").textContent    = none;
+  $("#statPending").textContent = pending;
+  $("#statErr").textContent     = err;
+  $("#btnScan").textContent     = pending ? `Scan remaining (${pending})` : "All houses scanned";
+  $("#btnScan").disabled        = scanning || pending === 0;
+  $("#btnCsv").style.opacity    = ROWS.length ? "1" : ".5";
+  return pending;
+}
+
+function mergeRows(newRows) {
+  const byId = new Map(ROWS.map(r => [String(r.property_id), r]));
+  for (const nr of newRows) {
+    const id = String(nr.property_id);
+    byId.set(id, { ...(byId.get(id) || {}), ...nr });
+  }
+  ROWS = ROWS.map(r => byId.get(String(r.property_id)) || r);
+}
+
+async function scanLoop() {
+  scanning = true; stopRequested = false;
+  bannerHide();
+  $("#progWrap").style.display = "block";
+  $("#btnStop").style.display  = "inline-block";
+  render();
+
+  while (!stopRequested) {
+    let res, data;
+    try {
+      res  = await fetch("/carpet/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10 }),
+      });
+      data = await res.json();
+    } catch (e) {
+      // A dropped or timed-out batch is expected, not exceptional: whatever
+      // finished is already committed server-side, so offer to carry on.
+      finishScan();
+      bannerShow("warn",
+        `<strong>The scan stopped early.</strong> ${esc(e)}<br>
+         Everything already found has been saved — press <em>Scan remaining</em> to continue.`);
+      return;
+    }
+
+    if (!res.ok || data.error) {
+      finishScan();
+      bannerShow("err",
+        `<strong>Scan failed.</strong> ${esc(data.error || ("HTTP " + res.status))}<br>
+         ${data.remaining ?? "?"} house(s) still unread — press <em>Scan remaining</em> to retry.`);
+      return;
+    }
+
+    mergeRows(data.rows || []);
+    const pct = data.total ? Math.round((data.scanned / data.total) * 100) : 0;
+    $("#progBar").style.width = pct + "%";
+    $("#progMsg").textContent =
+      `${data.scanned} of ${data.total} houses read · ${data.remaining} to go · last batch ${data.elapsed_s}s`;
+    render();
+
+    if (data.done || data.remaining === 0) {
+      finishScan();
+      bannerShow("ok", `<strong>Done.</strong> All ${data.total} houses read for ${YEAR}. You can download the CSV.`);
+      return;
+    }
+  }
+  finishScan();
+  bannerShow("warn", `<strong>Stopped.</strong> Progress is saved — press <em>Scan remaining</em> to finish.`);
+}
+
+function finishScan() {
+  scanning = false;
+  $("#btnStop").style.display = "none";
+  render();
+}
+
+// ── Tag / house list ────────────────────────────────────────────────────────
+async function loadTagOptions() {
+  try {
+    const res  = await fetch("/carpet/tags");
+    const data = await res.json();
+    if (!res.ok) return;
+    $("#tagList").innerHTML = (data.tags || [])
+      .map(t => `<option value="${esc(t.name)}">`).join("");
+  } catch (e) { /* the picker is a convenience; typing the name still works */ }
+}
+
+$("#btnTag").onclick = async () => {
+  const btn = $("#btnTag");
+  btn.disabled = true;
+  $("#tagMsg").textContent = "Reading Breezeway…";
+  try {
+    const res  = await fetch("/carpet/tag", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag_name: $("#tagInput").value.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) { $("#tagMsg").textContent = ""; bannerShow("err", esc(data.error || "Failed")); return; }
+    $("#tagMsg").textContent = `${data.count} houses.`;
+    bannerShow("ok", `<strong>${data.count} houses</strong> carry the “${esc(data.tag_name)}” tag.
+                      Reloading…`);
+    setTimeout(() => location.reload(), 700);
+  } catch (e) {
+    $("#tagMsg").textContent = "";
+    bannerShow("err", `Could not load the house list: ${esc(e)}`);
+  } finally { btn.disabled = false; }
+};
+
+$("#btnSetup").onclick = () => {
+  const c = $("#setupCard");
+  c.style.display = c.style.display === "none" ? "block" : "none";
+};
+
+// ── Buttons ─────────────────────────────────────────────────────────────────
+$("#btnScan").onclick = () => { if (!scanning) scanLoop(); };
+$("#btnStop").onclick = () => { stopRequested = true; $("#btnStop").disabled = true;
+                                setTimeout(() => $("#btnStop").disabled = false, 500); };
+
+async function resetThen(scope, confirmMsg) {
+  if (scanning) return;
+  if (!confirm(confirmMsg)) return;
+  const res  = await fetch("/carpet/reset", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope }),
+  });
+  const data = await res.json();
+  if (!res.ok) { bannerShow("err", esc(data.error || "Reset failed")); return; }
+  for (const r of ROWS) {
+    if (scope === "all" || r.unread) {
+      Object.assign(r, { scanned: false, last_clean_date: null, error: null, unread: 0,
+                         clean_count: 0, task_title: null, task_status: null, truncated: 0 });
+    }
+  }
+  render();
+  scanLoop();
+}
+
+$("#btnReset").onclick    = () => resetThen("all",
+  `Clear all saved results for ${YEAR} and re-read every house from Breezeway?`);
+$("#btnRetryErr").onclick = () => resetThen("errors",
+  "Re-read only the houses that could not be read?");
+
+$("#btnDelete").onclick = async () => {
+  if (scanning) return;
+  if (!confirm("Delete everything this page has saved for you — all results and the "
+             + "house list choice?\n\nDownload the CSV first if you want a copy. "
+             + "Nothing in Breezeway is touched.")) return;
+  const res  = await fetch("/carpet/delete", { method: "POST",
+                            headers: { "Content-Type": "application/json" }, body: "{}" });
+  const data = await res.json();
+  if (!res.ok) { bannerShow("err", esc(data.error || "Delete failed")); return; }
+  bannerShow("ok", `<strong>Deleted.</strong> ${data.deleted} saved row(s) removed.`);
+  setTimeout(() => location.reload(), 800);
+};
+
+document.querySelectorAll("th[data-sort]").forEach(th => {
+  th.onclick = () => {
+    sortMode = (sortMode === th.dataset.sort) ? "list" : th.dataset.sort;
+    document.querySelectorAll("th[data-sort]").forEach(o =>
+      o.textContent = o.textContent.replace(/ ▾$/, ""));
+    if (sortMode !== "list") th.textContent += " ▾";
+    render();
+  };
+});
+
+loadTagOptions();
+const pendingAtLoad = render();
+if (ROWS.length && pendingAtLoad === ROWS.length) {
+  bannerShow("warn",
+    `<strong>Nothing scanned yet.</strong> Press <em>Scan remaining</em> to read ${ROWS.length} houses from Breezeway.`);
+}
+</script>
+
+{% endblock %}
