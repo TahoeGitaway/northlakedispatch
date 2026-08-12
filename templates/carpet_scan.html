@@ -195,7 +195,16 @@ function render() {
       whoCell   = r.assignees
         ? `<span style="color:#374151;">${esc(r.assignees)}</span>`
         : `<span style="color:#9ca3af; font-style:italic;">unassigned</span>`;
-      noteCell  = r.task_title ? `<span style="color:#374151;">${esc(r.task_title)}</span>` : "";
+      // The title links to the task as well. The date already does, but the title is
+      // where the eye goes when someone wants to open the task it names — a link only
+      // on the date reads as "no link to the task" to anyone scanning this column.
+      noteCell  = r.task_title
+        ? (r.task_id
+            ? `<a href="https://app.breezeway.io/task/${encodeURIComponent(r.task_id)}"
+                  target="_blank" rel="noopener" title="Open this task in Breezeway"
+                  style="color:#374151;">${esc(r.task_title)} ↗</a>`
+            : `<span style="color:#374151;">${esc(r.task_title)}</span>`)
+        : "";
       if (r.task_status) noteCell += ` <span style="color:#9ca3af;">(${esc(r.task_status)})</span>`;
       if (r.error) noteCell += `<div class="cs-sub" style="color:#b45309;">${esc(r.error)}</div>`;
     } else if (r.unread) {
