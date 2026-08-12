@@ -38,6 +38,19 @@
   .cs-card    { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; }
   .cs-priv    { background:#f5f3ff; border:1px solid #ddd6fe; color:#5b21b6;
                 border-radius:8px; padding:8px 12px; font-size:0.75rem; }
+  /* Corrections: quiet until you go looking for them, so they never compete with
+     the scan's own answer for attention. */
+  .cs-x       { font-size:0.66rem; color:#9ca3af; background:none; border:none;
+                cursor:pointer; padding:0 2px; text-decoration:underline;
+                white-space:nowrap; }
+  .cs-x:hover { color:#b91c1c; }
+  .cs-note    { margin-top:3px; }
+  .cs-note-in { width:100%; font-size:0.72rem; color:#374151; padding:2px 6px;
+                border:1px solid transparent; border-radius:6px; background:transparent; }
+  .cs-note-in::placeholder { color:#d1d5db; }
+  .cs-note-in:hover  { border-color:#e5e7eb; }
+  .cs-note-in:focus  { border-color:#a5b4fc; background:#fff; outline:none; }
+  .cs-note-in.saved  { border-color:#86efac; background:#f0fdf4; }
 </style>
 
 <div class="cs-wrap">
@@ -205,6 +218,14 @@ function render() {
                   style="color:#374151;">${esc(r.task_title)} ↗</a>`
             : `<span style="color:#374151;">${esc(r.task_title)}</span>`)
         : "";
+      // "carpet clean" in a title is a broad net — it catches "Pick up carpet fan".
+      // One click says that isn't a cleaning, and the next real one takes its place.
+      if (r.task_id) {
+        noteCell += ` <button class="cs-x" data-dismiss="${esc(r.property_id)}"
+                        data-task="${esc(r.task_id)}"
+                        title="Not a carpet clean — use the previous task instead"
+                      >not a clean</button>`;
+      }
       if (r.task_status) noteCell += ` <span style="color:#9ca3af;">(${esc(r.task_status)})</span>`;
       if (r.error) noteCell += `<div class="cs-sub" style="color:#b45309;">${esc(r.error)}</div>`;
     } else if (r.unread) {
@@ -214,6 +235,12 @@ function render() {
       err++;
       dateCell = `<span class="pill pill-err">couldn’t read</span>`;
       noteCell = `<span style="color:#991b1b;">${esc(r.error)}</span>`;
+    } else if (r.needs_rescan) {
+      // Scanned before the runners-up were kept, so dismissing the top task left
+      // nothing to promote. Not "none" — we genuinely don't know yet.
+      pending++;
+      dateCell = `<span class="pill pill-wait">needs rescan</span>`;
+      noteCell = `<span style="color:#b45309;">${esc(r.error)}</span>`;
     } else {
       none++;
       dateCell = `<span class="pill pill-none">none in ${YEAR}</span>`;
@@ -225,6 +252,19 @@ function render() {
       noteCell += `<div class="cs-sub" style="color:#b45309;">
         hit the page limit — there may be older tasks this scan did not read</div>`;
     }
+
+    // Dismissals and the note are the user's own corrections, so they are shown on
+    // every row state — including a house that couldn't be read, where a note is
+    // often the only record of what was worked out by hand.
+    if (r.dismissed_count) {
+      noteCell += `<div class="cs-sub">${r.dismissed_count} task(s) dismissed as
+        not a cleaning · <button class="cs-x" data-undo="${esc(r.property_id)}"
+        >undo</button></div>`;
+    }
+    noteCell += `<div class="cs-note">
+      <input class="cs-note-in" data-note="${esc(r.property_id)}"
+             value="${esc(r.note || "")}" placeholder="add a note…">
+      </div>`;
 
     html.push(`<tr>
       <td><div class="cs-house">${esc(r.house_name)}${calLink}</div></td>
@@ -391,6 +431,75 @@ $("#btnDelete").onclick = async () => {
   bannerShow("ok", `<strong>Deleted.</strong> ${data.deleted} saved row(s) removed.`);
   setTimeout(() => location.reload(), 800);
 };
+
+// ── The user's own corrections ──────────────────────────────────────────────
+// Delegated off the table, because render() rebuilds every row and per-row
+// handlers would be lost each repaint.
+
+function rowFor(pid) { return ROWS.find(r => String(r.property_id) === String(pid)); }
+
+async function dismissTask(pid, taskId, undo) {
+  const res  = await fetch("/carpet/dismiss", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ property_id: pid, task_id: taskId, undo: !!undo }),
+  });
+  const data = await res.json();
+  if (!res.ok) { bannerShow("err", esc(data.error || "Could not save that")); return; }
+  // The server recomputes which task is shown, so the promotion rule lives in
+  // exactly one place. Take its row verbatim.
+  if (data.row) {
+    const i = ROWS.findIndex(r => String(r.property_id) === String(pid));
+    // REPLACE, not merge, when the house went back to unscanned — a merge would
+    // leave the old date and title behind and the row would still show the task
+    // that was just dismissed.
+    if (i >= 0) ROWS[i] = data.rescan_needed ? data.row : { ...ROWS[i], ...data.row };
+  }
+  render();
+  if (data.rescan_needed && !scanning) {
+    bannerShow("warn",
+      `<strong>Dismissed.</strong> That house was scanned before this page kept the
+       runners-up, so there's nothing to put in its place yet — press
+       <em>Scan remaining</em> to re-read just that one house.`);
+  }
+}
+
+$("#rows").addEventListener("click", (e) => {
+  const dis = e.target.closest("[data-dismiss]");
+  if (dis) { dismissTask(dis.dataset.dismiss, dis.dataset.task, false); return; }
+  const undo = e.target.closest("[data-undo]");
+  if (undo) {
+    // Undo restores everything dismissed on that house — one house rarely has
+    // more than one, and a per-task undo list would be more UI than it is worth.
+    const r = rowFor(undo.dataset.undo);
+    const ids = (r && r.dismissed_ids) || [];
+    (async () => {
+      for (const id of ids) await dismissTask(undo.dataset.undo, id, true);
+    })();
+  }
+});
+
+// Notes save on blur and on Enter, not per keystroke — one write per edit.
+async function saveNote(input) {
+  const pid = input.dataset.note;
+  const r   = rowFor(pid);
+  if (r && (r.note || "") === input.value.trim()) return;   // nothing changed
+  const res = await fetch("/carpet/note", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ property_id: pid, note: input.value }),
+  });
+  const data = await res.json();
+  if (!res.ok) { bannerShow("err", esc(data.error || "Could not save the note")); return; }
+  if (r) r.note = data.note;
+  input.classList.add("saved");
+  setTimeout(() => input.classList.remove("saved"), 900);
+}
+
+$("#rows").addEventListener("blur", (e) => {
+  if (e.target.matches("[data-note]")) saveNote(e.target);
+}, true);
+$("#rows").addEventListener("keydown", (e) => {
+  if (e.target.matches("[data-note]") && e.key === "Enter") e.target.blur();
+});
 
 document.querySelectorAll("th[data-sort]").forEach(th => {
   th.onclick = () => {

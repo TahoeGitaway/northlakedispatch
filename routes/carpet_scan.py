@@ -46,6 +46,7 @@ Endpoints:
 
 import csv
 import io
+import json
 import re
 import time
 from datetime import date, datetime
@@ -108,6 +109,23 @@ CARPET_RE = re.compile(r"carpe?[tr]", re.I)
 # here: a department named "Carpet Cleaning" would exclude the very tasks this page
 # exists to find. Matching the department, never the title.
 HOUSEKEEPING_RE = re.compile(r"housekeep", re.I)
+
+
+def _no_token_error():
+    """Why there is no token, in Breezeway's own words.
+
+    _get_breezeway_token() returns None for several different reasons, and this
+    page used to report all of them as "check BREEZEWAY_CLIENT_ID / SECRET on the
+    host". That reads as a configuration fault, so the obvious response is to go
+    hunting through environment variables — when the actual cause is usually that
+    auth is rate-limited and the only fix is to wait. briefing.py already records
+    the real reason for exactly this purpose; ask it instead of guessing.
+    """
+    from routes.briefing import _get_bw_token_last_error
+    why = (_get_bw_token_last_error() or "").strip()
+    return f"No Breezeway token — {why}" if why else (
+        "No Breezeway token, and no reason recorded. Check BREEZEWAY_CLIENT_ID / "
+        "BREEZEWAY_CLIENT_SECRET on the host.")
 
 
 def _dept_of(t):
@@ -422,6 +440,16 @@ def _scan_house(token, pid, ref_id, year):
     hits.sort(reverse=True)
     row = {"clean_count": len(hits), "truncated": 1 if truncated else 0,
            "unread": 0, "error": ""}
+    # Keep ALL of them, not just the winner. CARPET_RE is deliberately broad, so
+    # the top hit is sometimes not a cleaning at all ("Pick up carpet fan"); when
+    # it gets dismissed, the next one has to be available without re-reading the
+    # house. They are already in hand here — throwing them away just to fetch them
+    # again later is the expensive way to be wrong.
+    row["hits_json"] = json.dumps([
+        {"date": d, "title": title, "status": status, "note": note,
+         "task_id": tid, "assignees": who}
+        for d, title, status, note, tid, who in hits
+    ])
     if hits:
         d, title, status, note, tid, who = hits[0]
         row.update(last_clean_date=d, task_title=title, task_status=status,
@@ -502,7 +530,7 @@ def _load_results(year):
     cur.execute("""
         SELECT property_id, house_name, last_clean_date, task_id, task_title,
                task_status, assignees, clean_count, truncated, unread, error,
-               scanned_at
+               scanned_at, hits_json
         FROM carpet_last_clean WHERE user_id = %s AND year = %s
     """, (_uid(), year))
     rows = {str(r["property_id"]): dict(r) for r in cur.fetchall()}
@@ -516,26 +544,123 @@ def _save_result(year, pid, house, row):
         INSERT INTO carpet_last_clean
             (user_id, year, property_id, house_name, last_clean_date, task_id,
              task_title, task_status, assignees, clean_count, truncated, unread,
-             error, scanned_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             error, scanned_at, hits_json)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (user_id, year, property_id) DO UPDATE SET
             house_name=EXCLUDED.house_name, last_clean_date=EXCLUDED.last_clean_date,
             task_id=EXCLUDED.task_id, task_title=EXCLUDED.task_title,
             task_status=EXCLUDED.task_status, assignees=EXCLUDED.assignees,
             clean_count=EXCLUDED.clean_count, truncated=EXCLUDED.truncated,
-            unread=EXCLUDED.unread, error=EXCLUDED.error, scanned_at=EXCLUDED.scanned_at
+            unread=EXCLUDED.unread, error=EXCLUDED.error, scanned_at=EXCLUDED.scanned_at,
+            hits_json=EXCLUDED.hits_json
     """, (_uid(), year, str(pid), house, row.get("last_clean_date"),
           row.get("task_id"), row.get("task_title"), row.get("task_status"),
           row.get("assignees"), row.get("clean_count", 0),
           row.get("truncated", 0), row.get("unread", 0), row.get("error") or None,
-          datetime.utcnow().isoformat()))
+          datetime.utcnow().isoformat(), row.get("hits_json")))
     conn.commit(); cur.close(); conn.close()
 
 
-def _view_rows(year, members, results):
-    """Every house in the tag, cached result attached if we have one. A house with
-    no row yet is 'not scanned', which the page must not confuse with 'no cleaning
-    found'."""
+# ── The user's own corrections ───────────────────────────────────────────────
+#
+# Kept apart from the scan cache so Retry failed / Rescan all cannot destroy them.
+# A note is the only thing on this page a person actually wrote; a dismissal is a
+# judgement the scan cannot make for itself.
+
+def _load_edits(year):
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("""SELECT property_id, note, dismissed FROM carpet_row_edits
+                   WHERE user_id = %s AND year = %s""", (_uid(), year))
+    out = {}
+    for r in cur.fetchall():
+        try:
+            dismissed = json.loads(r["dismissed"] or "[]")
+        except Exception:
+            dismissed = []
+        out[str(r["property_id"])] = {
+            "note": r["note"] or "",
+            "dismissed": [str(t) for t in dismissed if str(t)],
+        }
+    cur.close(); conn.close()
+    return out
+
+
+def _save_edit(year, pid, note=None, dismissed=None):
+    """Upsert one house's note and/or dismissal list. Passing None leaves that
+    field as it was, so saving a note can't silently drop dismissals."""
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("""SELECT note, dismissed FROM carpet_row_edits
+                   WHERE user_id = %s AND year = %s AND property_id = %s""",
+                (_uid(), year, str(pid)))
+    cur_row = cur.fetchone()
+    if note is None:
+        note = (cur_row["note"] if cur_row else "") or ""
+    if dismissed is None:
+        dismissed = (cur_row["dismissed"] if cur_row else "[]") or "[]"
+    else:
+        dismissed = json.dumps(sorted({str(t) for t in dismissed if str(t)}))
+    cur.execute("""
+        INSERT INTO carpet_row_edits (user_id, year, property_id, note, dismissed, updated_at)
+        VALUES (%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (user_id, year, property_id) DO UPDATE SET
+            note=EXCLUDED.note, dismissed=EXCLUDED.dismissed, updated_at=EXCLUDED.updated_at
+    """, (_uid(), year, str(pid), note, dismissed, datetime.utcnow().isoformat()))
+    conn.commit(); cur.close(); conn.close()
+    return {"note": note, "dismissed": json.loads(dismissed)}
+
+
+def _apply_edit(row, edit):
+    """Fold one house's note + dismissals into its scanned row.
+
+    Dismissing the top task promotes the next-most-recent surviving one, so the
+    house shows its real last cleaning rather than dropping to "none". A row
+    scanned before hits were stored has nothing to promote — it says so and asks
+    for a rescan, because guessing "none" there would be inventing an answer."""
+    if not edit:
+        return row
+    row = dict(row)
+    row["note"] = edit.get("note") or ""
+    dismissed = set(edit.get("dismissed") or [])
+    row["dismissed_ids"] = sorted(dismissed)
+    if not dismissed or row.get("unread"):
+        return row
+
+    try:
+        hits = json.loads(row.get("hits_json") or "[]")
+    except Exception:
+        hits = []
+    kept = [h for h in hits if str(h.get("task_id") or "") not in dismissed]
+    row["dismissed_count"] = len(hits) - len(kept)
+
+    if not hits and str(row.get("task_id") or "") in dismissed:
+        # Pre-upgrade row: we know the shown task is wrong but not what came before
+        # it. Clear the answer — leaving the dismissed task's date on display would
+        # ignore the correction, and calling it "none" would invent one.
+        row["needs_rescan"] = True
+        row.update(last_clean_date=None, task_title=None, task_status=None,
+                   task_id=None, assignees=None, clean_count=0)
+        row["error"] = "dismissed — rescan this house to find the cleaning before it"
+        return row
+
+    row["clean_count"] = len(kept)
+    if kept:
+        top = kept[0]
+        row.update(last_clean_date=top.get("date"), task_title=top.get("title"),
+                   task_status=top.get("status"), task_id=top.get("task_id"),
+                   assignees=top.get("assignees"))
+        row["error"] = top.get("note") or ""
+    else:
+        row.update(last_clean_date=None, task_title=None, task_status=None,
+                   task_id=None, assignees=None)
+        row["error"] = "every carpet task here was dismissed as not a cleaning"
+    return row
+
+
+def _view_rows(year, members, results, edits=None):
+    """Every house in the tag, cached result attached if we have one, with the
+    user's note/dismissals folded in. A house with no row yet is 'not scanned',
+    which the page must not confuse with 'no cleaning found'."""
+    edits = edits if edits is not None else _load_edits(year)
     out = []
     for m in members:
         pid = str(m["property_id"])
@@ -545,7 +670,9 @@ def _view_rows(year, members, results):
         else:
             r = {"property_id": pid, "house_name": m["property_name"],
                  "scanned": False, "clean_count": 0}
-        out.append(r)
+        # A note belongs to the house, so it shows even on a house that has not
+        # been scanned yet or could not be read.
+        out.append(_apply_edit(r, edits.get(pid)))
     return out
 
 
@@ -575,8 +702,7 @@ def carpet_tags():
     from routes.briefing import _get_breezeway_token
     token = _get_breezeway_token()
     if not token:
-        return jsonify({"error": "No Breezeway token — check BREEZEWAY_CLIENT_ID / "
-                                 "BREEZEWAY_CLIENT_SECRET on the host."}), 502
+        return jsonify({"error": _no_token_error()}), 502
     tags, err = _fetch_tag_list(token)
     if err:
         return jsonify({"error": f"Could not read property tags: {err}"}), 502
@@ -594,8 +720,7 @@ def carpet_set_tag():
 
     token = _get_breezeway_token()
     if not token:
-        return jsonify({"error": "No Breezeway token — check BREEZEWAY_CLIENT_ID / "
-                                 "BREEZEWAY_CLIENT_SECRET on the host."}), 502
+        return jsonify({"error": _no_token_error()}), 502
 
     tags, err = _fetch_tag_list(token)
     if err:
@@ -646,8 +771,7 @@ def carpet_scan():
 
     token = _get_breezeway_token()
     if not token:
-        return jsonify({"error": "No Breezeway token — check BREEZEWAY_CLIENT_ID / "
-                                 "BREEZEWAY_CLIENT_SECRET on the host.",
+        return jsonify({"error": _no_token_error(),
                         "remaining": len(pending)}), 502
 
     ref_cache = _get_live_ref_cache() or {}
@@ -700,7 +824,8 @@ def carpet_export():
     w = csv.writer(buf)
     w.writerow(["House", "Breezeway property ID", f"Last carpet clean ({CARPET_YEAR})",
                 "Cleaned by", f"Cleans in {CARPET_YEAR}", "Task title", "Task status",
-                "Result", "Notes", "Calendar link", "Task link", "Checked at (UTC)"])
+                "Result", "Notes", "My note", "Dismissed tasks",
+                "Calendar link", "Task link", "Checked at (UTC)"])
     for r in rows:
         # "Result" states plainly what a blank date means, so the spreadsheet can
         # never be read as "no cleaning" for a house that was never actually read.
@@ -727,7 +852,11 @@ def carpet_export():
             r.get("house_name", ""), pid_s,
             r.get("last_clean_date") or "", who, r.get("clean_count") or 0,
             r.get("task_title") or "", r.get("task_status") or "",
-            result, note, cal_link, task_link, r.get("scanned_at") or "",
+            result, note, r.get("note") or "",
+            # Named plainly so the spreadsheet says the number shown was corrected
+            # by hand — otherwise a dismissal is invisible outside the app.
+            len(r.get("dismissed_ids") or []) or "",
+            cal_link, task_link, r.get("scanned_at") or "",
         ])
 
     stamp = datetime.utcnow().strftime("%Y%m%d")
@@ -773,5 +902,75 @@ def carpet_delete():
     cur.execute("DELETE FROM carpet_last_clean WHERE user_id = %s", (_uid(),))
     removed = cur.rowcount
     cur.execute("DELETE FROM carpet_scan_prefs WHERE user_id = %s", (_uid(),))
+    # Notes and dismissals go too. This is the one button that means "forget all
+    # of it" — leaving hand-written notes behind would resurrect them against a
+    # fresh scan, attached to houses the user thought they had cleared.
+    cur.execute("DELETE FROM carpet_row_edits WHERE user_id = %s", (_uid(),))
     conn.commit(); cur.close(); conn.close()
     return jsonify({"success": True, "deleted": removed})
+
+
+@carpet_scan_bp.route("/carpet/note", methods=["POST"])
+@login_required
+def carpet_note():
+    """Save (or clear) the free-text note on one house. Survives every rescan."""
+    body = request.json or {}
+    pid  = str(body.get("property_id") or "").strip()
+    if not pid:
+        return jsonify({"error": "property_id is required"}), 400
+    note = str(body.get("note") or "").strip()[:1000]
+    edit = _save_edit(CARPET_YEAR, pid, note=note)
+    return jsonify({"success": True, "property_id": pid, **edit})
+
+
+@carpet_scan_bp.route("/carpet/dismiss", methods=["POST"])
+@login_required
+def carpet_dismiss():
+    """Mark a task as "not really a carpet clean" — or put it back.
+
+    The next surviving task for that house is promoted in its place, so the row
+    keeps showing a real cleaning date instead of collapsing to "none". Nothing is
+    sent to Breezeway: the task is untouched there, this only changes what this
+    page counts."""
+    body = request.json or {}
+    pid  = str(body.get("property_id") or "").strip()
+    tid  = str(body.get("task_id") or "").strip()
+    if not pid or not tid:
+        return jsonify({"error": "property_id and task_id are required"}), 400
+
+    edits   = _load_edits(CARPET_YEAR)
+    current = set((edits.get(pid) or {}).get("dismissed") or [])
+    if body.get("undo"):
+        current.discard(tid)
+    else:
+        current.add(tid)
+    _save_edit(CARPET_YEAR, pid, dismissed=current)
+
+    # Hand back the recomputed row so the page can repaint just this one without
+    # reloading — and without the client duplicating the promotion rule.
+    results = _load_results(CARPET_YEAR)
+    row     = results.get(pid)
+    if not row:
+        return jsonify({"success": True, "property_id": pid, "row": None})
+
+    # Scanned before the runners-up were stored, so there is nothing to promote in
+    # place of the task just dismissed. Drop the cached row: that makes this one
+    # house pending again, so "Scan remaining" re-reads it (a single house, not a
+    # rescan of 293) and the dismissal — which lives in its own table — applies to
+    # the fresh result. Leaving a stale row here would strand the house showing an
+    # answer the user has already rejected.
+    if not row.get("hits_json") and not body.get("undo"):
+        conn = get_db(); cur = get_cursor(conn)
+        cur.execute("""DELETE FROM carpet_last_clean
+                       WHERE user_id = %s AND year = %s AND property_id = %s""",
+                    (_uid(), CARPET_YEAR, pid))
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"success": True, "property_id": pid, "rescan_needed": True,
+                        "row": {"property_id": pid, "house_name": row.get("house_name"),
+                                "scanned": False, "clean_count": 0,
+                                "note": (_load_edits(CARPET_YEAR).get(pid) or {}).get("note", ""),
+                                "dismissed_ids": sorted(current)}})
+
+    row = dict(row); row["scanned"] = True
+    return jsonify({"success": True, "property_id": pid,
+                    "row": _apply_edit(row, _load_edits(CARPET_YEAR).get(pid))})

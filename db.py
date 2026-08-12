@@ -532,6 +532,32 @@ def init_db():
         PRIMARY KEY (tag_id, property_id)
     )""")
 
+    # Every qualifying carpet task found for a house that year, newest first, as
+    # JSON. The scan already reads them all to pick the most recent; keeping the
+    # runners-up is what lets a wrong task be dismissed and the next real cleaning
+    # take its place WITHOUT re-reading the house from Breezeway. Rows written
+    # before this column existed simply have NULL, and are asked to rescan rather
+    # than being reported as houses with no cleaning.
+    cur.execute("ALTER TABLE carpet_last_clean ADD COLUMN IF NOT EXISTS hits_json TEXT")
+
+    # The user's own corrections to the scan: a free-text note per house, and the
+    # ids of tasks dismissed as "not really a carpet clean" (the title regex is
+    # deliberately broad, so it catches things like "Pick up carpet fan").
+    #
+    # A SEPARATE table from carpet_last_clean on purpose. That one is a cache and
+    # gets deleted wholesale by Retry failed / Rescan all; these are the only rows
+    # on this page a human actually authored, and a rescan must never wipe them.
+    cur.execute("""CREATE TABLE IF NOT EXISTS carpet_row_edits (
+        user_id     INTEGER NOT NULL,
+        year        INTEGER NOT NULL,
+        property_id TEXT    NOT NULL,
+        note        TEXT,
+        -- JSON array of dismissed Breezeway task ids.
+        dismissed   TEXT,
+        updated_at  TEXT,
+        PRIMARY KEY (user_id, year, property_id)
+    )""")
+
     # Every write this app makes to Breezeway, attempted or successful.
     #
     # Breezeway's own task history/audit/activity endpoints all 404, so nothing
