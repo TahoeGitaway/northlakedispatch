@@ -32,6 +32,12 @@
     // Never print it: 598 is informally used elsewhere for "network read timeout",
     // which is close to the opposite of what it means here, so showing it misleads
     // anyone who recognises it.
+    // Never sent: the scan's time budget expired before this property's turn. NOT
+    // a timeout — a timeout means we asked and got no answer. Conflating the two
+    // reported never-sent requests as slow responses, and made the API log (which
+    // only records requests actually sent) look wrong when it was right.
+    'unreached': { label: "not reached before the scan ran out of time",
+                   short: 'not reached (ran out of time)', retry: true, noCode: true },
     '598':     { label: "held back by this app to avoid piling on",
                  short: 'held back by the app', retry: true, noCode: true },
   };
@@ -71,8 +77,9 @@
     // Breezeway never sent — that number is ours and means we didn't ask at all.
     var breakdown = entries.map(function (e) {
       var i = info(e[0]);
-      if (e[0] === 'timeout') return e[1] + ' timed out';
-      if (i.noCode)           return e[1] + ' held back by this app';
+      if (e[0] === 'timeout')   return e[1] + ' timed out';
+      if (e[0] === 'unreached') return e[1] + ' not reached in time';
+      if (i.noCode)             return e[1] + ' held back by this app';
       return e[1] + ' refused (HTTP ' + e[0] + ')';
     }).join(', ');
     return {
@@ -93,8 +100,9 @@
       ? info(entries[0][0]).short
       : entries.map(function (e) {
           var i = info(e[0]);
-          if (e[0] === 'timeout') return e[1] + ' timed out';
-          if (i.noCode)           return e[1] + ' held back';
+          if (e[0] === 'timeout')   return e[1] + ' timed out';
+          if (e[0] === 'unreached') return e[1] + ' not reached';
+          if (i.noCode)             return e[1] + ' held back';
           return e[1] + ' × HTTP ' + e[0];
         }).join(', ');
     return { text: text, retry: retry };

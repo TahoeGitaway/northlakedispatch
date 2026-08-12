@@ -1478,7 +1478,13 @@ def bw_import():
                     unreached += 1
                     nfail += 1
                     refs.append(ref_id)
-                    tally["timeout"] = tally.get("timeout", 0) + 1
+                    # Its OWN bucket. These properties were never asked — the budget
+                    # expired first — so they never reached the network and cannot
+                    # appear in the API log. Filing them as timeouts made the panel
+                    # report "205 did not respond within 15 s" for requests that were
+                    # never sent, which is why the log showed 74 timeouts ever while
+                    # the UI claimed hundreds.
+                    tally["unreached"] = tally.get("unreached", 0) + 1
         if unreached:
             current_app.logger.warning(
                 "[bw-import] %s: budget reached, %d properties not reached",
@@ -1880,7 +1886,7 @@ def route_discrepancies():
         for fut, ref_id in futures.items():
             if not fut.done():
                 fut.cancel()
-                _note_failure(ref_id, None)
+                _note_failure(ref_id, "unreached")   # never asked, not slow
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
 
