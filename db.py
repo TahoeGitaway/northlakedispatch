@@ -558,6 +558,61 @@ def init_db():
         PRIMARY KEY (user_id, year, property_id)
     )""")
 
+    # ── Lease Program overnight cache ─────────────────────────────
+    #
+    # One row per lease per direction. The Lease Program page costs TWO Breezeway
+    # calls per lease (the 30-day task window, plus the hot-tub tag), on top of the
+    # reservation sweep — so opening it mid-day used to fan out the whole thing live
+    # against an API that is already refusing about one call in twenty. This table is
+    # what the 4:30am job fills so the page can be read without touching Breezeway.
+    #
+    # Keyed by (mode, property, anchor_date) rather than by the span the user typed:
+    # the span is a query, the lease is the unit of work. Keying by lease means an
+    # arbitrary From/To picks up whatever rows overlap it, and a lease already
+    # fetched for one span is never fetched again for another.
+    #
+    # tasks_ok / hot_tub_ok are the retry ledger, and they are separate because the
+    # two calls fail independently — a 429 on the tag lookup must not throw away the
+    # task window that came back fine. FALSE means "asked, refused" and marks the row
+    # for the next catch-up run; the payload columns keep whatever WAS read, so each
+    # retry starts from the last good state instead of from nothing. Storing a
+    # partial result as if it were complete is the one thing this must never do: an
+    # empty task list is indistinguishable from a lease with no prep work, and
+    # persisting it would hide missing prep for the whole day.
+    cur.execute("""CREATE TABLE IF NOT EXISTS saved_lease_scans (
+        mode         TEXT NOT NULL,          -- 'pre' (arrivals) | 'post' (departures)
+        property_id  TEXT NOT NULL,          -- Breezeway property id
+        anchor_date  TEXT NOT NULL,          -- YYYY-MM-DD: checkin (pre) / checkout (post)
+        -- Denormalised so reading the page needs nothing but this table. Resolving
+        -- a name otherwise means warming the shared property cache, which is a
+        -- Breezeway call — small, but it turns "served from cache" into a lie on
+        -- the first page open after a restart.
+        property_name TEXT,
+        reservation  TEXT,                   -- raw Breezeway reservation, JSON
+        tasks        TEXT,                   -- formatted task list, JSON; NULL = never read
+        tasks_ok     BOOLEAN NOT NULL DEFAULT FALSE,
+        tasks_error  TEXT,
+        has_hot_tub  BOOLEAN,                -- NULL = not known yet
+        hot_tub_ok   BOOLEAN NOT NULL DEFAULT FALSE,
+        scanned_at   TEXT,
+        PRIMARY KEY (mode, property_id, anchor_date)
+    )""")
+
+    # How far the overnight sweep has actually covered, per direction.
+    #
+    # Without this the page cannot tell "no leases arrive in this span" from "the
+    # reservation sweep was throttled and wrote nothing" — the first is an answer,
+    # the second is a blank screen dressed up as one. resv_ok FALSE keeps the page on
+    # the live path and keeps the date span in the retry job's sights.
+    cur.execute("""CREATE TABLE IF NOT EXISTS lease_scan_state (
+        mode       TEXT PRIMARY KEY,
+        span_from  TEXT,
+        span_to    TEXT,
+        resv_ok    BOOLEAN NOT NULL DEFAULT FALSE,
+        last_error TEXT,
+        updated_at TEXT
+    )""")
+
     # Every write this app makes to Breezeway, attempted or successful.
     #
     # Breezeway's own task history/audit/activity endpoints all 404, so nothing

@@ -218,7 +218,67 @@ def _scheduled_day_summaries_retry():
             app.logger.exception("[day-summaries:retry] failed")
 
 
+def _log_lease_scan_run(tag, res):
+    app.logger.info("[lease-scans%s:%s] saved=%d skipped=%d errors=%d pending=%d",
+                    tag, res.get("mode", "?"), len(res.get("saved", [])),
+                    len(res.get("skipped", [])), len(res.get("errors", [])),
+                    len(res.get("pending", [])))
+    for line in res.get("skipped", []) + res.get("errors", []):
+        app.logger.warning("[lease-scans%s:%s] %s", tag, res.get("mode", "?"), line)
+
+
+def _scheduled_lease_scans():
+    """Fill the Lease Program cache for the next 30 days, both directions.
+
+    This page is the most expensive read in the app per house — two Breezeway
+    calls per lease on top of the reservation sweep — so it is the one that most
+    needs doing while nobody is waiting. Runs at 4:30, ahead of the day-summary
+    job at 5:30, so the two aren't bidding for the same rate budget."""
+    with app.app_context():
+        for mode in ("pre", "post"):
+            try:
+                from routes.lease_prep import refresh_lease_scans
+                _log_lease_scan_run("", refresh_lease_scans(mode=mode))
+            except Exception:
+                app.logger.exception("[lease-scans:%s] refresh failed", mode)
+
+
+def _scheduled_lease_scans_retry():
+    """Keep after the leases the overnight run could not read.
+
+    Breezeway refuses a share of every large sweep, and a lease left unread shows
+    on the page as a house with no prep work — the one wrong answer that looks
+    like a right one. So the catch-ups run through the day, each re-reading only
+    what is still missing and keeping everything already fetched. Once the span is
+    complete this costs two SQL queries and no API calls.
+
+    Spread over the day rather than clustered: unlike a day summary, a lease's
+    task list keeps changing, so a late run also picks up prep booked this
+    morning for an arrival three weeks out."""
+    with app.app_context():
+        for mode in ("pre", "post"):
+            try:
+                from routes.lease_prep import refresh_lease_scans
+                res = refresh_lease_scans(mode=mode, only_missing=True)
+                if res.get("saved") or res.get("pending"):
+                    _log_lease_scan_run(":retry", res)
+            except Exception:
+                app.logger.exception("[lease-scans:retry:%s] failed", mode)
+
+
 scheduler = BackgroundScheduler(timezone="America/Los_Angeles")
+scheduler.add_job(
+    _scheduled_lease_scans,
+    CronTrigger(hour=4, minute=30, timezone="America/Los_Angeles"),
+    id="lease_scans_refresh",
+    replace_existing=True,
+)
+scheduler.add_job(
+    _scheduled_lease_scans_retry,
+    CronTrigger(hour="7,9,12,15", minute=10, timezone="America/Los_Angeles"),
+    id="lease_scans_retry",
+    replace_existing=True,
+)
 scheduler.add_job(
     _scheduled_day_summaries,
     CronTrigger(hour=5, minute=30, timezone="America/Los_Angeles"),
