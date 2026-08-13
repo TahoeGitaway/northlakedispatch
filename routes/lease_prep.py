@@ -924,7 +924,8 @@ def _parse_span(payload: dict) -> tuple:
     return (end, start) if end < start else (start, end)
 
 
-def _serve_from_cache(mode: str, start: date, end: date, topped_up: int = 0):
+def _serve_from_cache(mode: str, start: date, end: date, topped_up: int = 0,
+                      partial: bool = False):
     """Build the page response out of stored rows — no Breezeway calls.
 
     The `cache` block is what keeps this honest. A page served from a cache that
@@ -949,6 +950,10 @@ def _serve_from_cache(mode: str, start: date, end: date, topped_up: int = 0):
             "unread":     sum(1 for r in results if r["unread"]),
             "stale":      sum(1 for r in results if r["stale"]),
             "topped_up":  topped_up,
+            # True when the sweep has not covered this whole span yet, so the
+            # list itself may be short a lease — a different worry from a lease
+            # that is present but unread, and the page says so separately.
+            "partial":    partial,
             "houses":     [r["property"] for r in incomplete][:20],
         },
     })
@@ -976,9 +981,16 @@ def _lease_prep_scan_inner(mode="pre"):
     # The page asks with cache_only on load, so opening it can never itself start
     # a live sweep — an instant page or an untouched one, never a five-minute
     # wait nobody asked for. The Scan button is what authorises going live.
+    #
+    # Short of a fully swept span, whatever leases ARE stored still go up, flagged
+    # as partial. Holding them back until the span is perfect is how a page ends
+    # up blank on the morning after a half-finished sweep — the very case where
+    # seeing eleven of thirteen leases immediately is worth most.
     if payload.get("cache_only") and not (force or _span_is_covered(mode, start, end)):
-        return jsonify({"needs_scan": True,
-                        "range": {"from": start.isoformat(), "to": end.isoformat()}})
+        if not _read_cached_leases(mode, start, end):
+            return jsonify({"needs_scan": True,
+                            "range": {"from": start.isoformat(), "to": end.isoformat()}})
+        return _serve_from_cache(mode, start, end, partial=True)
 
     if not force and _span_is_covered(mode, start, end):
         rows = _read_cached_leases(mode, start, end)

@@ -451,14 +451,24 @@ function renderCacheBanner(cache) {
   }
   if (cache.topped_up)
     bits.push(`Filled in ${cache.topped_up} house${cache.topped_up === 1 ? '' : 's'} on this open.`);
+  // Distinct from "N houses unread": this says the LIST may be short a lease,
+  // not that a listed lease is missing its tasks.
+  if (cache.partial)
+    bits.push(`<span style="color:#b45309;">The overnight sweep hasn't covered this
+      whole span yet, so a lease could still be missing from this list — press
+      <b>Scan</b> to read the span in full.</span>`);
   if (cache.warning)
     bits.push(`<span style="color:#b45309;">${esc(cache.warning)}</span>`);
 
-  if (missing) {
+  // Amber for either kind of gap — a listed lease missing its tasks, or the list
+  // itself possibly being short one. The retry button only appears for the first:
+  // it re-reads known houses, so it cannot find a lease nobody has swept for.
+  if (missing || cache.partial) {
     box.style.cssText = 'background:#fffbeb;border:1px solid #fde68a;';
     box.innerHTML = `
       <div style="font-size:0.8rem;color:#92400e;">
         ${bits.join(' ')}
+        ${missing ? `
         <div style="margin-top:6px;">
           <strong>${missing} of ${cache.total} house${cache.total === 1 ? '' : 's'} not fully read
           ${cache.unread ? `(${cache.unread} never read${cache.stale ? `, ${cache.stale} showing an older read` : ''})` : ''}</strong>
@@ -468,7 +478,7 @@ function renderCacheBanner(cache) {
         <button type="button" onclick="retryMissing()" id="retryBtn"
                 style="margin-top:8px;padding:5px 12px;font-size:0.75rem;font-weight:700;border-radius:8px;background:#b45309;color:#fff;border:none;cursor:pointer;">
           Retry unread houses now
-        </button>
+        </button>` : ''}
       </div>`;
   } else {
     box.style.cssText = 'background:#f0fdf4;border:1px solid #bbf7d0;';

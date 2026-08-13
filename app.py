@@ -4,7 +4,7 @@ All route logic lives in routes/ and db.py.
 """
 
 import os
-from datetime import timedelta
+from datetime import timedelta, timezone as _tz, datetime as _dt
 
 from flask import Flask
 from flask_login import LoginManager
@@ -266,7 +266,42 @@ def _scheduled_lease_scans_retry():
                 app.logger.exception("[lease-scans:retry:%s] failed", mode)
 
 
+def _seed_lease_scans_if_empty():
+    """Fill the lease cache shortly after boot, if today's span isn't covered.
+
+    Without this the page stays blank until the next 4:30 run — so a deploy at
+    ten in the morning means a whole day of the very live scan this replaced.
+    Skips immediately when the span is already covered, which is the normal case
+    for a restart, so redeploys don't re-sweep. Delayed a couple of minutes to
+    stay clear of boot, when the first page loads are competing for the API."""
+    from datetime import date as _date
+    with app.app_context():
+        for mode in ("pre", "post"):
+            try:
+                from routes.lease_prep import (refresh_lease_scans, _span_is_covered,
+                                               WINDOW_DAYS)
+                today = _date.today()
+                if _span_is_covered(mode, today, today + timedelta(days=WINDOW_DAYS)):
+                    continue
+                app.logger.info("[lease-scans:seed:%s] cache cold — filling now", mode)
+                _log_lease_scan_run(":seed", refresh_lease_scans(mode=mode))
+            except Exception:
+                app.logger.exception("[lease-scans:seed:%s] failed", mode)
+
+
 scheduler = BackgroundScheduler(timezone="America/Los_Angeles")
+# One shot, two minutes after boot — long enough to be clear of startup, short
+# enough that a mid-morning deploy has a usable page before anyone notices.
+#
+# Deliberately timezone-AWARE. This scheduler runs on Pacific, and the server
+# clock is UTC: a naive now() would be read as a Pacific wall-clock time and the
+# seed would sit unfired for the seven hours between them.
+scheduler.add_job(
+    _seed_lease_scans_if_empty,
+    "date", run_date=_dt.now(_tz.utc) + timedelta(minutes=2),
+    id="lease_scans_seed",
+    replace_existing=True,
+)
 scheduler.add_job(
     _scheduled_lease_scans,
     CronTrigger(hour=4, minute=30, timezone="America/Los_Angeles"),
