@@ -820,6 +820,15 @@ async function runBwImport() {
       // defaulted it to TODAY, and a route planned for another day got saved and
       // synced to the wrong date. Failures change the message, nothing else.
       let retryCount = 0;
+      // The day's check-in list didn't load, so NO stop got a Check-in tick — not
+      // because none of these houses has an arrival, but because the question was
+      // never answered. Untreated, that is indistinguishable from a correct import
+      // of a day with no check-ins, which is how it went unnoticed.
+      if (data.arrival_error) {
+        msg  += ` ⚠ Check-in ticks are missing: couldn't read the day's arrivals`
+              + ` (${data.arrival_error}). Set them by hand or re-import.`;
+        color = "red";
+      }
       if (data.failed_properties) {
         const f = bwFailureCause(data);
         // Offer to retry just the ones that failed. A full re-import spends ~442
