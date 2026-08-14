@@ -320,7 +320,7 @@ def group_assign_scan():
 def _scan_inner():
     from routes.briefing import (_fetch_bw_endpoint, _ensure_property_cache,
                                  _get_live_property_cache, _get_live_ref_cache,
-                                 _get_property_name, _fetch_breezeway_checkins,
+                                 _get_property_name, _fetch_breezeway_checkins_status,
                                  _classify_reservation, _fetch_bw_reservations)
     from routes.dispatch import _bw_task_title, _title_has_pci
 
@@ -446,8 +446,13 @@ def _scan_inner():
     arrival_pids = set()
     arrival_counts = {"guest": 0, "owner": 0, "lease": 0}
     seen_resv = set()
+    # A short list here empties the Check-ins section and drops the CHECK-IN badge off
+    # every task — the page still looks complete, just wrong. Keep the reason so the
+    # batcher can say the check-in split is unreliable instead of implying nobody is
+    # arriving today.
+    _checkin_rows, arrival_error = _fetch_breezeway_checkins_status(date_str)
     try:
-        for r in _fetch_breezeway_checkins(date_str):
+        for r in _checkin_rows:
             kind = _classify_reservation(r)
             if kind == "block":
                 continue
@@ -460,8 +465,8 @@ def _scan_inner():
             if apid is not None:
                 arrival_pids.add(str(apid))
             arrival_counts[kind] = arrival_counts.get(kind, 0) + 1
-    except Exception:
-        pass
+    except Exception as ex:
+        arrival_error = arrival_error or f"{type(ex).__name__}: {ex}"
 
     # Occupancy: what's in each house STRICTLY mid-stay on the selected day
     # (checkin < D < checkout) — i.e. present that night, not arriving or departing
@@ -594,6 +599,9 @@ def _scan_inner():
         "arrival_counts":   arrival_counts,                 # {guest, owner, lease} — ALL arrivals that day
         "arrival_total":    sum(arrival_counts.values()),   # total check-in reservations that day
         "arriving_houses":  len(arrival_pids),              # distinct houses with an arrival (any type)
+        # Why the three numbers above (and every CHECK-IN badge) may be wrong, or ""
+        # when the day's check-in list read cleanly.
+        "arrival_error":    arrival_error,
     }
     # Cache before returning — so even if the proxy already timed out, the retry
     # gets this result instantly instead of re-running the whole sweep. But only

@@ -162,21 +162,38 @@ def _get_breezeway_token() -> str | None:
 
 _bw_resv_last_error: str = ""   # last error from _fetch_bw_reservations, for degradation signaling
 
+# How long to wait on ONE page of reservations. Deliberately longer than the 15 s
+# the per-property task sweep uses, because the two are not the same situation:
+#
+#   * The task sweep fans 442 calls across 16 workers under a wall-clock budget.
+#     There, a longer timeout means each worker holds its slot longer and FEWER
+#     properties get attempted — which is why 4dfbb29 put it back to 15 s.
+#   * Reservations paginate SEQUENTIALLY, one call at a time, no pool and no gate
+#     slot. Nothing is starved by waiting longer here.
+#
+# And the reservation endpoint is genuinely slow rather than refusing: the API log
+# shows pages returning 200 at 13355 / 14457 / 14888 ms with one ReadTimeout at
+# 15203 ms. Those are answers that arrived, discarded ~100 ms short. 25 s clears
+# the observed spread with room, and still returns long before the proxy gives up.
+BW_RESV_READ_TIMEOUT_S = 25
+
 
 def _get_bw_resv_last_error() -> str:
     """Return (and represents) the last error _fetch_bw_reservations swallowed, if any."""
     return _bw_resv_last_error
 
 
-def _fetch_bw_reservations(token: str, params: dict) -> list:
-    """Paginate through all Breezeway reservations matching params.
+def _fetch_bw_reservations_status(token: str, params: dict) -> tuple:
+    """Paginate reservations, returning (results, error).
 
-    Note: a mid-pagination failure returns the pages fetched so far. Callers that
-    need to know the result may be partial should check _get_bw_resv_last_error()
-    immediately after — it is set to a non-empty string when this call errored.
+    `error` is "" when the whole set was read, and a human-readable reason when it
+    was not — in which case `results` holds only the pages that did arrive.
+
+    Prefer this over _fetch_bw_reservations anywhere a MISSING reservation changes
+    what the user is told. Absence is not evidence here: a house with no reservation
+    in the list and a house whose page never loaded look identical, so a caller that
+    can't see the difference reports a real check-in as no check-in at all.
     """
-    global _bw_resv_last_error
-    _bw_resv_last_error = ""
     all_results = []
     page, limit = 1, 100
     try:
@@ -185,8 +202,15 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
                 "https://api.breezeway.io/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
                 params={**params, "limit": limit, "page": page},
-                timeout=15,
+                timeout=BW_RESV_READ_TIMEOUT_S,
             )
+            # A refused or errored page is NOT an empty page. Its body still parses
+            # as JSON, just without "results" — which then reads as "that was the
+            # last page" and returns a truncated set that looks complete. This is
+            # the same trap _fetch_bw_reservations_checked was written to avoid.
+            if not resp.ok:
+                return all_results, (f"Breezeway returned HTTP {resp.status_code} on "
+                                     f"page {page} of the reservation list")
             data = resp.json()
             page_results = (data.get("results", data.get("data", [])) or []) \
                            if isinstance(data, dict) else (data or [])
@@ -195,12 +219,28 @@ def _fetch_bw_reservations(token: str, params: dict) -> list:
                 break
             page += 1
     except Exception as ex:
-        # Don't silently swallow: record the failure so callers can flag partial data.
-        _bw_resv_last_error = str(ex) or ex.__class__.__name__
+        detail = str(ex) or ex.__class__.__name__
         try:
-            print(f"[briefing] _fetch_bw_reservations partial/failed after page {page}: {ex}")
+            print(f"[briefing] reservations partial/failed after page {page}: {ex}")
         except Exception:
             pass
+        return all_results, (f"Breezeway did not answer page {page} of the reservation "
+                             f"list within {BW_RESV_READ_TIMEOUT_S} s ({detail})")
+    return all_results, ""
+
+
+def _fetch_bw_reservations(token: str, params: dict) -> list:
+    """Paginate through all Breezeway reservations matching params.
+
+    Note: a mid-pagination failure returns the pages fetched so far. Callers that
+    need to know the result may be partial should check _get_bw_resv_last_error()
+    immediately after — it is set to a non-empty string when this call errored.
+    New callers should prefer _fetch_bw_reservations_status, which hands back the
+    same reason directly instead of leaving it on a module global.
+    """
+    global _bw_resv_last_error
+    all_results, err = _fetch_bw_reservations_status(token, params)
+    _bw_resv_last_error = err
     return all_results
 
 
@@ -507,13 +547,30 @@ def _get_property_address(property_id) -> str:
     return _property_addr_cache.get(property_id, "")
 
 
-def _fetch_breezeway_checkins(date_str: str) -> list:
+def _fetch_breezeway_checkins_status(date_str: str) -> tuple:
+    """The day's check-in reservations as (results, error).
+
+    This is the arrival signal: every "is this house a check-in today?" flag in the
+    app is derived from it. When it comes back short, EVERY house silently reads as
+    a non-arrival — a route full of check-ins renders as ordinary stops with nothing
+    on screen to say the question was never answered. Callers must surface `error`
+    rather than treat an empty list as "no arrivals today".
+
+    The no-token path matters as much as the timeout: it returns before any HTTP
+    request, so it leaves no row in the API log and is invisible to anyone reading
+    that table trying to work out where the arrivals went.
+    """
     token = _get_breezeway_token()
     if not token:
-        return []
-    return _fetch_bw_reservations(token, {
+        return [], (_get_bw_token_last_error()
+                    or "Could not authenticate with Breezeway")
+    return _fetch_bw_reservations_status(token, {
         "checkin_date_ge": date_str, "checkin_date_le": date_str,
     })
+
+
+def _fetch_breezeway_checkins(date_str: str) -> list:
+    return _fetch_breezeway_checkins_status(date_str)[0]
 
 
 def _fetch_breezeway_checkouts(date_str: str) -> list:

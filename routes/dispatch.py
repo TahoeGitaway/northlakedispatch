@@ -1526,11 +1526,15 @@ def bw_import():
     # Name matching is strict (exact/word-substring/keyword only) — an
     # unrecognized home is left unmatched rather than guessed.
     from routes.briefing import (
-        _fetch_breezeway_checkins, _classify_reservation, _get_property_name
+        _fetch_breezeway_checkins_status, _classify_reservation, _get_property_name
     )
     checkin_db_names = set()
     checkin_pids     = set()   # authoritative Breezeway property_ids that have an arrival
-    for r in _fetch_breezeway_checkins(date_str):
+    # If this list came back short, every imported stop is flagged "not a check-in"
+    # and the route looks complete and wrong. The reason rides along in the response
+    # so the import panel can say the arrival flags are unreliable.
+    _checkin_rows, arrival_error = _fetch_breezeway_checkins_status(date_str)
+    for r in _checkin_rows:
         if _classify_reservation(r) == "block":
             continue
         # Collect the raw Breezeway property_id — the authoritative arrival signal,
@@ -1538,7 +1542,7 @@ def bw_import():
         pid = r.get("property_id") or r.get("home_id")
         if pid is not None:
             checkin_pids.add(str(pid))
-        bw_name = _get_property_name(r.get("property_id"))
+        bw_name = _get_property_name(pid)
         row = _match_local_property(bw_name, db_props)
         if row:
             checkin_db_names.add(row["Property Name"])
@@ -1643,6 +1647,7 @@ def bw_import():
             matched, uncertain, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
             by_assignee[asgn] = {"matched": matched, "uncertain": uncertain, "unmatched": unmatched}
         return jsonify({"by_assignee": by_assignee, "failed_properties": failed_props,
+                        "arrival_error": arrival_error,
                         "failure_statuses": failure_statuses})
 
     subset = _filter_by_assignee(all_results, assignees[0].lower()) if assignees else all_results
@@ -1650,9 +1655,11 @@ def bw_import():
     if not matched and not uncertain and not unmatched:
         return jsonify({"matched": [], "uncertain": [], "unmatched": [], "failed_properties": failed_props,
                         "failure_statuses": failure_statuses,
+                        "arrival_error": arrival_error,
                         "message": "No Breezeway tasks found for that date/assignee."})
     return jsonify({"matched": matched, "uncertain": uncertain, "unmatched": unmatched,
                     "failed_properties": failed_props,
+                    "arrival_error": arrival_error,
                     "failure_statuses": failure_statuses})
 
 
@@ -1937,10 +1944,14 @@ def route_discrepancies():
 
     # Which houses have a guest check-in today. Match by Breezeway property id first
     # (authoritative, spelling-proof); keep a name set for any still-unlinked house.
-    from routes.briefing import _fetch_breezeway_checkins, _classify_reservation
+    from routes.briefing import _fetch_breezeway_checkins_status, _classify_reservation
     arrival_pids, arrival_names = set(), set()
+    # Empty because nobody checks in today, or empty because the lookup failed? The
+    # two are indistinguishable downstream — every house reads as a non-arrival either
+    # way — so the reason travels with the answer and the panel says so on screen.
+    checkin_rows, arrival_error = _fetch_breezeway_checkins_status(date_str)
     try:
-        for r in _fetch_breezeway_checkins(date_str):
+        for r in checkin_rows:
             if _classify_reservation(r) == "block":
                 continue
             # Read the house id the way the import and the batcher already do.
@@ -1960,8 +1971,11 @@ def route_discrepancies():
             local = _match_local_property(_get_property_name(rpid), db_props)
             if local:
                 arrival_names.add(local["Property Name"])
-    except Exception:
-        pass
+    except Exception as ex:
+        # Reading the rows can fail on its own (a shape we don't expect), and that
+        # leaves the arrival set half-built rather than empty — which is worse, not
+        # better, because a partly-correct answer looks entirely correct.
+        arrival_error = arrival_error or f"{type(ex).__name__}: {ex}"
 
     def _canon_is_arrival(canon, pid, disp):
         if pid is not None and str(pid) in arrival_pids:
@@ -2080,6 +2094,10 @@ def route_discrepancies():
         "new_checkin": sorted(new_checkin, key=lambda x: x["property"].lower()),
         "current_tasks": current_tasks,
         "history_available": any(a["history"].get("available") for a in added),
+        # Why the arrival flags below can't be trusted, or "" when they can. Separate
+        # from failed_properties: that counts houses whose TASKS didn't load, this is
+        # the day's check-in list not loading, which mislabels every house at once.
+        "arrival_error": arrival_error,
         "failed_properties": failed_props,
         "failure_statuses": failure_statuses,
         "summary": {"added": len(added), "removed": len(removed),

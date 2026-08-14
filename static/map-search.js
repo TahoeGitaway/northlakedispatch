@@ -1942,6 +1942,21 @@ function _renderChangesHtml(d) {
   const newCheckin = (d.new_checkin || []).filter(c => _cur.has((c.property || "").toLowerCase()));
   let h = "";
 
+  // The day's check-in list didn't load. This one goes FIRST and in red, because it is
+  // worse than a missing house: every CHECK-IN badge on the route is derived from that
+  // list, so when it comes back short the whole route quietly reads "not a check-in"
+  // and looks perfectly normal. Nothing else on this panel would hint at it.
+  if (d.arrival_error) {
+    h += `<div class="mb-2 text-[11px] text-red-800 bg-red-50 border border-red-300 rounded px-2 py-1 leading-snug">`
+       + `<span class="font-bold">⚠ Check-in flags are NOT reliable.</span> `
+       + `Couldn't read today's arrivals from Breezeway, so the CHECK-IN badges below `
+       + `(and on the route) may be missing or wrong — they have been left exactly as `
+       + `they were rather than guessed at.`
+       + `<div class="text-red-600 mt-1">${_escHtml(d.arrival_error)}</div>`
+       + `<div class="text-gray-600 mt-1">Use Check again — this usually clears on a retry.</div>`
+       + `</div>`;
+  }
+
   // Loud, non-silent warning when Breezeway dropped some houses — the comparison
   // (and the auto-loaded task titles) are then incomplete, so don't trust "no changes".
   if (d.failed_properties) {
