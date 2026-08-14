@@ -1009,53 +1009,83 @@ function _titleHasPci(title) {
   return (" " + String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ").includes(" pci ");
 }
 
-// A loaded saved route stores priority_checkin from when it was saved — which can be
-// stale BOTH ways: a PCI added in Breezeway later (needs flagging), OR a flag left on
-// a walk-thru whose arrival is actually another day (needs clearing — e.g. a route
-// saved before the same-day rule existed). So whenever we have the route's LIVE
-// Breezeway tasks, the same-day rule is AUTHORITATIVE for every property that has a
-// PCI-titled task: backend `c.pci` true → flag it; false → demote it to a plain stop.
-// Properties with NO PCI task are left untouched, so manual Priority / Check-in
-// toggles on ordinary stops are preserved.
-function _flagPciFromTasks(currentTasks) {
+// Make the live Breezeway scan AUTHORITATIVE for check-in / priority-check-in flags.
+//
+// A stop's `arrival` can be wrong for reasons the route itself can't see: it was
+// saved before the arrival moved, it was added by hand with the check-in button, it
+// was worked in from a stale panel. Previously only PCI-titled houses were ever
+// reconciled and the correction was one-directional everywhere else — the sidebar
+// ORs a live arrival ON for display but never off, and never writes back. So a stop
+// flagged as a check-in when it isn't stayed that way through every re-check, and
+// this is not cosmetic: `arrival` drives the 4 PM deadline constraint in the
+// optimizer and the lunch guard, so a wrong flag bends the actual route.
+//
+// The scan answers "is this house a check-in today" from the day's reservations, so
+// for any house it actually read, FALSE is a finding rather than an absence. Those
+// houses are set to match it in both directions. Everything else is left alone:
+//
+//   * a failed arrival lookup (arrival_error) → reconcile nothing at all, or one bad
+//     fetch silently strips every check-in off the route
+//   * a house whose own task fetch failed (unverified) → not evidence of anything
+//   * a house the scan never covered → left exactly as the user left it
+function _reconcileFlagsFromScan(data) {
+  const currentTasks = data && data.current_tasks;
   if (!Array.isArray(currentTasks) || !currentTasks.length) return;
-  const wantByProp = new Map();   // propLower -> should-be-PCI (boolean)
+  // Couldn't read today's arrivals — every house would look like a non-arrival, and
+  // clearing the route on the strength of that is the failure this guards against.
+  // The panel says so in red; the flags stay untouched.
+  if (data.arrival_error) return;
+
+  const wantByProp = new Map();   // propLower -> {arrival, pci}
   for (const c of currentTasks) {
+    // Older payloads without `pci` fall back to the title rule, as before.
     const hasPciTitle = (c.tasks || []).some(t =>
       _titleHasPci(typeof t === "string" ? t : ((t && (t.name || t.task_name || t.title)) || "")));
-    if (!hasPciTitle) continue;
-    // Trust the backend `pci` flag (already requires a SAME-DAY arrival). Older
-    // payloads without the field fall back to "has PCI title" = treat as same-day.
-    const sameDay = ("pci" in c) ? !!c.pci : true;
-    wantByProp.set((c.property || "").toLowerCase(), sameDay);
+    const pci = ("pci" in c) ? !!c.pci : hasPciTitle;
+    wantByProp.set((c.property || "").toLowerCase(),
+                   { arrival: ("arrival" in c) ? (!!c.arrival || pci) : pci, pci });
+  }
+  // Houses Breezeway refused to answer for. "No task returned" and "never asked" look
+  // identical from here, so they are not reconciled — the same rule that keeps them
+  // out of the remove action.
+  for (const u of (data.unverified || [])) {
+    wantByProp.delete((u.property || "").toLowerCase());
   }
   if (!wantByProp.size) return;
 
   let changed = false;
   const allPci   = new Map();   // nameLower -> display name, for EVERY PCI stop on the route
   const promoted = new Set();   // nameLower of stops that just BECAME a PCI since save
+  const gained   = new Map();   // nameLower -> display name: became a check-in
+  const lost     = new Map();   // nameLower -> display name: was flagged, actually isn't
   const apply = s => {
-    if (!s) return;
+    if (!s || s.isLunch || s.isGap) return;
     const key  = (s.name || "").toLowerCase();
     const want = wantByProp.get(key);
-    if (want === undefined) return;                 // no PCI task here → leave as-is
-    if (want) {
-      // This stop is (or has just become) an arrive-by-noon priority check-in. Track
-      // every one on the route — an existing PCI is just as easy to overlook among a
-      // long list as a brand-new one — and flag the ones that flipped since the save.
-      if (!s.priority_checkin) {
-        promoted.add(key);
-        s.priority_checkin = true; s.arrival = true; changed = true;
-      }
-      allPci.set(key, s.name || "(unnamed stop)");
-    } else if (s.priority_checkin || s.arrival) {
-      // Stale same-day PCI flag (pre-fix save, or an arrival that has since moved to
-      // another day) → this walk-thru is for another day, so make it a plain stop.
-      s.priority_checkin = false; s.arrival = false; changed = true;
+    if (want === undefined) return;                 // not covered by this scan → leave as-is
+    if (!!s.arrival !== want.arrival) {
+      (want.arrival ? gained : lost).set(key, s.name || "(unnamed stop)");
+      s.arrival = want.arrival;
+      changed = true;
     }
+    if (!!s.priority_checkin !== want.pci) {
+      // Track PCIs that flipped on since the save — an existing PCI is just as easy
+      // to overlook in a long list, so the alert below lists them all either way.
+      if (want.pci) promoted.add(key);
+      s.priority_checkin = want.pci;
+      changed = true;
+    }
+    if (want.pci) allPci.set(key, s.name || "(unnamed stop)");
   };
   (typeof selectedStops !== "undefined" ? selectedStops : []).forEach(apply);
   (typeof optimizedSchedule !== "undefined" ? optimizedSchedule : []).forEach(apply);
+
+  // Never move a flag silently. A check-in appearing or disappearing changes when the
+  // stop has to be finished, so it has to be visible as an event, not just a badge
+  // that quietly looks different from a moment ago.
+  if (gained.size || lost.size) {
+    _rcFlagNotice([...gained.values()], [...lost.values()]);
+  }
 
   // Repaint only when a flag actually moved, but ALERT whenever the route carries any
   // PCI — so existing priority check-ins are surfaced on reopen, not just new ones.
@@ -1072,6 +1102,21 @@ function _flagPciFromTasks(currentTasks) {
   if (allPci.size) {
     _alertPciStops([...allPci.entries()].map(([key, name]) => ({ name, isNew: promoted.has(key) })));
   }
+}
+
+// Name the stops whose check-in status just changed. A badge that quietly differs from
+// how it looked a moment ago is not something anyone re-reads a saved route to catch,
+// and a check-in appearing or disappearing changes when that stop has to be finished.
+function _rcFlagNotice(gained, lost) {
+  const bits = [];
+  if (gained.length) bits.push(`now check-ins: ${gained.join(", ")}`);
+  if (lost.length)   bits.push(`no longer check-ins: ${lost.join(", ")}`);
+  if (!bits.length) return;
+  try { console.info("[route-changes] check-in flags reconciled —", { gained, lost }); } catch (e) {}
+  try {
+    _bwImportMsg(`Breezeway check-in flags updated — ${bits.join(" · ")}. `
+               + `Re-optimize if the timing matters.`, "amber");
+  } catch (e) { /* message box isn't on this page — the console line still carries it */ }
 }
 
 // Hard-to-miss alert listing every PRIORITY CHECK-IN (arrive-by-noon) on a reopened
@@ -1835,7 +1880,7 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
     body.innerHTML = html;
     _rcTick();
     _routeChangesCache = { routeId, html, data };
-    _flagPciFromTasks(data.current_tasks);   // a saved route's flag can be stale — re-detect PCI from live tasks
+    _reconcileFlagsFromScan(data);   // the live scan is the authority on check-in / PCI flags
     // Remember each house's Breezeway property_id from the live scan so the saved-route
     // sidebar can render 📅 calendar links (the imported-BW path fills this in separately).
     for (const c of (data.current_tasks || [])) {
