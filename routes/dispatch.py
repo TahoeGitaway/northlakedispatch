@@ -1943,9 +1943,20 @@ def route_discrepancies():
         for r in _fetch_breezeway_checkins(date_str):
             if _classify_reservation(r) == "block":
                 continue
-            rpid = r.get("property_id")
+            # Read the house id the way the import and the batcher already do.
+            # Breezeway returns it under property_id on most reservations and home_id
+            # on the rest; reading only property_id dropped that second shape, and a
+            # dropped reservation is indistinguishable from "no arrival here today" —
+            # so those houses came back flagged as ordinary stops with nothing said.
+            rpid = r.get("property_id") or r.get("home_id")
             if rpid is not None:
-                arrival_pids.add(rpid)
+                # Keyed as text on BOTH sides. properties.breezeway_property_id is a
+                # BIGINT and Breezeway's ids arrive as ints, so raw comparison happens
+                # to line up today — but this same join is written three times in the
+                # app and the other two str() it. An int/str drift here reports a real
+                # check-in as an ordinary stop, silently, which is the one outcome this
+                # set must never produce.
+                arrival_pids.add(str(rpid))
             local = _match_local_property(_get_property_name(rpid), db_props)
             if local:
                 arrival_names.add(local["Property Name"])
@@ -1953,14 +1964,11 @@ def route_discrepancies():
         pass
 
     def _canon_is_arrival(canon, pid, disp):
-        if pid is not None and pid in arrival_pids:
+        if pid is not None and str(pid) in arrival_pids:
             return True
-        if canon.startswith("pid:"):
-            try:
-                if int(canon[4:]) in arrival_pids:
-                    return True
-            except ValueError:
-                pass
+        # canon is f"pid:{breezeway_property_id}", so the tail is already the id as text.
+        if canon.startswith("pid:") and canon[4:] in arrival_pids:
+            return True
         return disp in arrival_names
 
     # ADDED — a task house that isn't on the saved route.
