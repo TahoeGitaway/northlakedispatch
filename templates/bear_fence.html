@@ -56,10 +56,18 @@
   <div id="errorBox" class="hidden rounded-xl px-5 py-4 text-red-700 text-sm mb-4"
        style="background:#fef2f2; border:1px solid #fecaca;"></div>
 
+  <!-- What the scan could NOT read. Must render ABOVE the empty state and before it:
+       this tool answers from ABSENCE, so a house that never loaded produces no
+       proposal and looks exactly like a house with nothing to fix. The server has
+       always sent failed_properties / failure_statuses / reservations_error for this
+       reason; this page used to throw all three away and print "nothing found". -->
+  <div id="warnBox" class="hidden rounded-xl px-5 py-3 text-sm mb-4 leading-snug"
+       style="background:#fffbeb; border:1px solid #fde68a; color:#b45309;"></div>
+
   <!-- Empty state -->
   <div id="emptyBox" class="hidden rounded-xl px-5 py-8 text-center text-gray-400 text-sm"
        style="background:#f9fafb; border:1px solid #e5e7eb;">
-    No Walk Thru or Arrival Hot Tub Service tasks found with a mismatched Bear Fence date.
+    <span id="emptyText">No Walk Thru or Arrival Hot Tub Service tasks found with a mismatched Bear Fence date.</span>
   </div>
 
   <!-- Table -->
@@ -124,11 +132,29 @@ function updateCount() {
   document.getElementById('applyBtn').disabled = checked === 0;
 }
 
+// Server-supplied failure text lands in innerHTML, and a requests exception carries
+// things like "HTTPSConnectionPool(host=...)" — escape rather than trust it.
+function _esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// How many properties were actually READ. scanned_properties is how many the scan
+// set out to check (one per arrival), so quoting it after a short read overstates
+// what the answer below is based on.
+function _readCount(data) {
+  return Math.max(0, (data.scanned_properties || 0) - (data.failed_properties || 0));
+}
+
 async function runScan() {
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('tableWrap').classList.add('hidden');
   document.getElementById('emptyBox').classList.add('hidden');
   document.getElementById('errorBox').classList.add('hidden');
+  // Clear the previous run's warning, or a clean scan inherits the last one's alarm.
+  document.getElementById('warnBox').classList.add('hidden');
+  document.getElementById('warnBox').innerHTML = '';
   document.getElementById('resultsBox').classList.add('hidden');
   document.getElementById('resultsBox').innerHTML = '';
 
@@ -150,8 +176,55 @@ async function runScan() {
       return;
     }
 
+    // Report what could NOT be read BEFORE reporting what was, and before the empty
+    // state. Two separate ways this scan can come back short, and each one on its own
+    // turns "nothing to change" into a guess:
+    //
+    //   reservations_error — the arrivals list itself was truncated, so the candidate
+    //                        properties were already incomplete before a single task
+    //                        was looked at.
+    //   failed_properties  — houses whose tasks didn't load. No bear fence task and
+    //                        no answer at all are indistinguishable from here.
+    //
+    // Breezeway's limit is 200 req/min and this tool does not go through the app's
+    // rate gate, so a short read is a routine outcome, not a rare one.
+    const warn = [];
+    if (data.reservations_error) {
+      warn.push(`<div>Couldn't read the full arrivals list — ${_esc(data.reservations_error)}. `
+              + `Properties whose arrival was missed were never checked at all.</div>`);
+    }
+    if (data.failed_properties && typeof bwFailureCause === 'function') {
+      const f = bwFailureCause(data);
+      warn.push(`<div>${f.text} — a mismatched Bear Fence date on those properties `
+              + `would not appear below.</div>`
+              + (f.retry
+                   ? `<div style="margin-top:3px;"><button onclick="runScan()" `
+                     + `style="text-decoration:underline;font-weight:700;color:#b45309;`
+                     + `background:none;border:none;padding:0;cursor:pointer;font:inherit;">`
+                     + `👉 Scan again</button>`
+                     + (data.scanned_properties
+                          ? ` (${_readCount(data)} of ${data.scanned_properties} properties were read.)` : '')
+                     + `</div>`
+                   : `<div style="margin-top:3px;">Scanning again won't help; this needs a fix in `
+                     + `Breezeway or the app's settings.</div>`));
+    }
+    const wb = document.getElementById('warnBox');
+    if (warn.length) { wb.innerHTML = warn.join(''); wb.classList.remove('hidden'); }
+
     proposals = data.proposals || [];
     if (proposals.length === 0) {
+      // Never say a bare "nothing found" off an incomplete scan — say what it managed
+      // to look at, so the sentence is true either way.
+      const read = _readCount(data);
+      document.getElementById('emptyText').textContent =
+        !warn.length
+          ? `No Walk Thru or Arrival Hot Tub Service tasks found with a mismatched Bear Fence date.`
+          : read === 0
+            // Nothing was read at all, so "nothing found" would be pure fiction.
+            ? `This scan couldn't read any properties, so it found nothing to report. `
+              + `That is not the same as nothing being wrong — see above.`
+            : `Nothing mismatched among the ${read} propert${read === 1 ? 'y' : 'ies'} that did load. `
+              + `The warning above lists what this scan couldn't see.`;
       document.getElementById('emptyBox').classList.remove('hidden');
       return;
     }
