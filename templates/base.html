@@ -71,9 +71,15 @@
 
             {% if current_user.is_admin %}
             <div class="w-px h-5 bg-gray-200 mx-2"></div>
-            <a href="{{ url_for('my_bot.my_bot_page') }}"
+            {# HIDDEN: My Bot. This link used to open it, and it was the only way
+               in — it now lands on Ops Bot, which is still live along with
+               Knowledge. Nothing in my_bot.py was removed: the Asana notification
+               feed below (/api/asana-notifications) lives in that same module and
+               is unaffected. To restore, point this back at my_bot.my_bot_page and
+               uncomment the My Bot tab in the three sub-navs. #}
+            <a href="{{ url_for('ops_bot.chatbot_page') }}"
                class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
-                      {% if request.endpoint in ('my_bot.my_bot_page', 'ops_bot.chatbot_page', 'admin.knowledge_list') %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
+                      {% if request.endpoint in ('ops_bot.chatbot_page', 'admin.knowledge_list') %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
                 Beta LLM Features
             </a>
             <div class="w-px h-5 bg-gray-200 mx-1"></div>

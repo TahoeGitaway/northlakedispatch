@@ -244,10 +244,15 @@
 
   <!-- Beta LLM sub-nav -->
   <div style="display:flex;gap:4px;border-bottom:1px solid #ede9fe;margin-bottom:18px;">
+    {# HIDDEN: My Bot — its own tab, dropped so that no template links here while
+       the feature is hidden. The Ops Bot and Knowledge tabs stay, so anyone who
+       reaches this page by URL still has a way out. Uncomment to restore. #}
+    {#
     <a href="{{ url_for('my_bot.my_bot_page') }}"
        style="padding:6px 14px;font-size:0.8rem;font-weight:600;border-bottom:2px solid #7c3aed;color:#7c3aed;text-decoration:none;">
       My Bot
     </a>
+    #}
     <a href="{{ url_for('ops_bot.chatbot_page') }}"
        style="padding:6px 14px;font-size:0.8rem;font-weight:500;border-bottom:2px solid transparent;color:#9ca3af;text-decoration:none;">
       Ops Bot
