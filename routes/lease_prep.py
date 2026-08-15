@@ -478,9 +478,13 @@ def _write_cached_lease(mode: str, pid: str, anchor: str,
                     -- NULL, not '[]', when this insert did not read the tasks:
                     -- an empty list is an answer ("no prep work on this lease")
                     -- and a row that has never been read must not claim one.
-                    CASE WHEN %(t_attempted)s AND %(t_ok)s THEN %(tasks)s END,
+                    CASE WHEN %(t_attempted)s AND %(t_ok)s THEN %(tasks)s::text END,
                     %(t_attempted)s AND %(t_ok)s, %(t_err)s,
-                    CASE WHEN %(h_attempted)s AND %(h_ok)s THEN %(tub)s END,
+                    -- The ::boolean is load-bearing. On the reservation-only write
+                    -- both flags are false, so the only branch Postgres sees is an
+                    -- untyped NULL — it types the whole CASE as text and rejects it
+                    -- against a boolean column, failing every write of the sweep.
+                    CASE WHEN %(h_attempted)s AND %(h_ok)s THEN %(tub)s::boolean END,
                     %(h_attempted)s AND %(h_ok)s, %(stamp)s)
             ON CONFLICT (mode, property_id, anchor_date) DO UPDATE SET
                 property_name = COALESCE(EXCLUDED.property_name, saved_lease_scans.property_name),

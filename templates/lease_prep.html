@@ -39,8 +39,13 @@
         <input type="date" id="toDate"
                class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none">
       </div>
-      <button onclick="runScan(false)"
-              class="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+      <!-- Hidden in the normal case: the page loads the overnight cache itself, so
+           a Scan button that only ever re-fetches what is already on screen is an
+           instruction to wait for nothing. It appears only for a span the sweep
+           has not covered, where a deliberate live read IS the only way to the
+           data — see showScanIfNeeded(). -->
+      <button id="scanBtn" onclick="runScan(false)"
+              class="hidden px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
         Scan
       </button>
       <button type="button" onclick="resetDates()"
@@ -513,6 +518,13 @@ async function retryMissing() {
   }
 }
 
+// The Scan button earns its place only when the cache cannot answer for the
+// chosen span — an uncovered range, or one the sweep has only half filled. Any
+// other time it re-fetches what is already on screen, slowly.
+function showScanIfNeeded(needed) {
+  document.getElementById('scanBtn').classList.toggle('hidden', !needed);
+}
+
 function renderScanPayload(data) {
   const cfg = MODE[currentMode];
   if (data.error) {
@@ -522,6 +534,7 @@ function renderScanPayload(data) {
     return;
   }
   renderCacheBanner(data.cache);
+  showScanIfNeeded(!!(data.cache && data.cache.partial));
 
   const leases = data.leases || [];
   const container = document.getElementById('results');
@@ -607,10 +620,26 @@ async function autoLoad() {
       }),
     });
     const data = await resp.json();
-    if (data && data.needs_scan) return;      // nothing cached for this span yet
+    if (data && data.needs_scan) {
+      // Nothing stored for this span. Say so and offer the one action that can
+      // help — otherwise, with Scan hidden by default, the page is just blank.
+      const eb = document.getElementById('emptyBox');
+      eb.textContent = 'Nothing cached for this span yet — press Scan to read it from Breezeway.';
+      eb.classList.remove('hidden');
+      showScanIfNeeded(true);
+      return;
+    }
     renderScanPayload(data);
-  } catch (_) { /* the Scan button still works */ }
+  } catch (_) {
+    showScanIfNeeded(true);                   // let the span be read by hand
+  }
 }
+
+// A hand-picked span is usually outside the overnight window, so re-check the
+// cache as soon as the dates change: that is what decides whether Scan is needed,
+// and it beats making someone press it to find out.
+document.getElementById('fromDate').addEventListener('change', autoLoad);
+document.getElementById('toDate').addEventListener('change', autoLoad);
 
 // Populate the default span (today → +30 days), then draw whatever is cached.
 resetDates();

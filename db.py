@@ -722,6 +722,13 @@ def init_db():
     # same-day check-in whose reservation house name didn't match. NULL = not yet linked
     # (the scan falls back to strict name matching for those, so nothing regresses).
     cur.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS breezeway_property_id BIGINT")
+    # The lease cache table was created before this column existed, and CREATE TABLE
+    # IF NOT EXISTS never revisits a table it already found. Every write to the cache
+    # was failing on the missing column, so the overnight sweep saved nothing while
+    # still recording a clean run — the Lease Program page then read an empty table
+    # as "no lease arrivals" and said so in the reassuring voice it uses for a cache
+    # hit. A page that confidently reports no work is the worst way for this to fail.
+    cur.execute("ALTER TABLE saved_lease_scans ADD COLUMN IF NOT EXISTS property_name TEXT")
 
     # Normalize smart (curly) apostrophes in property names to straight ones so
     # Breezeway names ("Bear's Lair", straight ') match the DB. One curly char
