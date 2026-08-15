@@ -2044,11 +2044,46 @@ function _rcRestoreRefreshBtn() {
   btn.textContent = (has || _routeChangesUiState.stale) ? "Check again" : "Check now";
 }
 
+/* How long until every property has been read, not how long until the next attempt.
+   Breezeway's limit is confirmed at 200/min and the gate paces to 90% of it, so the
+   remaining time is arithmetic: the wait still to serve, plus the fetching itself,
+   plus the gaps before any further passes.
+
+   The ladder below escalates (15s, 30s, 60s...), so the gaps dominate once a few
+   attempts have gone by — which is exactly why "in 34s (try 3 of 5)" was so
+   misleading. It named the smallest number on screen while the real answer was
+   minutes away. */
+function _rcEtaSeconds(remaining) {
+  if (remaining <= 0) return 0;
+  const perPass = Math.max(1, Math.floor(_BW_RATE_PER_SEC * _BW_PASS_BUDGET_S));
+  const passes  = Math.ceil(remaining / perPass);
+  let secs = _rcAuto.dueAt ? Math.max(0, (_rcAuto.dueAt - Date.now()) / 1000) : 0;
+  secs += remaining / _BW_RATE_PER_SEC;
+  for (let i = 1; i < passes; i++) {
+    secs += _RC_RETRY_DELAYS_S[Math.min(_rcAuto.attempt + i, _RC_RETRY_DELAYS_S.length - 1)];
+  }
+  return secs;
+}
+
+// Drive the "about Xm Ys left" countdown. Ticks during an in-flight attempt as well
+// as between attempts — an estimate that freezes while the app is working is exactly
+// when it looks broken.
 function _rcTick() {
-  const el = document.querySelector("[data-rc-countdown]");
+  const el = document.querySelector("[data-rc-eta]");
+  _rcSyncTick();
   if (!el) return;
-  const s = Math.max(0, Math.round((_rcAuto.dueAt - Date.now()) / 1000));
-  el.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+  const d    = _routeChangesCache.data;
+  const left = _rcEtaSeconds((d && d.failed_properties) || 0);
+  el.textContent = left > 1 ? _bwFmtDuration(left) : "a few more seconds";
+}
+
+// Run the countdown exactly when there is a countdown on screen. Tying it to the
+// rendered element rather than to the retry schedule keeps it alive across the
+// in-flight/waiting boundary, and stops it leaking once the panel is done.
+function _rcSyncTick() {
+  const wanted = !!document.querySelector("[data-rc-eta]");
+  if (wanted && !_rcAuto.tickId)  _rcAuto.tickId = setInterval(_rcTick, 1000);
+  if (!wanted && _rcAuto.tickId) { clearInterval(_rcAuto.tickId); _rcAuto.tickId = null; }
 }
 
 // Decide what happens after any check/retry result lands. Called BEFORE the
@@ -2070,13 +2105,19 @@ function _rcAutoAfterResult(routeId, data) {
   }
   if (_rcAuto.stopped) return;
   if (_rcAuto.attempt >= _RC_RETRY_DELAYS_S.length) {
-    _rcAuto.note = `Stopped after ${_RC_RETRY_DELAYS_S.length} automatic tries — Breezeway is still refusing these.`;
+    // Cause-neutral: the stall may be timeouts, or this app's own limiter declining
+    // to send, and calling either a refusal blames Breezeway for something it never
+    // did. The breakdown line above already names what actually happened.
+    _rcAuto.note = `Stopped after ${_RC_RETRY_DELAYS_S.length} automatic tries — `
+                 + `${data.failed_properties} still haven't loaded.`;
     return;
   }
   const wait = _RC_RETRY_DELAYS_S[_rcAuto.attempt] * 1000;
   _rcAuto.dueAt   = Date.now() + wait;
   _rcAuto.timerId = setTimeout(() => _rcAutoFire(routeId), wait);
-  _rcAuto.tickId  = setInterval(_rcTick, 1000);
+  // The 1s tick is NOT started here. Started alongside the schedule it died every
+  // time a request went out, so the estimate froze for the whole of each attempt —
+  // precisely when it looks broken. _rcSyncTick ties it to what is on screen.
 }
 
 function _rcAutoFire(routeId) {
@@ -2133,26 +2174,34 @@ function _rcAutoResume() {
 function _rcAutoStatusHtml(d) {
   if (_rcAuto.routeId !== currentRouteId) return "";
   const btn = (attr, label) =>
-    `<button ${attr} style="text-decoration:underline;font-weight:700;color:#b45309;background:none;`
+    `<button ${attr} style="text-decoration:underline;font-weight:700;color:inherit;background:none;`
     + `border:none;padding:0;cursor:pointer;font-size:11px;">${label}</button>`;
 
-  if (_rcAuto.inFlight) {
-    return `<div class="mt-1 text-[11px] text-amber-800">↻ Retrying the missing ${d.failed_properties} now… `
-         + `${btn("data-rc-stop", "Stop")}</div>`;
-  }
+  const total  = Number(d && d.scanned_properties) || 0;
+  const loaded = total ? Math.max(0, total - (d.failed_properties || 0)) : 0;
+  const pct    = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  // Rendered from what has LOADED so the bar only ever advances; one driven by the
+  // failure count jumps backwards whenever a pass recovers nothing.
+  const bar = total
+    ? `<div class="mt-1" style="height:3px;background:rgba(0,0,0,.10);border-radius:2px;overflow:hidden;">`
+      + `<div style="height:100%;width:${pct}%;background:currentColor;opacity:.55;transition:width .4s ease;"></div></div>`
+    : "";
+  const count = total ? `${loaded} of ${total} properties` : `${d.failed_properties} still to load`;
+
   if (_rcAuto.stopped) {
-    return `<div class="mt-1 text-[11px] text-gray-600">Automatic retries stopped`
-         + (_rcAuto.note ? ` — ${_escHtml(_rcAuto.note)}` : "")
-         + `. ${btn("data-rc-resume", "Resume")}</div>`;
-  }
-  if (_rcAuto.timerId) {
-    return `<div class="mt-1 text-[11px] text-amber-800">Retrying automatically in `
-         + `<span data-rc-countdown>…</span> `
-         + `<span class="text-gray-500">(try ${_rcAuto.attempt + 1} of ${_RC_RETRY_DELAYS_S.length})</span> `
-         + `${btn("data-rc-stop", "Stop")}</div>`;
+    return `<div class="mt-1 text-[11px] text-gray-600">${count} — paused`
+         + (_rcAuto.note ? ` (${_escHtml(_rcAuto.note)})` : "")
+         + `. ${btn("data-rc-resume", "Resume")}</div>${bar}`;
   }
   if (_rcAuto.note) {
-    return `<div class="mt-1 text-[11px] text-gray-600">${_escHtml(_rcAuto.note)}</div>`;
+    return `<div class="mt-1 text-[11px] text-gray-600">${count}. ${_escHtml(_rcAuto.note)}</div>${bar}`;
+  }
+  if (_rcAuto.inFlight || _rcAuto.timerId) {
+    // One line for both states. Whether the app is mid-request or waiting out a gap
+    // is machinery; the ETA already covers the gap, and "in 34s (try 3 of 5)" told
+    // you about the machinery while the thing you wanted to know went unsaid.
+    return `<div class="mt-1 text-[11px]">Loading ${count} — about `
+         + `<span data-rc-eta>…</span> left ${btn("data-rc-stop", "Stop")}</div>${bar}`;
   }
   return "";
 }
@@ -2265,6 +2314,10 @@ document.addEventListener("click", function (ev) {
     ev.preventDefault();
     // Hand the pending automatic attempt over to this one, or both would fire.
     _rcAutoClearTimers();
+    // A manual try costs Breezeway exactly what an automatic one does, so it spends
+    // from the same budget. Untracked, clicking repeatedly walked straight past the
+    // _RC_RETRY_DELAYS_S ceiling — it only ever counted the timer's own attempts.
+    _rcAuto.attempt++;
     _rcAuto.inFlight = true;
     // quiet: repaint in place so the warning box — and its Stop button — stay on
     // screen while the retry runs. Wiping the body to "Checking Breezeway…" took
@@ -2489,28 +2542,36 @@ function _renderChangesHtml(d) {
   // (and the auto-loaded task titles) are then incomplete, so don't trust "no changes".
   if (d.failed_properties) {
     const f = bwFailureCause(d);
-    h += `<div class="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-snug">`
-       + `${f.text} — some tasks may be missing.`
-       + (f.retry
-            // Name the button and say what it does. "Click Recheck" sent people to
-            // a full re-scan of all 442 houses, which usually just failed again.
-            // Hide the click-me button while a retry is actually running — the
-            // status line below already says "Retrying the missing N now", and
-            // showing both told you to start something that was already going.
-            // While a countdown is pending the button still shows, which is fine:
-            // clicking it just skips the wait, and nothing is in flight to
-            // contradict.
-            ? `<br>`
-              + (_rcAuto.inFlight ? ""
-                   : `<button data-retry-missing="${d.failed_properties}"`
-                     + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:#b45309;`
-                     + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
-                     + `👉 Click here to load just the missing ${d.failed_properties} now</button>`)
-              // What the automatic retrying is doing, and the button to stop it.
+    // Still working vs actually stuck. At 200 req/min a full day takes several
+    // passes by design, so a check that is mid-flight is not a fault and is no
+    // longer painted as one — amber is kept for the cases that want you. The
+    // failure breakdown moves to a quiet second line for the same reason: it is
+    // detail about work in progress, not the headline.
+    const working = f.retry && !_rcAuto.stopped && (_rcAuto.inFlight || _rcAuto.timerId);
+    const tone = working
+      ? `text-blue-700 bg-blue-50 border-blue-200`
+      : `text-amber-700 bg-amber-50 border-amber-200`;
+    h += `<div class="mb-2 text-[11px] ${tone} border rounded px-2 py-1 leading-snug">`
+       + (working
+            ? `Still reading the day's tasks — the comparison below is incomplete until it finishes.`
               + _rcAutoStatusHtml(d)
-              + `<div class="text-gray-500 mt-1">Only re-checks the ones that failed — much faster, and far less likely`
-              + ` to be throttled again. (Check again at the top re-scans all ${d.scanned_properties || "the"} properties.)</div>`
-            : ` Checking again won't help; this needs a fix in Breezeway or the app's settings.`)
+              + `<div class="text-gray-500 mt-1">${_escHtml(f.text.replace(/^⚠\s*/, ""))}.</div>`
+            // Not running: say what went wrong, and offer the button. This is the
+            // only state where a manual retry makes sense — with an attempt already
+            // scheduled or in flight, the button duplicated it, and clicking during
+            // a backoff skipped the wait that exists because Breezeway is throttling
+            // us. The panel used to show "Click here to load just the missing 8 now"
+            // directly above "Retrying automatically in 34s".
+            : `${f.text} — some tasks may be missing.`
+              + (f.retry
+                   ? `<br><button data-retry-missing="${d.failed_properties}"`
+                     + ` style="margin-top:4px;text-decoration:underline;font-weight:700;color:inherit;`
+                     + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">`
+                     + `👉 Load just the missing ${d.failed_properties} now</button>`
+                     + _rcAutoStatusHtml(d)
+                     + `<div class="text-gray-500 mt-1">Only re-checks the ones that failed — much faster, and far less likely`
+                     + ` to be throttled again. (Check again at the top re-scans all ${d.scanned_properties || "the"} properties.)</div>`
+                   : ` Checking again won't help; this needs a fix in Breezeway or the app's settings.`))
        + `</div>`;
   }
 

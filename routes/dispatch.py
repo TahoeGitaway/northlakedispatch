@@ -2115,6 +2115,13 @@ def route_discrepancies():
         # the day's check-in list not loading, which mislabels every house at once.
         "arrival_error": arrival_error,
         "failed_properties": failed_props,
+        # The denominator. failed_properties on its own told the panel only the bad
+        # half, so a check that had already read most of the day still rendered as a
+        # wall of failures with no way to see how far along it was. The panel has
+        # referenced scanned_properties for a while; it was never actually sent, so
+        # that text has been falling back to "all the properties" this whole time.
+        "scanned_properties": len(pid_candidates),
+        "loaded_properties": max(0, len(pid_candidates) - failed_props),
         "failure_statuses": failure_statuses,
         "summary": {"added": len(added), "removed": len(removed),
                     "unverified": len(unverified),
