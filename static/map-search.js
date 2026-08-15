@@ -726,6 +726,7 @@ async function runBwImport() {
   resultEl.classList.add("hidden");
   const uncertainBox = document.getElementById("bwImportUncertain");
   if (uncertainBox) { uncertainBox.innerHTML = ""; uncertainBox.classList.add("hidden"); }
+  _bwShowScanning();
 
   // Capture enough context to report a failure. A gateway timeout returns an HTML
   // error page, so res.json() throws and the real detail (status, body, how long it
@@ -836,15 +837,29 @@ async function runBwImport() {
         // calls to recover a handful, and those extra requests are what provoke
         // the throttling being retried.
         _bwLastImport = {date, assignee: assignees[0] || "", failed: data.failed_properties};
-        msg  += ` ${f.text}.`;
-        color = "amber";
-        if (f.retry) retryCount = data.failed_properties;
+        retryCount = data.failed_properties;
+        if (f.retry) {
+          // The expected shape of a first pass: the 45s budget covers ~135 of ~442
+          // properties, so the rest are simply not loaded YET. Spelling out the raw
+          // failure breakdown here reads as an incident report about the design
+          // working correctly — the progress block below says where it is and how
+          // long is left, and the breakdown stays available on the copy-details path.
+          color = "blue";
+        } else {
+          msg  += ` ${f.text}.`;   // genuinely stuck — name it in full
+          color = "amber";
+        }
         // Queue the first automatic retry. recovered=null means "first pass" —
         // nothing to compare against yet, so it starts at the prompt cadence.
         _bwAutoAfterResult(data.failed_properties, f.retry, null);
       }
+      // recovered=0: the first pass has no earlier count to difference against, so
+      // it contributes the totals but not a rate sample. The ETA falls back to the
+      // nominal 180/min until a retry pass supplies a measured one.
+      _bwNoteProgress(data, 0);
       _bwImportMsg(msg, color);
-      if (retryCount) _bwAddRetryMissingBtn(retryCount);   // must follow _bwImportMsg — it appends
+      // Must follow _bwImportMsg — that sets textContent and so wipes the controls.
+      if (retryCount) _bwAutoRepaintStatus();
       _bwShowTaskSidebar(date, data.matched || []);
       _bwRenderUncertain(date, uncertain);
       _bwPlaceMarkers();
@@ -902,6 +917,88 @@ const _BW_AUTO_BACKOFF_S  = [20, 45, 90, 120, 120];  // recovered nothing → st
 // worst case where none of them do. Both are unattended, which is the point.
 const _BW_AUTO_MAX_TRIES  = 7;
 
+/* ── HOW LONG IS THIS GOING TO TAKE ─────────────────────────────────────────
+   Breezeway's limit is confirmed at 200 req/min and the gate paces to 90% of it,
+   so throughput is no longer a mystery — it is a constant, and the time to load
+   the rest of a day is arithmetic the panel can simply show.
+
+   That matters because a full day (~442 properties) CANNOT load in one pass: at
+   ~3 properties/sec a 45s pass covers ~135 of them. A partial first result is the
+   designed outcome, not a fault. Until now the panel reported that as "245
+   properties couldn't be loaded" — describing an import that was 45% done and
+   still working as if it had failed.
+
+   Both constants mirror the server and must be changed with it:
+     _BW_RATE_PER_SEC  <- routes/bw_ratelimit.py  _BASE_INTERVAL (200/min x 0.90)
+     _BW_PASS_BUDGET_S <- routes/dispatch.py      _BW_IMPORT_BUDGET_S           */
+const _BW_RATE_PER_SEC  = 3.0;
+const _BW_PASS_BUDGET_S = 45;
+
+let _bwProgress = {
+  total:  0,   // properties in the day's sweep — fixed across passes
+  loaded: 0,   // how many have come back so far
+  rate:   0,   // measured properties/sec; 0 until a pass has been timed
+  etaAt:  0,   // wall-clock ms the whole thing should be done, for a live countdown
+};
+let _bwPassStartedAt = 0;
+
+/* Seconds to load `remaining`, including the pauses between passes. Uses the rate
+   actually observed when there is one — the nominal figure ignores the arrival
+   lookup, the DB join and the geocoding a pass also pays for, so it reads optimistic
+   against a real import. */
+function _bwEtaSeconds(remaining, ratePerSec) {
+  if (remaining <= 0) return 0;
+  const rate    = ratePerSec > 0 ? ratePerSec : _BW_RATE_PER_SEC;
+  const perPass = Math.max(1, Math.floor(rate * _BW_PASS_BUDGET_S));
+  const passes  = Math.ceil(remaining / perPass);
+  return remaining / rate + Math.max(0, passes - 1) * _BW_AUTO_PROGRESS_S;
+}
+
+function _bwFmtDuration(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return r ? `${m}m ${String(r).padStart(2, "0")}s` : `${m}m`;
+}
+
+/* The first pass blocks for up to the whole budget and there is no server-side
+   progress to stream from it — but the budget IS a known constant, so the wait can
+   be given a shape instead of a disabled button and a hidden panel. */
+function _bwShowScanning() {
+  _bwProgress      = { total: 0, loaded: 0, rate: 0,
+                       etaAt: Date.now() + _BW_PASS_BUDGET_S * 1000 };
+  _bwPassStartedAt = Date.now();
+  const el = document.getElementById("bwImportResult");
+  if (!el) return;
+  _bwImportMsg("Scanning Breezeway for the day's properties…", "blue");
+  const wrap = document.createElement("div");
+  wrap.setAttribute("data-bw-status", "");
+  wrap.innerHTML = `<div style="margin-top:5px;font-size:12px;">`
+                 + `Up to <span data-bw-eta>…</span> for this first pass.</div>`;
+  el.appendChild(wrap);
+  _bwAutoTick();
+  _bwSyncTick();
+}
+
+// Fold a finished pass into the estimate. An EMA rather than the latest reading,
+// so one slow pass doesn't make the countdown lurch.
+function _bwNoteProgress(data, recovered) {
+  const total  = Number(data && data.properties_total)  || 0;
+  const loaded = Number(data && data.properties_loaded) || 0;
+  if (total) { _bwProgress.total = total; _bwProgress.loaded = loaded; }
+  if (_bwPassStartedAt && recovered > 0) {
+    const secs = (Date.now() - _bwPassStartedAt) / 1000;
+    if (secs > 0.5) {
+      const observed = recovered / secs;
+      _bwProgress.rate = _bwProgress.rate ? (_bwProgress.rate * 0.5 + observed * 0.5) : observed;
+    }
+  }
+  const remaining = Math.max(0, _bwProgress.total - _bwProgress.loaded);
+  _bwProgress.etaAt = remaining
+    ? Date.now() + _bwEtaSeconds(remaining, _bwProgress.rate) * 1000
+    : 0;
+}
+
 let _bwAuto = {
   attempt:  0,      // automatic retries fired for this import
   stalls:   0,      // consecutive retries that recovered nothing (indexes the backoff)
@@ -910,6 +1007,15 @@ let _bwAuto = {
   dueAt:    0,
   stopped:  false,  // user pressed Stop, or we gave up
   inFlight: false,
+  // A POST to /api/bw-import is open right now. Distinct from `inFlight`, which is
+  // display state that _bwAutoHalt clears deliberately without cancelling the
+  // request it describes. Only the request's own finally clears this one.
+  requestOpen: false,
+  // Whether the outstanding failures are the kind a retry can fix (429/timeout/598
+  // yes, 401/403/404 no). The repaint needs it to decide whether to offer the manual
+  // button at all — without it, a repaint on a credentials failure offered a "try
+  // now" that bwFailureCause had already ruled out.
+  retryable: false,
   note:     "",
 };
 
@@ -925,6 +1031,7 @@ function _bwAutoReset() {
   _bwAutoClearTimers();
   _bwAuto.attempt = _bwAuto.stalls = 0;
   _bwAuto.stopped = _bwAuto.inFlight = false;
+  _bwAuto.retryable = false;
   _bwAuto.note    = "";
 }
 
@@ -936,18 +1043,25 @@ function _bwAutoHalt(note) {
   _bwAuto.note     = note || "";
 }
 
+/* Tick the "about Xm Ys left" countdown. Runs while a pass is in flight as well as
+   during the gap between passes — an estimate that freezes for the 45 seconds the
+   app is actually working is exactly when it looks broken.
+
+   Never counts to zero and sits there: if the estimate runs out while there is
+   still work, it holds at "a few more seconds" rather than claiming to be done. */
 function _bwAutoTick() {
-  const el = document.querySelector("[data-bw-countdown]");
+  const el = document.querySelector("[data-bw-eta]");
   if (!el) return;
-  const s = Math.max(0, Math.round((_bwAuto.dueAt - Date.now()) / 1000));
-  el.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+  const left = (_bwProgress.etaAt || 0) - Date.now();
+  el.textContent = left > 1000 ? _bwFmtDuration(left / 1000) : "a few more seconds";
 }
 
 /* Decide what happens after an import or retry result lands.
    `recovered` is how many properties that attempt actually pulled in — the signal
    the pacing is built on. Pass null for the first import (nothing to compare). */
 function _bwAutoAfterResult(stillFailed, retryable, recovered) {
-  _bwAuto.inFlight = false;
+  _bwAuto.inFlight  = false;
+  _bwAuto.retryable = !!retryable;
   _bwAutoClearTimers();
 
   if (!stillFailed) {                 // everything loaded — nothing left to chase
@@ -960,8 +1074,10 @@ function _bwAutoAfterResult(stillFailed, retryable, recovered) {
   }
   if (_bwAuto.stopped) return;
   if (_bwAuto.attempt >= _BW_AUTO_MAX_TRIES) {
+    // Cause-neutral: the stall may be timeouts or this app's own limiter, not a
+    // refusal by Breezeway. The message above already names what actually happened.
     _bwAuto.note = `Stopped after ${_BW_AUTO_MAX_TRIES} automatic tries — `
-                 + `Breezeway is still refusing these ${stillFailed}.`;
+                 + `${stillFailed} still haven't loaded.`;
     return;
   }
 
@@ -976,7 +1092,10 @@ function _bwAutoAfterResult(stillFailed, retryable, recovered) {
 
   _bwAuto.dueAt   = Date.now() + wait * 1000;
   _bwAuto.timerId = setTimeout(_bwAutoFire, wait * 1000);
-  _bwAuto.tickId  = setInterval(_bwAutoTick, 1000);
+  // The 1s tick is NOT started here. It belongs to whatever is on screen, and the
+  // countdown has to keep moving during a pass as well as between passes — started
+  // alongside the schedule, it died every time a request went out and the estimate
+  // froze for the 45 seconds the app was actually working. The repaint owns it.
 }
 
 function _bwAutoFire() {
@@ -1006,49 +1125,109 @@ function _bwAutoResume() {
   _bwAutoRepaintStatus();
 }
 
-/* The status line under the import message, plus the button to stop it. Appended
-   to #bwImportResult — _bwImportMsg sets textContent and so wipes children, which
-   is why this always runs AFTER the message, never before. */
+/* The progress block under the import message. Appended to #bwImportResult —
+   _bwImportMsg sets textContent and so wipes children, which is why this always
+   runs AFTER the message, never before.
+
+   Leads with WHERE IT IS and HOW LONG IS LEFT, because at 200 req/min those are
+   the two facts about a multi-pass import that a person actually needs. Whether
+   the app is mid-request or waiting out an 8-second gap is machinery — it used to
+   be the headline ("Loading the missing 61 automatically in 10s (try 2 of 7)")
+   while the things worth knowing, how far along and how much longer, appeared
+   nowhere at all. */
 function _bwAutoStatusHtml(n) {
   const btn = (attr, label) =>
-    `<button ${attr} style="text-decoration:underline;font-weight:700;color:#b45309;`
+    `<button ${attr} style="text-decoration:underline;font-weight:700;color:inherit;`
     + `background:none;border:none;padding:0;cursor:pointer;font-size:12px;">${label}</button>`;
 
-  if (_bwAuto.inFlight) {
-    return `<div style="margin-top:5px;font-size:12px;">↻ Loading the missing ${n} now… `
-         + `${btn("data-bw-stop", "Stop")}</div>`;
-  }
+  const p    = _bwProgress;
+  const have = p.total > 0;
+  const done = have ? Math.min(100, Math.round((p.loaded / p.total) * 100)) : 0;
+
+  // The bar. Rendered from the fraction that has LOADED, so it only ever advances —
+  // a bar driven by the failure count would jump backwards on a stalled pass.
+  const bar = have
+    ? `<div style="margin-top:5px;height:4px;background:rgba(0,0,0,.10);border-radius:2px;overflow:hidden;">`
+      + `<div data-bw-bar style="height:100%;width:${done}%;background:currentColor;opacity:.55;`
+      + `transition:width .4s ease;"></div></div>`
+    : "";
+  const count = have ? `${p.loaded} of ${p.total} properties` : `${n} still to load`;
+
   if (_bwAuto.stopped) {
-    return `<div style="margin-top:5px;font-size:12px;color:#4b5563;">Automatic retries stopped`
-         + (_bwAuto.note ? ` — ${_escHtml(_bwAuto.note)}` : "")
-         + `. ${btn("data-bw-resume", "Resume")}</div>`;
+    return `<div style="margin-top:5px;font-size:12px;">${count} — paused`
+         + (_bwAuto.note ? ` (${_escHtml(_bwAuto.note)})` : "")
+         + `. ${btn("data-bw-resume", "Resume")}</div>${bar}`;
   }
-  if (_bwAuto.timerId) {
-    return `<div style="margin-top:5px;font-size:12px;">Loading the missing ${n} automatically in `
-         + `<span data-bw-countdown>…</span> `
-         + `<span style="color:#6b7280;">(try ${_bwAuto.attempt + 1} of ${_BW_AUTO_MAX_TRIES})</span> `
-         + `${btn("data-bw-stop", "Stop")}</div>`;
+  if (_bwAuto.note) {          // gave up, or a cause a retry cannot fix
+    return `<div style="margin-top:5px;font-size:12px;">${count}. ${_escHtml(_bwAuto.note)}</div>${bar}`;
   }
-  if (_bwAuto.note) {
-    return `<div style="margin-top:5px;font-size:12px;color:#4b5563;">${_escHtml(_bwAuto.note)}</div>`;
+  if (_bwAuto.inFlight || _bwAuto.timerId) {
+    // One line for both states. The ETA already accounts for the gap between
+    // passes, so "requesting" vs "waiting 8s" is a distinction without a difference
+    // to anyone watching it.
+    return `<div style="margin-top:5px;font-size:12px;">`
+         + `Loading ${count} — about <span data-bw-eta>…</span> left `
+         + `${btn("data-bw-stop", "Stop")}</div>${bar}`;
   }
   return "";
 }
 
-// Repaint just the status line from state, leaving the message above it alone.
+/* Should "Try the missing N now" be on screen at this moment?
+   Two states where it must not be:
+
+   * A retry is already talking to Breezeway. The button used to stay live through
+     an automatic attempt, so the panel read "👉 Try the missing 61 now" directly
+     above "↻ Loading the missing 61 now…" — two contradictory statements, and
+     clicking fired a SECOND concurrent refetch of the same properties.
+   * We are backing off after an attempt that recovered nothing. That wait exists
+     precisely because Breezeway is throttling us; skipping it re-creates the
+     condition it is there to clear, so "now" is the one thing that cannot help.
+     Stop is the escape hatch during a backoff, not an immediate retry.
+
+   The prompt 8s cadence after a productive attempt is left clickable — Breezeway is
+   answering, so going early is harmless. */
+function _bwManualRetryAllowed() {
+  if (!_bwAuto.retryable) return false;
+  if (_bwAuto.inFlight || _bwAuto.requestOpen) return false;
+  return !(_bwAuto.timerId && _bwAuto.stalls > 0);
+}
+
+// Repaint the retry controls from state, leaving the message above them alone.
+// The manual button is repainted here TOO, not just appended once at result time —
+// it is retry state like everything else, and leaving it out of the repaint is what
+// let it sit live above an in-flight attempt.
 function _bwAutoRepaintStatus() {
   const el = document.getElementById("bwImportResult");
   if (!el) return;
-  const old = el.querySelector("[data-bw-status]");
-  if (old) old.remove();
-  const n    = (_bwLastImport && _bwLastImport.failed) || 0;
+  const n = (_bwLastImport && _bwLastImport.failed) || 0;
+
+  const oldStatus = el.querySelector("[data-bw-status]");
+  if (oldStatus) oldStatus.remove();
+  const oldBtn = el.querySelector("[data-bw-manual]");
+  if (oldBtn) oldBtn.remove();
+
+  if (n && _bwLastImport && _bwManualRetryAllowed()) el.appendChild(_bwManualRetryBtn(n));
+
   const html = n ? _bwAutoStatusHtml(n) : "";
-  if (!html) return;
-  const wrap = document.createElement("div");
-  wrap.setAttribute("data-bw-status", "");
-  wrap.innerHTML = html;
-  el.appendChild(wrap);
-  _bwAutoTick();
+  if (html) {
+    const wrap = document.createElement("div");
+    wrap.setAttribute("data-bw-status", "");
+    wrap.innerHTML = html;
+    el.appendChild(wrap);
+    _bwAutoTick();
+  }
+  // Always — including the nothing-to-show path, which is where the interval would
+  // otherwise be left running against a panel that has finished.
+  _bwSyncTick();
+}
+
+// Run the 1s countdown exactly when there is a countdown on screen. Tying it to the
+// rendered element rather than to the retry schedule is what keeps it alive across
+// the in-flight/waiting boundary, and what stops it leaking once the panel is done.
+function _bwSyncTick() {
+  const wanted = !!document.querySelector("[data-bw-eta]");
+  if (wanted && !_bwAuto.tickId)  _bwAuto.tickId = setInterval(_bwAutoTick, 1000);
+  if (!wanted && _bwAuto.tickId) { clearInterval(_bwAuto.tickId); _bwAuto.tickId = null; }
 }
 
 document.addEventListener("click", function (ev) {
@@ -1060,28 +1239,39 @@ document.addEventListener("click", function (ev) {
 
 /* The manual button stays. Auto-retry handles the normal case, but the button is
    what you reach for after pressing Stop, or when you don't want to wait out the
-   countdown — and it's the fallback if the schedule ever gives up. */
-function _bwAddRetryMissingBtn(n) {
-  const el = document.getElementById("bwImportResult");
-  if (!el || !_bwLastImport) return;
+   countdown — and it's the fallback if the schedule ever gives up. Whether it is
+   on screen at all is _bwManualRetryAllowed()'s call. */
+function _bwManualRetryBtn(n) {
   const btn = document.createElement("button");
+  btn.setAttribute("data-bw-manual", "");
   btn.textContent = `👉 Try the missing ${n} now`;
   btn.style.cssText = "display:block;margin-top:5px;text-decoration:underline;font-weight:700;"
                     + "background:none;border:none;padding:0;cursor:pointer;color:#b45309;font-size:12px;";
   btn.onclick = () => {
     _bwAutoClearTimers();          // hand the pending automatic attempt to this one
+    // A manual try costs Breezeway exactly what an automatic one does, so it spends
+    // from the same budget. Untracked, clicking repeatedly walked straight past
+    // _BW_AUTO_MAX_TRIES — the ceiling only ever counted the timer's own attempts.
+    _bwAuto.attempt++;
     _bwAuto.inFlight = true;
     bwRetryMissingImport(btn);
   };
-  el.appendChild(btn);
-  _bwAutoRepaintStatus();
+  return btn;
 }
+
 
 /* btn is null when the retry was fired by the automatic schedule rather than a
    click — there is no button to disable, and the status line reports progress
    instead. */
 async function bwRetryMissingImport(btn) {
   if (!_bwLastImport) return;
+  // Last line of defence against two retries running at once. The button is hidden
+  // while a request is open, but a stray timer, a double-click landing inside the
+  // same tick, or a future caller must not be able to put a second POST on the wire:
+  // both attempts refetch the same refs, and their responses race to merge into
+  // selectedStops.
+  if (_bwAuto.requestOpen) return;
+  _bwAuto.requestOpen = true;
   const { date, assignee } = _bwLastImport;
   const original = btn ? btn.textContent : null;
   if (btn) {
@@ -1089,6 +1279,7 @@ async function bwRetryMissingImport(btn) {
     btn.textContent = "Retrying…";
   }
   _bwAuto.inFlight = true;
+  _bwPassStartedAt = Date.now();   // times this pass, to keep the ETA honest
   _bwAutoRepaintStatus();
   try {
     const res  = await fetch("/api/bw-import", {
@@ -1100,6 +1291,10 @@ async function bwRetryMissingImport(btn) {
     let data;
     try { data = JSON.parse(text); }
     catch (e) {
+      // Stop the schedule, same as an error payload does. This path used to leave
+      // inFlight set with nothing to clear it, so the panel claimed a load was
+      // still running long after the request had come back unreadable.
+      _bwAutoHalt("the retry didn't come back as data");
       _bwImportFail({ when_utc: new Date().toISOString(), endpoint: "/api/bw-import",
                       request: {date, assignee, retry_failed: true},
                       failure: `server returned HTTP ${res.status}`,
@@ -1109,8 +1304,10 @@ async function bwRetryMissingImport(btn) {
     }
     if (data.error) {
       // A retry that comes back unusable stops the schedule and says why, rather
-      // than counting down to another attempt that will fail the same way.
-      _bwAutoHalt(data.error);
+      // than counting down to another attempt that will fail the same way. The note
+      // is left empty because the red message directly above already carries the
+      // reason — repeating it in the status line just says it twice.
+      _bwAutoHalt("");
       _bwImportMsg(data.error, "red");
       return;
     }
@@ -1151,26 +1348,41 @@ async function bwRetryMissingImport(btn) {
       : `no new stops for ${assignee || "this route"} among them`;
 
     if (still) {
-      const f = bwFailureCause(data);
+      const f     = bwFailureCause(data);
+      // Name what actually held them up. "Breezeway refused them again" was hardcoded,
+      // so a stall caused by timeouts, or by this app's own limiter declining to send,
+      // was reported as a refusal Breezeway never made.
+      const cause = (typeof bwFailureCauseShort === "function")
+        ? (bwFailureCauseShort(data).text || "") : "";
       _bwLastImport = {date, assignee, failed: still};
       // Settle the schedule BEFORE painting, so the status line already knows
       // whether another attempt is queued and how long the wait is.
       _bwAutoAfterResult(still, f.retry, recovered);
-      // Say whether it made progress. The wording no longer tells you to click —
-      // the schedule handles that — but it still reports honestly either way.
+      _bwNoteProgress(data, recovered);
+      // Blue, not amber, while this is still going: the progress block underneath
+      // is now carrying the count and the ETA, so this line only has to report what
+      // the pass just did. A run that is proceeding exactly as designed should not
+      // be painted as a warning.
       _bwImportMsg(
         recovered === 0
-          ? `Still ${still} to go — Breezeway refused them again. Backing off before the next try.`
-          : `Loaded ${recovered} more propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}. `
-            + `${still} still to load.`,
-        "amber");
-      if (f.retry) _bwAddRetryMissingBtn(still);   // appends, then repaints the status line
-      else         _bwAutoRepaintStatus();
+          ? `No new properties that time${cause ? ` (${cause})` : ""} — easing off, then trying again.`
+          : `Loaded ${recovered} more propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}.`,
+        f.retry ? "blue" : "amber");
+      // One repaint either way — it reads f.retry back off _bwAuto.retryable and
+      // decides for itself whether the manual button belongs on screen.
+      _bwAutoRepaintStatus();
     } else {
+      // Clear the held count as well as the schedule. It used to keep the last
+      // non-zero `failed` after a fully successful retry, so anything that repainted
+      // from state afterwards would render retry controls for properties that had
+      // all loaded.
+      _bwLastImport = {date, assignee, failed: 0};
       _bwAutoAfterResult(0, false, recovered);     // done — clears the schedule
+      _bwNoteProgress(data, recovered);
+      const total = _bwProgress.total;
       _bwImportMsg(
         `Loaded the last ${recovered} propert${recovered === 1 ? "y" : "ies"} — ${stopsBit}. `
-        + `All properties loaded.`, "green");
+        + `All ${total ? total + " " : ""}properties loaded.`, "green");
     }
   } catch (e) {
     if (btn) {
@@ -1181,6 +1393,11 @@ async function bwRetryMissingImport(btn) {
     // stopped and leave the manual button as the way back in.
     _bwAutoHalt(`couldn't reach the server (${e.message})`);
     _bwImportMsg(`Retry failed: ${e.message}`, "red");
+  } finally {
+    // Release the guard BEFORE the final repaint, or the manual button — the way
+    // back in after a transport failure — is suppressed by a request that has
+    // already finished.
+    _bwAuto.requestOpen = false;
     _bwAutoRepaintStatus();
   }
 }
@@ -1207,6 +1424,7 @@ function _bwImportFail(diag, humanMsg) {
   el.appendChild(btn);
 
   el.classList.remove("hidden");
+  _bwSyncTick();   // the countdown's element went with the innerHTML wipe
   // Also log it, so it's recoverable from the console even if the box is dismissed.
   console.error("[bw-import] failed", diag);
 }
@@ -1218,6 +1436,10 @@ function _bwImportMsg(text, color) {
     amber: "background:#fffbeb; color:#b45309;",
     red:   "background:#fef2f2; color:#b91c1c;",
     gray:  "background:#f9fafb; color:#4b5563;",
+    // Work in progress. A full day takes several passes by design now, and painting
+    // that in warning-amber told people something was wrong when nothing was —
+    // amber is reserved for outcomes that actually want attention.
+    blue:  "background:#eff6ff; color:#1d4ed8;",
   };
   el.style.cssText = styleMap[color] || styleMap.gray;
   el.textContent = text;

@@ -80,10 +80,18 @@
       if (e[0] === 'timeout')   return e[1] + ' timed out';
       if (e[0] === 'unreached') return e[1] + ' not reached in time';
       if (i.noCode)             return e[1] + ' held back by this app';
+      // 429 is NOT a refusal — it is a throttle, and the most retryable class in
+      // the list. Calling it "refused" alongside 401/403 read as permanent, which
+      // is the opposite of what the user should do about it.
+      if (e[0] === '429')       return e[1] + ' rate-limited (HTTP 429)';
       return e[1] + ' refused (HTTP ' + e[0] + ')';
     }).join(', ');
+    // No trailing "Mostly: <top cause>". The breakdown is sorted largest-first and
+    // already names that cause in words, so the clause restated the line's own
+    // opening item — "(208 not reached in time, …). Mostly: not reached before the
+    // scan ran out of time."
     return {
-      text: '⚠ ' + n + ' ' + noun + " couldn't be loaded from Breezeway (" + breakdown + '). Mostly: ' + info(topCode).label,
+      text: '⚠ ' + n + ' ' + noun + " couldn't be loaded from Breezeway (" + breakdown + ')',
       retry: retry,
     };
   }

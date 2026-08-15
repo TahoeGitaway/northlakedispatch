@@ -1504,8 +1504,21 @@ def bw_import():
         _bw_day_cache[date_str] = (_dt_time.time(), all_results, failed_props,
                                    dict(failure_statuses), failed_refs)
 
+    # Progress the panel can render honestly. At Breezeway's confirmed 200 req/min a
+    # full day cannot fit in one _BW_IMPORT_BUDGET_S pass, so a partial result is now
+    # the NORMAL outcome rather than a fault. Reporting only failed_properties left
+    # the UI describing an import that was 45% done and still working as "245
+    # properties couldn't be loaded". The denominator is what makes it legible, and
+    # it stays fixed across retry passes so the fraction only ever moves forward.
+    _props_total = len(pid_candidates)
+    _progress = {
+        "properties_total":  _props_total,
+        "properties_loaded": max(0, _props_total - failed_props),
+    }
+
     if not all_results:
-        return jsonify({"matched": [], "unmatched": [], "failed_properties": failed_props,
+        return jsonify({**_progress,
+                        "matched": [], "unmatched": [], "failed_properties": failed_props,
                         "failure_statuses": failure_statuses,
                         "message": "No Breezeway tasks found for that date."
                                    + (f" (⚠ {failed_props} properties couldn't be loaded — retry.)" if failed_props else "")})
@@ -1646,18 +1659,21 @@ def bw_import():
         for asgn in assignees:
             matched, uncertain, unmatched = _matched_for(_filter_by_assignee(all_results, asgn.lower()))
             by_assignee[asgn] = {"matched": matched, "uncertain": uncertain, "unmatched": unmatched}
-        return jsonify({"by_assignee": by_assignee, "failed_properties": failed_props,
+        return jsonify({**_progress,
+                        "by_assignee": by_assignee, "failed_properties": failed_props,
                         "arrival_error": arrival_error,
                         "failure_statuses": failure_statuses})
 
     subset = _filter_by_assignee(all_results, assignees[0].lower()) if assignees else all_results
     matched, uncertain, unmatched = _matched_for(subset)
     if not matched and not uncertain and not unmatched:
-        return jsonify({"matched": [], "uncertain": [], "unmatched": [], "failed_properties": failed_props,
+        return jsonify({**_progress,
+                        "matched": [], "uncertain": [], "unmatched": [], "failed_properties": failed_props,
                         "failure_statuses": failure_statuses,
                         "arrival_error": arrival_error,
                         "message": "No Breezeway tasks found for that date/assignee."})
-    return jsonify({"matched": matched, "uncertain": uncertain, "unmatched": unmatched,
+    return jsonify({**_progress,
+                    "matched": matched, "uncertain": uncertain, "unmatched": unmatched,
                     "failed_properties": failed_props,
                     "arrival_error": arrival_error,
                     "failure_statuses": failure_statuses})
