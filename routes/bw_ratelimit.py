@@ -42,6 +42,7 @@ process-wide is effectively global. If that ever changes to multiple workers,
 this needs to move to Redis or the limits become per-worker.
 """
 
+import os
 import random
 import threading
 import time
@@ -76,7 +77,21 @@ import time
 # So the gate now PACES rather than discovers. Spacing is set from the known limit
 # up front and 429s are treated as an anomaly (another client on the same quota,
 # a burst that crossed a window edge) rather than as the primary signal.
-_LIMIT_PER_MIN = 200    # CONFIRMED with Breezeway, not inferred.
+# The published ceiling, in requests per minute. Override without a code change:
+#   BW_RATE_LIMIT_PER_MIN=12000   (i.e. 200/sec)
+#
+# Reported to this app as "200 per minute" and later as "200 per second" — a 60x
+# difference, so it is a setting rather than a literal. The default is the
+# per-MINUTE reading because that is the one the traffic supports: a measured
+# import sent 232 requests inside 45s (~5/sec) and had 35 of them refused with
+# HTTP 429. At a 200/sec ceiling that traffic is 2.5% of budget and could not have
+# been throttled at all, so 200/sec cannot be the operative limit for this token.
+#
+# Erring low costs throughput and is visible immediately (slow scans, "not reached
+# in time"). Erring high costs correctness and hides — 429s become silent gaps in
+# scans that answer from absence. So the default errs low; raise it if Breezeway
+# confirms the per-second figure.
+_LIMIT_PER_MIN = int(os.environ.get("BW_RATE_LIMIT_PER_MIN", "200"))
 # Run at ~90% of quota. Sitting exactly on the limit means any jitter, clock skew,
 # or fixed-window edge tips over it, and the cost of a 429 (a global cooldown that
 # stalls every thread) is far higher than the cost of the 10% headroom.

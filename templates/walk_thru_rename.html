@@ -122,6 +122,34 @@ function updateCount() {
   document.getElementById('applyBtn').disabled = checked === 0;
 }
 
+/* "Load just the missing N" used to call runScan(true) on the spot. Those N failed
+   because Breezeway was refusing us, and asking again in the same second is the one
+   thing that cannot work — the retry came straight back with the same count, which
+   is indistinguishable from the button doing nothing.
+
+   Waits out a short cooldown first, and says so while it waits, so the button
+   visibly does something either way. */
+const _RETRY_COOLDOWN_S = 6;
+
+async function retryMissing(btn) {
+  if (btn.disabled) return;              // no double-firing during the countdown
+  btn.disabled = true;
+  const label = btn.textContent;
+  for (let s = _RETRY_COOLDOWN_S; s > 0; s--) {
+    btn.textContent = `Waiting ${s}s for Breezeway to ease off…`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  btn.textContent = 'Loading the missing ones…';
+  try {
+    await runScan(true);
+  } finally {
+    // runScan repaints the box, so this button is usually gone by now; restore it
+    // anyway for the paths that leave it on screen.
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 async function runScan(retryFailed) {
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('tableWrap').classList.add('hidden');
@@ -178,7 +206,7 @@ async function runScan(retryFailed) {
         `<div>${f.text} — Walk Thru tasks on those properties are missing from this list.</div>`
         + (f.retry
              ? `<div style="margin-top:3px;">`
-               + `<button onclick="runScan(true)" style="text-decoration:underline;font-weight:700;`
+               + `<button onclick="retryMissing(this)" style="text-decoration:underline;font-weight:700;`
                + `color:#b45309;background:none;border:none;padding:0;cursor:pointer;font:inherit;">`
                + `👉 Load just the missing ${data.failed_properties}</button>`
                + ` — asks about only those, and keeps what already loaded.`

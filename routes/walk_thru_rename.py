@@ -91,9 +91,16 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
         id_pairs.append(("reference_property_id", ref_id))
     id_pairs += [("property_id", pid), ("home_id", pid)]
 
+    from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
+
     saw_empty_200 = False
     last_status = None
     for key, val in id_pairs:
+        # Pace it. This module has never gone through the gate, so a 16-worker sweep
+        # here ignored the shared budget entirely and competed with every other
+        # Breezeway caller in the process.
+        if not gate.acquire():
+            return [], False, LOCAL_THROTTLE_STATUS
         try:
             r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/task/",
@@ -101,7 +108,16 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
                 params={"scheduled_date": date_range, key: val, "limit": 100},
                 timeout=15,
             )
+            gate.on_response(r.status_code)
             last_status = r.status_code
+            # Trying the next id space after a 429 is pointless and actively harmful:
+            # the refusal is about RATE, not about which id we asked with, so the two
+            # remaining attempts are guaranteed to be refused too. That tripled the
+            # cost of exactly the properties already being throttled — 33 failures
+            # became ~99 requests — which is what made "load just the missing N"
+            # re-fail on contact.
+            if r.status_code == 429 or r.status_code >= 500:
+                return [], False, r.status_code
             if r.status_code == 200:
                 body = r.json()
                 results = body.get("results", body.get("data", body if isinstance(body, list) else []))
@@ -113,7 +129,11 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
                 # remember that something did answer.
                 saw_empty_200 = True
         except Exception:
-            last_status = None          # timeout / transport, not an HTTP status
+            # Also stop here. Each attempt carries a 15s timeout, so walking the
+            # remaining id spaces after one has already hung costs up to 45s on a
+            # single property — and a hanging API is not more likely to answer the
+            # same question asked a different way.
+            return [], False, None      # timeout / transport, not an HTTP status
 
     # Every id space answered and none had tasks: a real "nothing here".
     if saw_empty_200:
@@ -167,10 +187,14 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> list:
+    from routes.bw_ratelimit import gate
+
     all_results = []
     page = 1
     while True:
         try:
+            if not gate.acquire():
+                break          # paced like every other Breezeway read
             r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
@@ -182,6 +206,7 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
                 },
                 timeout=20,
             )
+            gate.on_response(r.status_code)
             if r.status_code != 200:
                 break
             body = r.json()
