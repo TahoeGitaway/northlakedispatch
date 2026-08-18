@@ -186,15 +186,27 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
     return all_tasks, failed_pids, statuses
 
 
-def _fetch_reservations_range(token: str, start: date, end: date) -> list:
-    from routes.bw_ratelimit import gate
+def _fetch_reservations_range(token: str, start: date, end: date) -> tuple:
+    """Every arrival in the window. Returns (reservations, complete, status).
+
+    complete=False means pagination stopped early — a throttle, a bad status or a
+    timeout — and the list is SHORT by an unknown amount.
+
+    That distinction is the whole point. This list is what produces arrival_pids,
+    and the task sweep only asks about properties in it. So a truncated page here
+    does not show up as a failed property later; those houses are simply never
+    asked about, and the scan reports `failed_properties: 0` over a list that
+    quietly lost them. Every exit below used to be a bare `break` returning
+    whatever had accumulated, indistinguishable from "that was the last page"."""
+    from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
 
     all_results = []
     page = 1
     while True:
         try:
             if not gate.acquire():
-                break          # paced like every other Breezeway read
+                # This app declined to send, not Breezeway refusing — say which.
+                return all_results, False, LOCAL_THROTTLE_STATUS
             r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
                 headers={"Authorization": f"JWT {token}"},
@@ -208,18 +220,18 @@ def _fetch_reservations_range(token: str, start: date, end: date) -> list:
             )
             gate.on_response(r.status_code)
             if r.status_code != 200:
-                break
+                return all_results, False, r.status_code
             body = r.json()
             results = body.get("results", body.get("data", []))
             if not results:
-                break
+                break                      # genuine end of the list
             all_results.extend(results)
             if len(results) < 100:
-                break
+                break                      # short page = genuine last page
             page += 1
         except Exception:
-            break
-    return all_results
+            return all_results, False, None    # timeout / transport
+    return all_results, True, 200
 
 
 def _patch_task_name(token: str, task_id, new_name: str,
@@ -298,8 +310,12 @@ def walk_thru_scan():
         return jsonify({"error": "The list of which properties failed has expired. "
                                  "Scan again to do a full re-check."})
 
+    # True unless THIS run fetched the reservations and came up short. A cached
+    # reso_by_prop is complete by construction — an incomplete one is never cached.
+    reso_complete, reso_status = True, 200
     if reso_by_prop is None:
-        reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
+        reservations, reso_complete, reso_status = _fetch_reservations_range(
+            token, start, end + timedelta(days=1))
 
         reso_by_prop = {}
         for r in reservations:
@@ -375,12 +391,25 @@ def walk_thru_scan():
               "failed_properties":  failed_props,
               "failure_statuses":   failure_statuses,
               "scanned_properties": len(arrival_pids)}
+    # A short reservation list is a DIFFERENT failure from a property whose tasks
+    # wouldn't load, and it has no per-property remedy: the houses it lost are
+    # unknown, so "load just the missing N" cannot ask about them. Report it
+    # separately so the page can say the list itself is incomplete.
+    if not reso_complete:
+        result["reservations_incomplete"] = True
+        result["reservations_status"]     = reso_status
     # Hold the TASKS and the FAILED PIDS, not just the finished payload — that is
     # what makes "load just the missing N" possible. Holding only the payload (as
     # this used to) left nothing to merge into and nothing to narrow to, so the
     # only option was re-reading every property.
-    _scan_cache[ck] = (_time.time(), result, tasks, failed_pids,
-                       reso_by_prop, arrival_pids)
+    #
+    # Never cache a run built on a short reservation list. Caching it would pin the
+    # truncated arrival_pids for the next 90 seconds, so scanning again — the one
+    # move that could recover the missing houses — would replay the same gap
+    # instantly and look like confirmation.
+    if reso_complete:
+        _scan_cache[ck] = (_time.time(), result, tasks, failed_pids,
+                           reso_by_prop, arrival_pids)
     return jsonify(result)
 
 

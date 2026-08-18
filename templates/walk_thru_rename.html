@@ -94,6 +94,11 @@
   <!-- Apply results -->
   <div id="warnBox" class="hidden mt-4 text-xs rounded-lg px-3 py-2 leading-relaxed"
        style="background:#fffbeb; color:#b45309; border:1px solid #fde68a;"></div>
+  <!-- Red, not amber: a truncated arrivals list means unknown houses were skipped,
+       which no button on this page can recover. It must not read as the same
+       severity as the retryable per-property failure above. -->
+  <div id="warnBox2" class="hidden mt-4 text-xs rounded-lg px-3 py-2 leading-relaxed"
+       style="background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;"></div>
   <div id="resultsBox" class="hidden mt-6 space-y-2"></div>
 
 </div>
@@ -156,6 +161,7 @@ async function runScan(retryFailed) {
   document.getElementById('emptyBox').classList.add('hidden');
   document.getElementById('errorBox').classList.add('hidden');
   document.getElementById('warnBox').classList.add('hidden');   // a stale count must not survive a rescan
+  document.getElementById('warnBox2').classList.add('hidden');
   document.getElementById('resultsBox').classList.add('hidden');
   document.getElementById('resultsBox').innerHTML = '';
 
@@ -215,6 +221,22 @@ async function runScan(retryFailed) {
              : `<div style="margin-top:3px;">Retrying won't help; this needs a fix in `
                + `Breezeway or the app's settings.</div>`);
       wb.classList.remove('hidden');
+    }
+
+    // A short ARRIVALS list is worse than a failed property and has to be said
+    // separately: the houses it dropped were never identified, so they are absent
+    // from failed_properties and "Load just the missing N" cannot reach them.
+    // Only a fresh full scan can. Shown even when the scan otherwise looks clean.
+    if (data.reservations_incomplete) {
+      const wb2 = document.getElementById('warnBox2');
+      wb2.innerHTML =
+        `<div style="font-weight:700;">The arrivals list itself came back incomplete`
+        + `${data.reservations_status ? ` (${esc(String(data.reservations_status))})` : ''}.</div>`
+        + `<div style="margin-top:3px;">Some properties were never checked at all, and this `
+        + `list can't tell you which — so treat the results below as partial. `
+        + `<b>Scan again</b> in a minute to rebuild it; "Load just the missing" can't `
+        + `recover these.</div>`;
+      wb2.classList.remove('hidden');
     }
 
     if (proposals.length === 0) {
