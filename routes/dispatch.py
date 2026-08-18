@@ -2359,10 +2359,16 @@ def route_discrepancies():
         # from failed_properties: that counts houses whose TASKS didn't load, this is
         # the day's check-in list not loading, which mislabels every house at once.
         "arrival_error": arrival_error,
-        # Seconds since the shared day sweep this answer was seeded from, or None when
-        # this check swept for itself. A shared answer must not pass off another
-        # check's freshness as its own: "47 of 445, from a sweep 40 s ago" is a
-        # different claim from "47 of 445, just now".
+        # WHEN the task data underneath this answer was actually read from Breezeway.
+        # Epoch milliseconds, so the browser can render it in local time without the
+        # naive-UTC ambiguity that made backend timestamps read hours off before.
+        #
+        # With one sweep shared across every check on a date, "when did this come
+        # from" stops being obvious: a check can answer in a second because another
+        # one already did the work, and that is worth knowing rather than hiding.
+        # Set to the shared sweep's time when seeded from one, otherwise now.
+        "swept_at_ms": round((_shared_from or _dt_time.time()) * 1000),
+        "swept_shared": bool(_shared_from),
         "shared_sweep_age_s": (round(_dt_time.time() - _shared_from)
                                if _shared_from else None),
         "failed_properties": failed_props,

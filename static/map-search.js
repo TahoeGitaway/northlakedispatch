@@ -2608,6 +2608,20 @@ function _renderChangesHtml(d) {
   const newCheckin = (d.new_checkin || []).filter(c => _cur.has((c.property || "").toLowerCase()));
   let h = "";
 
+  // When the Breezeway data under this answer was actually read. One sweep now serves
+  // every check on a date, so an answer can arrive instantly because another check
+  // already did the work — that is worth stating rather than letting it look like a
+  // fresh read. Rendered as a wall-clock time because "40s ago" needs arithmetic at
+  // exactly the moment you are trying to decide whether to trust it.
+  if (d.swept_at_ms) {
+    const t = new Date(d.swept_at_ms).toLocaleTimeString([], {
+      hour: "numeric", minute: "2-digit", second: "2-digit" });
+    h += `<div class="text-[11px] text-gray-500 mb-1.5">`
+       + `Breezeway read at <span class="font-semibold text-gray-700">${_escHtml(t)}</span>`
+       + (d.swept_shared ? ` <span class="text-gray-400">(shared with the other checks on this date)</span>` : "")
+       + `</div>`;
+  }
+
   // The day's check-in list didn't load. This one goes FIRST and in red, because it is
   // worse than a missing house: every CHECK-IN badge on the route is derived from that
   // list, so when it comes back short the whole route quietly reads "not a check-in"
