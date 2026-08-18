@@ -369,7 +369,7 @@
         <button id="checkAllBtn" onclick="checkAllRoutesForChanges()"
                 class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold
                        px-4 py-2 rounded-lg transition-colors disabled:opacity-60">
-          🔄 Check all lists vs Breezeway
+          🔄 Open &amp; check all lists
         </button>
         <span id="checkAllStatus" class="text-xs text-gray-500"></span>
       </div>
@@ -1675,16 +1675,32 @@ async function checkAllRoutesForChanges() {
   const status = document.getElementById("checkAllStatus");
   const out    = document.getElementById("checkAllResults");
 
+  // OPEN A WINDOW PER LIST, so each one can be acted on directly — its own map,
+  // its own Changes vs Breezeway sidebar, its own Apply button.
+  //
+  // Opened as a CASCADE, not a loop of window.open: browsers permit one popup per
+  // user gesture, so six calls from one click silently drops five. Each window
+  // receives the ids still to open and opens the next. The Breezeway import hit
+  // this exact wall and solves it the same way.
+  //
+  // They all land on the server together, which used to mean six ~445-call sweeps
+  // fighting over one 180/min budget. One sweep per date now serves all of them.
+  const ids = routes.map(r => r.id);
+  const [first, ...rest] = ids;
+  const q = rest.length ? `&then=${encodeURIComponent(rest.join(","))}` : "";
+  window.open(`/?load=${encodeURIComponent(first)}${q}`, "_blank");
+
+  // Keep an overview HERE too, so this page says which lists actually changed
+  // without hunting through the windows to find the two that need you. Costs one
+  // cached read each — the sweep they share has already been paid for.
   btn.disabled = true;
-  btn.textContent = "Checking…";
+  btn.textContent = "Opening…";
   out.classList.remove("hidden");
   out.innerHTML = routes.map(_cacRow).join("");
 
   let done = 0;
-  status.textContent = `0 of ${routes.length} checked — one Breezeway sweep serves them all`;
+  status.textContent = `opening ${routes.length} windows — one Breezeway sweep serves them all`;
 
-  // All at once ON PURPOSE. The first request to reach the server starts the
-  // day's sweep and the rest wait on it, so this is one sweep whatever the count.
   await Promise.all(routes.map(async route => {
     try {
       const res  = await fetch(`/api/route-discrepancies?route_id=${route.id}`);
@@ -1702,7 +1718,7 @@ async function checkAllRoutesForChanges() {
   }));
 
   btn.disabled = false;
-  btn.textContent = "🔄 Check all lists vs Breezeway";
+  btn.textContent = "🔄 Open & check all lists";
 }
 
 </script>
