@@ -5,6 +5,7 @@ optimize, matrix-row, public route viewer, portfolio.
 
 import json
 import math
+import threading as _threading
 import os
 import secrets
 from datetime import datetime
@@ -1290,6 +1291,73 @@ _BW_DAY_PARTIAL_TTL = 45   # gappy sweep — long enough to cover the cascade of
                            # that a later retry genuinely retries
 _BW_RETRY_WINDOW = 900     # 15 min to "try the missing N again" before a retry
                            # falls back to sweeping everything
+# ONE sweep per date, however many requests arrive at once.
+#
+# _bw_day_cache alone does not achieve that: it is only written when a sweep
+# FINISHES, so requests that start together all miss it. And they do start
+# together — importing "Calder, Jonah, Julie" cascades a browser tab per name
+# within milliseconds, and checking several routes is the same shape. Three
+# requests, three identical ~445-call sweeps, one 180/min budget split three
+# ways, none finishing. That is the starvation the cache existed to prevent.
+#
+# So a sweep is announced before it starts. Anyone arriving for the same date
+# waits for it and reads what it publishes, instead of launching a rival.
+_bw_day_inflight: dict = {}                 # date_str -> threading.Event
+_bw_day_inflight_lock = _threading.Lock()
+
+
+def _claim_day_sweep(date_str):
+    """(event, is_owner). The owner must call _release_day_sweep in a finally."""
+    with _bw_day_inflight_lock:
+        ev = _bw_day_inflight.get(date_str)
+        if ev is None:
+            ev = _threading.Event()
+            _bw_day_inflight[date_str] = ev
+            return ev, True
+        return ev, False
+
+
+def _release_day_sweep(date_str, ev):
+    with _bw_day_inflight_lock:
+        if _bw_day_inflight.get(date_str) is ev:
+            _bw_day_inflight.pop(date_str, None)
+    ev.set()                                # always, even on failure: never strand a waiter
+
+
+def _wait_for_day_sweep(date_str, timeout):
+    """Block while another request sweeps this date. Cheap no-op when none is."""
+    ev = _bw_day_inflight.get(date_str)
+    if ev is not None:
+        ev.wait(timeout=timeout)
+
+
+def _sweep_day_shared(date_str, sweep_fn, budget_s):
+    """Run sweep_fn only if nobody else is already sweeping this date.
+
+    Returns (results, failed_count, failure_statuses, failed_refs). A waiter that
+    finds no published result (the owner died, or was killed by the gateway) does
+    the sweep itself rather than reporting an empty day.
+    """
+    for _attempt in (0, 1):
+        ev, owner = _claim_day_sweep(date_str)
+        if owner:
+            try:
+                results, nfail, tally, refs = sweep_fn()
+                _bw_day_cache[date_str] = (_dt_time.time(), results, nfail,
+                                           dict(tally), refs)
+                return results, nfail, tally, refs
+            finally:
+                _release_day_sweep(date_str, ev)
+        # Somebody else owns it. Their budget plus margin is how long this can take.
+        ev.wait(timeout=budget_s + 20)
+        cached = _bw_day_cache.get(date_str)
+        if cached:
+            return (cached[1], cached[2], dict(cached[3]),
+                    cached[4] if len(cached) > 4 else [])
+        # Nothing published — fall round once and sweep it ourselves.
+    return [], 0, {}, []
+
+
 _BW_IMPORT_BUDGET_S = 45   # Stop sweeping after this and return what loaded. With
                            # no budget the import ran to completion however long it
                            # took — five minutes under throttling — and the gateway
@@ -1611,10 +1679,11 @@ def bw_import():
     elif _cached_fresh and not retry_failed:
         all_results, failed_props, failure_statuses = _cached[1], _cached[2], dict(_cached[3])
     else:
-        all_results, failed_props, failure_statuses, failed_refs = _sweep(
-            list(pid_candidates.keys()), [])
-        _bw_day_cache[date_str] = (_dt_time.time(), all_results, failed_props,
-                                   dict(failure_statuses), failed_refs)
+        # Share this with any other request that wants the same date right now,
+        # instead of running a rival sweep against the same quota.
+        all_results, failed_props, failure_statuses, failed_refs = _sweep_day_shared(
+            date_str, lambda: _sweep(list(pid_candidates.keys()), []),
+            _BW_IMPORT_BUDGET_S)
 
     # Progress the panel can render honestly. At Breezeway's confirmed 200 req/min a
     # full day cannot fit in one _BW_IMPORT_BUDGET_S pass, so a partial result is now
@@ -1980,6 +2049,11 @@ def route_discrepancies():
         # ways — so each got ~1/5 of what it needed, none finished, and they starved
         # each other. The import has worked this way for a while (_bw_day_cache):
         # assignee filtering happens AFTER the fetch, so one sweep serves everybody.
+        # If another check is already sweeping this date, wait for it rather than
+        # starting a rival. The cache is only written when a sweep FINISHES, so
+        # checks opened together would all miss it and all sweep — which is the
+        # whole problem, just moved rather than fixed.
+        _wait_for_day_sweep(date_str, _ROUTE_DISC_BUDGET_S + 20)
         _day = _bw_day_cache.get(date_str)
         if _day:
             _day_ttl = _BW_DAY_TTL if not _day[2] else _BW_DAY_PARTIAL_TTL
