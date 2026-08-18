@@ -2343,7 +2343,55 @@ document.addEventListener("click", function (ev) {
     return;
   }
 
+  // "Mark these task changes as seen" — record the list now on screen as the new
+  // baseline. Posts back what the check already sent us, so it costs no Breezeway
+  // calls at all.
+  const ack = t.closest("[data-ack-tasks]");
+  if (ack && !ack.disabled) {
+    ev.preventDefault();
+    _ackTaskChanges(ack);
+    return;
+  }
+
 });
+
+// Record the currently-shown task list as this route's accepted baseline.
+//
+// Sends only the houses the check actually READ (current_tasks holds exactly
+// those), so a house Breezeway refused keeps whatever baseline it already had
+// rather than being recorded as having no tasks.
+async function _ackTaskChanges(btn) {
+  const data = _routeChangesCache.data;
+  if (!data || !currentRouteId) return;
+  btn.disabled = true;
+  btn.textContent = "Recording…";
+  try {
+    const resp = await fetch("/api/route-task-baseline", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        route_id: currentRouteId,
+        houses: (data.current_tasks || []).map(c => ({
+          property: c.property,
+          tasks: (c.tasks || []).map(t => (t && typeof t === "object")
+            ? { id: t.id, name: t.name }
+            : { id: null, name: t }),
+        })),
+      }),
+    });
+    const out = await resp.json();
+    if (out.error) throw new Error(out.error);
+    // The panel on screen was computed against the OLD baseline, so re-check rather
+    // than leaving changes visible that have just been accepted.
+    _routeChangesCache = { routeId: null, html: null };
+    const body = btn.closest("[data-body]");
+    if (body) _renderRouteChangesInto(currentRouteId, body, true);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Couldn't record that — try again";
+    console.error("[route-changes] baseline ack failed:", e);
+  }
+}
 
 function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
   // Re-render from cached DATA (not a frozen html string) so the panel reflects
@@ -2593,9 +2641,21 @@ function _renderChangesHtml(d) {
     }
   }
 
+  // Task-level changes at houses already on the route. Kept OUT of the _cur name
+  // filter used above: these are keyed on Breezeway task ids, which are stable and
+  // global, so they stay correct even where a house name doesn't line up.
+  const addedTasks   = d.added_tasks   || [];
+  const removedTasks = d.removed_tasks || [];
+
   // ── What changed since the route was saved ──
-  if (!added.length && !removed.length && !moved.length && !newCheckin.length) {
+  if (!added.length && !removed.length && !moved.length && !newCheckin.length
+      && !addedTasks.length && !removedTasks.length) {
     h += `<div class="text-green-600 mb-1">✓ No changes — the list matches the saved route.</div>`;
+    if (d.task_baseline === "seeded") {
+      h += `<div class="text-[11px] text-gray-400 mb-1 leading-snug">`
+         + `Recorded this task list as the starting point — from now on a task added to `
+         + `or removed from a house already on the route will show up here.</div>`;
+    }
   }
   if (added.length) {
     // "Added to list" claimed these were NEW since the route was saved. The check
@@ -2669,6 +2729,46 @@ function _renderChangesHtml(d) {
        + `They're left on the route — use Check again to try them once more.</div>`;
     for (const r of unverified) h += `<div class="text-gray-700 mb-1">${_escHtml(r.property)}${_bwCalLinkHtml(r.property_id, r.property)}</div>`;
   }
+  // ── Task changes at houses you already have ──
+  // The case the house-level comparison is blind to: the stop was always there, but
+  // its task list is not what it was. Grouped by house so it reads like the stop list.
+  if (addedTasks.length || removedTasks.length) {
+    const byHouse = {};
+    for (const t of addedTasks)
+      (byHouse[t.property] = byHouse[t.property] || { add: [], del: [] }).add.push(t);
+    for (const t of removedTasks)
+      (byHouse[t.property] = byHouse[t.property] || { add: [], del: [] }).del.push(t);
+
+    const nAdd = addedTasks.length, nDel = removedTasks.length;
+    const label = [nAdd ? `${nAdd} new` : null, nDel ? `${nDel} gone` : null]
+                    .filter(Boolean).join(", ");
+    h += `<div class="font-semibold text-red-700 mt-3 mb-1">🔔 Task changes on stops you already have (${label})</div>`;
+    for (const prop of Object.keys(byHouse).sort((a, b) => a.localeCompare(b))) {
+      const g = byHouse[prop];
+      h += `<div class="mb-1.5 leading-snug">`;
+      h += `<div class="text-gray-800 font-medium">${_escHtml(prop)}`
+         + `${_bwCalLinkHtml((g.add[0] || g.del[0] || {}).property_id, prop)}</div>`;
+      for (const t of g.add) {
+        const vipBadge = (window.NLD && NLD.isVipTitle(t.task_name) && !NLD.isFlagDismissed(t.task_id))
+          ? ` ${NLD.vipBadgeHtml()}` : "";
+        h += `<div class="text-[11px] text-red-700 pl-3 leading-snug">`
+           + `+ ${_bwTaskLinkHtml(t.task_id, t.task_name, "")}${vipBadge}</div>`;
+      }
+      for (const t of g.del) {
+        h += `<div class="text-[11px] text-gray-500 pl-3 leading-snug line-through">`
+           + `− ${_escHtml(t.task_name || "Task")}</div>`;
+      }
+      h += `</div>`;
+    }
+    // Nothing about a task change alters which STOPS are on the route, so this has
+    // its own action rather than riding on "Apply to route" — which adds and drops
+    // houses and would be the wrong verb entirely.
+    h += `<button data-ack-tasks="1"`
+       + ` class="w-full mt-1 mb-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-[11px]`
+       + ` font-semibold py-1.5 rounded-lg transition-colors">`
+       + `Mark these task changes as seen</button>`;
+  }
+
   if (moved.length) {
     h += `<div class="font-semibold text-blue-700 mt-3 mb-1">🕑 Time changed (${moved.length})</div>`;
     for (const m of moved) {

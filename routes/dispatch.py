@@ -1331,6 +1331,79 @@ def _failure_key(status):
     return "timeout" if status is None else str(status)
 
 
+# ── Per-task baseline for the route comparison ────────────────────
+#
+# The discrepancy check already fetches every task for the day and already knows
+# their ids; what it never had was a record of what the list looked like LAST time,
+# so it could only compare houses. These helpers hold that record. No Breezeway
+# calls are involved in any of them — this is our own database only.
+#
+# Read helpers never raise. A baseline that throws on read would take down a check
+# that works perfectly well without it; a missing baseline just means "no task-level
+# comparison this time", which is the behaviour the page had before.
+
+def _read_task_baseline(route_id: int) -> dict:
+    """{property_key: {"property": display, "tasks": {task_id: task_name}}}, or {}.
+
+    Same shape as the live side it gets diffed against, so the comparison is a
+    plain set difference rather than two dict layouts being reconciled inline.
+    """
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            cur.execute("SELECT property_key, property, task_id, task_name "
+                        "FROM route_task_baseline WHERE route_id = %s", (route_id,))
+            out: dict = {}
+            for r in cur.fetchall():
+                slot = out.setdefault(r["property_key"],
+                                      {"property": r["property"], "tasks": {}})
+                slot["tasks"][str(r["task_id"])] = r["task_name"]
+                if not slot["property"]:
+                    slot["property"] = r["property"]
+            return out
+        finally:
+            cur.close(); conn.rollback(); conn.close()
+    except Exception:
+        return {}
+
+
+def _write_task_baseline(route_id: int, houses: dict) -> bool:
+    """Record these houses' task lists as the accepted state.
+
+    `houses` is {property_key: {"property": display, "tasks": {task_id: name}}}.
+
+    Replaces the rows for the houses PRESENT in `houses` and leaves every other
+    house's rows alone. That per-house scoping is the whole point: a house whose
+    fetch was refused this round must keep the baseline it already had, or the next
+    check would see live tasks with nothing to match them against and report a pile
+    of brand-new tasks that have been there all along.
+    """
+    stamp = datetime.utcnow().isoformat()
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            for key, info in houses.items():
+                cur.execute("DELETE FROM route_task_baseline "
+                            "WHERE route_id = %s AND property_key = %s", (route_id, key))
+                for tid, tname in (info.get("tasks") or {}).items():
+                    cur.execute(
+                        """INSERT INTO route_task_baseline
+                               (route_id, task_id, property_key, property, task_name, recorded_at)
+                           VALUES (%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT (route_id, task_id) DO UPDATE SET
+                               property_key = EXCLUDED.property_key,
+                               property     = EXCLUDED.property,
+                               task_name    = EXCLUDED.task_name,
+                               recorded_at  = EXCLUDED.recorded_at""",
+                        (route_id, str(tid), key, info.get("property"), tname, stamp))
+            conn.commit()
+            return True
+        finally:
+            cur.close(); conn.close()
+    except Exception:
+        return False
+
+
 @dispatch_bp.route("/api/bw-import", methods=["POST"])
 @login_required
 def bw_import():
@@ -2065,6 +2138,98 @@ def route_discrepancies():
                             "tasks": [_bw_task_title(t) for t in tlist],
                             "pci":   any(_title_has_pci(_bw_task_title(t)) for t in tlist)})
 
+    # ── TASK-LEVEL DIFF ───────────────────────────────────────────
+    #
+    # Everything above compares HOUSES: `added` skips any house already on the route
+    # and `removed` only fires when a house has no task at all. So a task appearing
+    # at a house that is already a stop was invisible. This section closes that,
+    # using the tasks already fetched above — no extra Breezeway calls.
+    #
+    # Which houses were actually READ is the load-bearing part. A house we could not
+    # fetch has no live tasks here, which is indistinguishable from a house whose
+    # tasks were all deleted — and reporting the second when it was the first would
+    # invent removals. So a house is diffed only when its own fetch succeeded.
+    #
+    # Nothing here is keyed on a property id, because none of the properties are
+    # linked yet. Instead each house is resolved to the ref_id it was fetched under,
+    # the same way the task path resolves it, so read-status is known per house even
+    # without linking.
+    failed_ref_set = set(failed_refs)
+    name_to_ref = {}
+    for _ref, _bw_pid in pid_candidates.items():
+        _bw_name = prop_cache.get(_bw_pid) or prop_cache.get(str(_bw_pid)) or ""
+        _local   = _match_local_property(_bw_name, db_props)
+        _disp    = (_local["Property Name"] if _local else _bw_name) or ""
+        if _disp:
+            name_to_ref.setdefault(_disp.lower().strip(), _ref)
+
+    # Live task list per house, from the tasks already in hand. Built before the
+    # read-status helper below, which consults it.
+    live_houses = {}
+    for canon, slot in tasks_by_canon.items():
+        key = (slot["name"] or "").lower().strip()
+        if not key:
+            continue
+        entry = live_houses.setdefault(key, {"property": slot["name"],
+                                             "property_id": slot["pid"], "tasks": {}})
+        for t in slot["tasks"]:
+            tid = t.get("id")
+            if tid is not None:
+                entry["tasks"][str(tid)] = _bw_task_title(t)
+
+    def _house_was_read(prop_key):
+        # Holding live tasks IS proof of a successful read — they could not have
+        # arrived otherwise. Checked first because the name→ref lookup below is a
+        # reverse of the fuzzy match and can miss even for a house we just read,
+        # which would then be excluded from its own baseline.
+        if prop_key in live_houses:
+            return True
+        ref = name_to_ref.get(prop_key)
+        if ref is None:
+            # Never resolved to a property we swept. Only a clean sweep makes its
+            # absence meaningful; during a partial one, say nothing about it.
+            return not failed_props
+        return ref not in failed_ref_set
+
+    baseline      = _read_task_baseline(route_id)
+    added_tasks   = []
+    removed_tasks = []
+    # An empty baseline means this route has never been compared at task level. The
+    # first check RECORDS the list rather than reporting all of it as new — every
+    # task would otherwise arrive as a change on day one, which is noise, not signal.
+    baseline_state = "active" if baseline else "seeded"
+
+    if baseline:
+        for key, info in live_houses.items():
+            if not _house_was_read(key):
+                continue
+            base = baseline.get(key, {}).get("tasks", {})
+            for tid, tname in info["tasks"].items():
+                if tid not in base:
+                    added_tasks.append({"property": info["property"],
+                                        "property_id": info.get("property_id"),
+                                        "task_id": tid, "task_name": tname})
+        for key, base in baseline.items():
+            if not _house_was_read(key):
+                continue
+            live_tasks = (live_houses.get(key) or {}).get("tasks") or {}
+            # A house that lost EVERY task is already reported as a whole house by
+            # `removed`. Listing each of its tasks again here would say the same
+            # thing twice in two vocabularies, so only PARTIAL losses appear.
+            if not live_tasks:
+                continue
+            for tid, tname in base.get("tasks", {}).items():
+                if tid not in live_tasks:
+                    removed_tasks.append({"property": base.get("property") or key,
+                                          "property_id": (live_houses.get(key) or {}).get("property_id"),
+                                          "task_id": tid, "task_name": tname})
+    else:
+        # Seed from the houses we actually read, so a throttled house isn't recorded
+        # as having no tasks and then reported as gaining them all next time.
+        seed = {k: v for k, v in live_houses.items() if _house_was_read(k)}
+        if seed:
+            _write_task_baseline(route_id, seed)
+
     # MOVED — house on the route whose task time-of-day differs from the plan.
     moved = []
     for canon, slot in tasks_by_canon.items():
@@ -2108,6 +2273,14 @@ def route_discrepancies():
         "unverified":  sorted(unverified,  key=lambda x: x["property"].lower()),
         "moved":       sorted(moved,       key=lambda x: x["property"].lower()),
         "new_checkin": sorted(new_checkin, key=lambda x: x["property"].lower()),
+        # Task-level changes at houses ALREADY on the route — the case the
+        # house-level comparison above cannot see. Empty on the first check for a
+        # route, which records the baseline instead of reporting everything as new.
+        "added_tasks":    sorted(added_tasks,   key=lambda x: (x["property"].lower(),
+                                                               (x["task_name"] or "").lower())),
+        "removed_tasks":  sorted(removed_tasks, key=lambda x: (x["property"].lower(),
+                                                               (x["task_name"] or "").lower())),
+        "task_baseline":  baseline_state,
         "current_tasks": current_tasks,
         "history_available": any(a["history"].get("available") for a in added),
         # Why the arrival flags below can't be trusted, or "" when they can. Separate
@@ -2125,7 +2298,9 @@ def route_discrepancies():
         "failure_statuses": failure_statuses,
         "summary": {"added": len(added), "removed": len(removed),
                     "unverified": len(unverified),
-                    "moved": len(moved), "new_checkin": len(new_checkin)},
+                    "moved": len(moved), "new_checkin": len(new_checkin),
+                    "added_tasks": len(added_tasks),
+                    "removed_tasks": len(removed_tasks)},
     }
     # Cache before returning so the result survives even if the gateway already timed
     # out THIS request — the next call returns it instantly. Don't cache a run that
@@ -2133,6 +2308,50 @@ def route_discrepancies():
     if not failed_props:
         _route_disc_cache[route_id] = {"ts": _dt_time.time(), "data": payload}
     return jsonify(payload)
+
+
+@dispatch_bp.route("/api/route-task-baseline", methods=["POST"])
+@login_required
+def route_task_baseline_ack():
+    """Accept the task list currently on screen as this route's new baseline.
+
+    Costs no Breezeway calls: the browser posts back the list it was already shown
+    by the discrepancy check. Until this is called, a task change keeps being
+    reported — deliberately. Refreshing the baseline on every check would make a
+    new task appear exactly once and then quietly become the norm, which is the
+    same silent failure this whole feature exists to remove.
+
+    Scoped per house. Only the houses in the payload are rewritten, so a house that
+    could not be read this round keeps the baseline it already had.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        route_id = int(payload.get("route_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "route_id required"}), 400
+
+    houses: dict = {}
+    for h in (payload.get("houses") or []):
+        disp = (h.get("property") or "").strip()
+        key  = disp.lower()
+        if not key:
+            continue
+        slot = houses.setdefault(key, {"property": disp, "tasks": {}})
+        for t in (h.get("tasks") or []):
+            tid = t.get("id") if isinstance(t, dict) else None
+            if tid is None or tid == "":
+                continue
+            slot["tasks"][str(tid)] = (t.get("name") if isinstance(t, dict) else None)
+
+    if not houses:
+        return jsonify({"error": "no houses to record"}), 400
+    if not _write_task_baseline(route_id, houses):
+        return jsonify({"error": "could not record the task baseline"}), 500
+    # The stored comparison is now out of date by construction — the next check must
+    # not be answered from a cache computed against the OLD baseline.
+    _route_disc_cache.pop(route_id, None)
+    return jsonify({"success": True, "houses": len(houses),
+                    "tasks": sum(len(h["tasks"]) for h in houses.values())})
 
 
 @dispatch_bp.route("/api/bw-task-probe")

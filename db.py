@@ -216,6 +216,31 @@ def init_db():
         dismissed_at  TEXT NOT NULL
     )""")
 
+    # What each saved route's task list looked like when it was last ACCEPTED, so
+    # "Changes vs Breezeway" can report a task appearing at (or vanishing from) a
+    # house that is already a stop. Without this the comparison is house-level only:
+    # it can see a house losing every task, and nothing else — so a deliverable added
+    # to a house already on the route was invisible by construction.
+    #
+    # Keyed on the Breezeway task id, which is global and stable. That deliberately
+    # sidesteps the property name-matching the rest of this check still depends on:
+    # a task diff can be exactly right even where a house name isn't.
+    #
+    # property_key is the lowercased display name, used ONLY to group rows by house
+    # (for display, and so an acknowledgement can replace one house's rows without
+    # touching another's). It is never what identifies a task.
+    cur.execute("""CREATE TABLE IF NOT EXISTS route_task_baseline (
+        route_id     INTEGER NOT NULL REFERENCES saved_routes(id) ON DELETE CASCADE,
+        task_id      TEXT NOT NULL,
+        property_key TEXT NOT NULL,
+        property     TEXT,
+        task_name    TEXT,
+        recorded_at  TEXT,
+        PRIMARY KEY (route_id, task_id)
+    )""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS idx_route_task_baseline_house
+                   ON route_task_baseline (route_id, property_key)""")
+
     # Temporary "snooze" for the PRI Check page only (separate from the red
     # banner ✕). Hides a flagged PRI until snoozed_until, then it returns so
     # ops can re-check after a reservation has had time to change.
