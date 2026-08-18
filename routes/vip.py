@@ -241,7 +241,17 @@ def vip_list():
         "checkin_iso":  r["checkin_iso"],
         "checkout_iso": _checkout_iso_of(r["checkin_iso"], r["nights"]),
     } for r in rows]
-    return jsonify({"list": out, "today": _today_pacific().isoformat()})
+    # When the automatic scan last ran, so the page can say the board is current
+    # without anyone pressing Scan — and say so honestly when the last read was
+    # short, since an insert-only scan that couldn't finish looks like a quiet week.
+    st = _read_vip_scan_state()
+    return jsonify({"list": out, "today": _today_pacific().isoformat(),
+                    "auto": {
+                        "updated_at": st.get("updated_at") or "",
+                        "complete":   bool(st.get("resv_ok")),
+                        "added":      st.get("added") or 0,
+                        "error":      st.get("last_error") or "",
+                    }})
 
 
 @vip_bp.route("/vip/clear-departed", methods=["POST"])
@@ -363,6 +373,103 @@ def vip_export():
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+# ── VIP scan state (for the automatic refresh) ────────────────────
+# Read helpers never raise: a page that dies because a status row is unreadable is
+# worse than one that just doesn't show a timestamp.
+
+def _read_vip_scan_state() -> dict:
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            cur.execute("SELECT * FROM vip_scan_state WHERE id = 1")
+            return dict(cur.fetchone() or {})
+        finally:
+            cur.close(); conn.rollback(); conn.close()
+    except Exception:
+        return {}
+
+
+def _write_vip_scan_state(span_from, span_to, resv_ok, added, scanned,
+                          last_error: str = "") -> None:
+    try:
+        conn = get_db(); cur = get_cursor(conn)
+        try:
+            cur.execute("""
+                INSERT INTO vip_scan_state
+                       (id, span_from, span_to, resv_ok, added, scanned, last_error, updated_at)
+                VALUES (1, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE
+                  SET span_from  = EXCLUDED.span_from,
+                      span_to    = EXCLUDED.span_to,
+                      resv_ok    = EXCLUDED.resv_ok,
+                      added      = EXCLUDED.added,
+                      scanned    = EXCLUDED.scanned,
+                      last_error = EXCLUDED.last_error,
+                      updated_at = EXCLUDED.updated_at
+            """, (str(span_from), str(span_to), bool(resv_ok), int(added), int(scanned),
+                  (last_error or "")[:500], datetime.utcnow().isoformat()))
+            conn.commit()
+        finally:
+            cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+def refresh_vip_scan() -> dict:
+    """Pull VIP-tagged reservations into the list. The scan the button runs, and
+    the one the scheduler runs — same code, so the automatic refresh can never
+    drift from what pressing the button does.
+
+    Safe to run on a timer because the scan is INSERT-ONLY and deduped three ways
+    (reservation id, property+date, room+date) against every row including
+    hand-removed ones. Running it hourly cannot duplicate a card, cannot edit a
+    card someone is working on, and cannot resurrect one that was dismissed.
+
+    That also makes a short read self-healing: a truncated reservation list adds
+    fewer VIPs this run and the next run picks up the rest. It is still recorded,
+    because "no new VIPs" and "we could not finish reading" look identical on the
+    page otherwise.
+
+    Never raises — a scheduled job that throws takes the scheduler thread with it.
+    """
+    from routes.briefing import (_get_breezeway_token, _ensure_property_cache,
+                                 _get_live_property_cache,
+                                 _fetch_bw_reservations_status, _extract_str)
+    out = {"ok": False, "added": 0, "scanned_vip": 0, "error": "", "resv_ok": False}
+    today = _today_pacific()
+    lo = (today - _td(days=3)).isoformat()
+    hi = (today + _td(days=21)).isoformat()
+    out["window"] = {"from": lo, "to": hi}
+    try:
+        _ensure_seeded()
+        token = _get_breezeway_token()
+        if not token:
+            out["error"] = "Breezeway not configured."
+            _write_vip_scan_state(lo, hi, False, 0, 0, out["error"])
+            return out
+
+        today_iso = today.isoformat()
+        _ensure_property_cache()
+        prop_cache = _get_live_property_cache()
+
+        # _status, not the plain fetch: a reservation list that stops early returns
+        # the pages it got and no error at all, which would land here as "nothing
+        # new" — the same argument-from-absence that hid short reads elsewhere.
+        results, resv_error = _fetch_bw_reservations_status(
+            token, {"checkin_date_ge": lo, "checkin_date_le": hi})
+        out["resv_ok"] = not resv_error
+
+        added, scanned_vip = _ingest_vip_reservations(results, prop_cache, today_iso, _extract_str)
+        out.update({"ok": True, "added": added, "scanned_vip": scanned_vip,
+                    "error": resv_error or ""})
+        _write_vip_scan_state(lo, hi, not resv_error, added, scanned_vip, resv_error or "")
+        return out
+    except Exception as ex:
+        out["error"] = f"{type(ex).__name__}: {ex}"
+        _write_vip_scan_state(lo, hi, False, 0, 0, out["error"])
+        return out
+
+
 @vip_bp.route("/vip/scan", methods=["POST"])
 @login_required
 def vip_scan():
@@ -370,23 +477,15 @@ def vip_scan():
     through 21 days out and ADD any not already on the list. Insert-only: it
     never edits or removes an existing card, and a card removed by hand stays
     removed (its row is kept, so its dedupe keys still block re-adding)."""
-    from routes.briefing import (_get_breezeway_token, _ensure_property_cache,
-                                 _get_live_property_cache, _fetch_bw_reservations,
-                                 _extract_str)
-    _ensure_seeded()
-    token = _get_breezeway_token()
-    if not token:
-        return jsonify({"error": "Breezeway not configured."}), 503
+    r = refresh_vip_scan()
+    if r.get("error") and not r.get("ok"):
+        return jsonify({"error": r["error"]}), 503
+    return jsonify({"ok": True, "added": r["added"], "scanned_vip": r["scanned_vip"],
+                    "resv_error": r.get("error") or "", "window": r["window"]})
 
-    today = _today_pacific()
-    today_iso = today.isoformat()
-    lo = (today - _td(days=3)).isoformat()
-    hi = (today + _td(days=21)).isoformat()
-    _ensure_property_cache()
-    prop_cache = _get_live_property_cache()
 
-    results = _fetch_bw_reservations(token, {"checkin_date_ge": lo, "checkin_date_le": hi})
-
+def _ingest_vip_reservations(results, prop_cache, today_iso, _extract_str) -> tuple:
+    """Insert any VIP reservation not already known. Returns (added, scanned_vip)."""
     conn = get_db()
     cur = get_cursor(conn)
     # Dedupe against ALL rows (active OR removed) so a hand-removed card never returns.
@@ -397,7 +496,10 @@ def vip_scan():
     have_res  = {r["reservation_id"] for r in ex if r["reservation_id"]}
 
     now = datetime.utcnow().isoformat()
-    uid = getattr(current_user, "id", None)
+    try:
+        uid = getattr(current_user, "id", None)
+    except Exception:
+        uid = None          # scheduled run — nobody pressed anything
     added, scanned_vip = 0, 0
     seen = set()
     for r in (results or []):
@@ -438,8 +540,7 @@ def vip_scan():
         added += cur.rowcount
     conn.commit()
     cur.close(); conn.close()
-    return jsonify({"ok": True, "added": added, "scanned_vip": scanned_vip,
-                    "window": {"from": lo, "to": hi}})
+    return added, scanned_vip
 
 
 @vip_bp.route("/vip/edit", methods=["POST"])

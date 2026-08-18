@@ -23,6 +23,9 @@
         ⬇ Export notes</button>
       <span id="scanStatus" class="text-sm text-gray-500"></span>
     </div>
+    <!-- The board refreshes itself; this says when it last did, so nobody has to
+         press Scan just to find out whether they are looking at current data. -->
+    <div id="autoBox" class="mt-2 text-xs" style="display:none;"></div>
     <div id="departedTop" class="mt-2"></div>
     <div id="busyBanner" class="mt-3 rounded-xl px-4 py-2.5 text-sm"
          style="display:none;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;"></div>
@@ -650,12 +653,48 @@ async function _scan(){
   btn.disabled = false; btn.textContent = label;
 }
 
+/* "Last updated" for the automatic scan.
+   Says complete vs incomplete rather than just a timestamp: this scan is
+   insert-only, so a reservation read that stopped early adds fewer VIPs and is
+   indistinguishable on the page from a week with no new ones. */
+function _fmtWhen(iso){
+  if(!iso) return '';
+  const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
+  if(isNaN(d)) return '';
+  return d.toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric',
+                                    minute:'2-digit', timeZone:'America/Los_Angeles'}) + ' PT';
+}
+
+function _renderAuto(a){
+  const box = document.getElementById('autoBox');
+  if(!box) return;
+  if(!a || !a.updated_at){
+    // No automatic run on record yet — say that, rather than implying it is current.
+    box.style.cssText = 'margin-top:8px;font-size:0.75rem;background:#f9fafb;border:1px solid #e5e7eb;color:#6b7280;border-radius:10px;padding:6px 12px;';
+    box.textContent = 'Updates automatically through the day. No automatic scan has run yet — press Scan to fill the board now.';
+    box.style.display = '';
+    return;
+  }
+  const when = _fmtWhen(a.updated_at);
+  if(a.complete){
+    box.style.cssText = 'margin-top:8px;font-size:0.75rem;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;border-radius:10px;padding:6px 12px;';
+    box.textContent = `Updated automatically ${when}. New VIP tags appear here on their own — Scan is only for when you need it sooner.`;
+  }else{
+    box.style.cssText = 'margin-top:8px;font-size:0.75rem;background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:10px;padding:6px 12px;';
+    box.textContent = `Last automatic update ${when} could not finish reading Breezeway`
+      + (a.error ? ` (${a.error})` : '')
+      + `, so a VIP could be missing. The next run will pick it up, or press Scan.`;
+  }
+  box.style.display = '';
+}
+
 async function init(){
   try{
     const [lr, sr, cr] = await Promise.all([fetch('/vip/list'), fetch('/vip/state'), fetch('/vip/comments')]);
     const [ld, sd, cd] = await Promise.all([lr.json(), sr.json(), cr.json()]);
     VIP = ld.list || [];
     TODAY = ld.today || '';
+    _renderAuto(ld.auto);
     STATE = sd.state || {};
     COMMENTS = cd.comments || {};
   }catch(e){ STATE = STATE || {}; COMMENTS = COMMENTS || {}; }

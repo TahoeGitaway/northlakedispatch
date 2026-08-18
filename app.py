@@ -350,10 +350,43 @@ scheduler.add_job(
     id="day_summaries_retry_3",
     replace_existing=True,
 )
+def _scheduled_vip_scan():
+    """Pull VIP-tagged reservations onto the VIP board without anyone pressing Scan.
+
+    Cheap enough to run often: unlike the lease sweep this is a single paginated
+    reservation read for a 24-day window, not two Breezeway calls per house. So it
+    runs through the day rather than once overnight, and a VIP tagged this morning
+    is on the board within the hour instead of whenever somebody remembers.
+
+    Safe to repeat because the scan is insert-only and deduped against every row
+    including hand-removed ones: it cannot duplicate a card, edit one being worked
+    on, or bring back a dismissed one.
+    """
+    with app.app_context():
+        try:
+            from routes.vip import refresh_vip_scan
+            res = refresh_vip_scan()
+            if res.get("added"):
+                app.logger.info("[vip-scan] added %d VIP reservation(s)", res["added"])
+            if res.get("error"):
+                app.logger.warning("[vip-scan] incomplete: %s", res["error"])
+        except Exception:
+            app.logger.exception("[vip-scan] refresh failed")
+
+
 scheduler.add_job(
     _scheduled_pri_check,
     CronTrigger(hour=7, minute=30, timezone="America/Los_Angeles"),
     id="pri_alert_check",
+    replace_existing=True,
+)
+# Early, so the board is current before anyone opens it, then hourly through the
+# working day. A VIP tag added mid-morning is the case this exists for — the manual
+# button stays for when someone needs it sooner than the next hour.
+scheduler.add_job(
+    _scheduled_vip_scan,
+    CronTrigger(hour="5,7-19", minute=20, timezone="America/Los_Angeles"),
+    id="vip_scan",
     replace_existing=True,
 )
 scheduler.add_job(

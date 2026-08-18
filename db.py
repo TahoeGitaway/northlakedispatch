@@ -613,6 +613,21 @@ def init_db():
         updated_at TEXT
     )""")
 
+    # When the VIP list last auto-refreshed, and whether that read was complete.
+    # One row (id=1). Complete matters because the scan is insert-only: a truncated
+    # reservation read adds fewer VIPs and looks identical to a quiet week, so the
+    # page has to be able to say which it was.
+    cur.execute("""CREATE TABLE IF NOT EXISTS vip_scan_state (
+        id         INTEGER PRIMARY KEY,
+        span_from  TEXT,
+        span_to    TEXT,
+        resv_ok    BOOLEAN NOT NULL DEFAULT FALSE,
+        added      INTEGER NOT NULL DEFAULT 0,
+        scanned    INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        updated_at TEXT
+    )""")
+
     # Every write this app makes to Breezeway, attempted or successful.
     #
     # Breezeway's own task history/audit/activity endpoints all 404, so nothing

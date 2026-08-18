@@ -38,6 +38,19 @@ BW_BASE = "https://api.breezeway.io"
 # arrival, 30 days after a departure.
 WINDOW_DAYS = 30
 
+# How far BACK the departures direction looks by default. Post-lease work follows
+# a checkout, so a span starting today only ever lists departures that haven't
+# happened — the recently-departed houses, which are the ones with outstanding
+# work, all sit behind it. Arrivals have no lookback: their work runs ahead.
+# Kept in step with LOOKBACK_DAYS in templates/lease_prep.html.
+LOOKBACK_DAYS = 14
+
+
+def _default_span(mode: str, today: date) -> tuple:
+    """The span a request gets when it doesn't name one, per direction."""
+    back = LOOKBACK_DAYS if mode == "post" else 0
+    return today - timedelta(days=back), today + timedelta(days=WINDOW_DAYS)
+
 # Workers for the per-lease fan-out. The scheduled job is gentler than a person
 # waiting on a page: it works a 30-day span of leases back to back against a rate
 # limit shared with every other sweep in the app, where a page open is one span.
@@ -678,7 +691,12 @@ def refresh_lease_scans(mode: str = "pre", days: int = WINDOW_DAYS,
     """
     out = {"mode": mode, "saved": [], "skipped": [], "errors": [], "pending": []}
     today = date.today()
-    start, end = today, today + timedelta(days=days)
+    # Sweep the same span the page defaults to. Post used to be swept forward only,
+    # so anything before today was never cached — the departures tab would have
+    # opened on a two-week lookback that the cache could not answer and reported it
+    # as an uncovered span on every single load.
+    start, _ = _default_span(mode, today)
+    end = today + timedelta(days=days)
 
     try:
         token = _get_token()
@@ -798,7 +816,7 @@ def lease_prep_retry():
     """
     payload = request.get_json(silent=True) or {}
     mode    = "post" if payload.get("mode") == "post" else "pre"
-    start, end = _parse_span(payload)
+    start, end = _parse_span(payload, mode)
     try:
         token = _get_token()
         if not token:
@@ -911,9 +929,10 @@ def lease_prep_house_week():
                     "reservations": reservations, "tasks": tasks})
 
 
-def _parse_span(payload: dict) -> tuple:
-    """The From/To span to scan, defaulting to today → +30 days. Pre mode reads
-    lease ARRIVALS (checkin), post mode lease DEPARTURES (checkout). A backwards
+def _parse_span(payload: dict, mode: str = "pre") -> tuple:
+    """The From/To span to scan. Pre mode reads lease ARRIVALS (checkin) and
+    defaults to today → +30; post mode reads DEPARTURES (checkout) and defaults to
+    14 days back → +30, because the work it tracks follows a checkout. A backwards
     range is swapped rather than rejected."""
     today = date.today()
 
@@ -923,8 +942,9 @@ def _parse_span(payload: dict) -> tuple:
         except (ValueError, TypeError):
             return default
 
-    start = _parse_date(payload.get("from"), today)
-    end   = _parse_date(payload.get("to"),   today + timedelta(days=WINDOW_DAYS))
+    _def_start, _def_end = _default_span(mode, today)
+    start = _parse_date(payload.get("from"), _def_start)
+    end   = _parse_date(payload.get("to"),   _def_end)
     return (end, start) if end < start else (start, end)
 
 
@@ -979,7 +999,7 @@ def _lease_prep_scan_inner(mode="pre"):
          work is not thrown away when the page is closed.
     """
     payload = request.get_json(silent=True) or {}
-    start, end = _parse_span(payload)
+    start, end = _parse_span(payload, mode)
     force = bool(payload.get("force"))
 
     # The page asks with cache_only on load, so opening it can never itself start

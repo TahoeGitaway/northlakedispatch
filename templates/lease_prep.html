@@ -48,7 +48,7 @@
               class="hidden px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
         Scan
       </button>
-      <button type="button" onclick="resetDates()"
+      <button type="button" id="resetDatesBtn" onclick="resetDates()"
               class="px-3 py-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
         Reset to default (next 30 days)
       </button>
@@ -408,11 +408,23 @@ function _ymd(d) {
          String(d.getDate()).padStart(2, '0');
 }
 
-function resetDates() {
-  const today = new Date();
-  const plus30 = new Date(); plus30.setDate(plus30.getDate() + 30);
-  document.getElementById('fromDate').value = _ymd(today);
-  document.getElementById('toDate').value   = _ymd(plus30);
+/* Departures look BACKWARDS. A post-lease list starting today only ever shows
+   checkouts that haven't happened yet, which is the opposite of what the tab is
+   for — the work it tracks follows a departure, so the useful span begins before
+   today. Arrivals keep looking forward. */
+const LOOKBACK_DAYS = 14;
+
+function resetDates(mode) {
+  const m = mode || currentMode;
+  const from = new Date();
+  if (m === 'post') from.setDate(from.getDate() - LOOKBACK_DAYS);
+  const to = new Date(); to.setDate(to.getDate() + 30);
+  document.getElementById('fromDate').value = _ymd(from);
+  document.getElementById('toDate').value   = _ymd(to);
+  const btn = document.getElementById('resetDatesBtn');
+  if (btn) btn.textContent = m === 'post'
+    ? `Reset to default (last ${LOOKBACK_DAYS} days + next 30)`
+    : 'Reset to default (next 30 days)';
 }
 
 function switchTab(mode) {
@@ -427,6 +439,10 @@ function switchTab(mode) {
   post.className = `px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${mode === 'post' ? active : idle}`;
 
   document.getElementById('subhead').textContent = MODE[mode].subhead;
+  // Apply the new tab's default span. Without this, switching to Departures kept
+  // the arrivals window and the list opened on checkouts that are still in the
+  // future — the tab looked empty when the recent departures were the point.
+  resetDates(mode);
 
   // Clear prior results so the two tabs never show stale data from each other.
   document.getElementById('results').innerHTML = '';
