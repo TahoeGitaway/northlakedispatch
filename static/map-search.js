@@ -937,9 +937,21 @@ let _bwLastImport = null;
 // because the held failed-refs list only survives 15 min between attempts.
 const _BW_AUTO_PROGRESS_S = 8;                       // recovered something → go again soon
 const _BW_AUTO_BACKOFF_S  = [20, 45, 90, 120, 120];  // recovered nothing → step back
-// Whole run finishes in ~1 min if every attempt makes progress, ~10.5 min in the
-// worst case where none of them do. Both are unattended, which is the point.
-const _BW_AUTO_MAX_TRIES  = 7;
+// STOP ON STALL, NOT ON A TRY COUNT.
+//
+// A fixed ceiling of 7 was wrong arithmetic. At Breezeway's 200/min the gate
+// sustains ~180/min, so one 45 s pass covers ~135 of 445 properties — four passes
+// minimum when everything succeeds, and more once a pass has to re-ask for
+// houses that 429'd. Seven tries could not reliably finish, so a run that was
+// still loading houses every single pass would stop anyway and sit there waiting
+// to be told to continue. Nobody should have to press Resume on a job that is
+// visibly working.
+//
+// So: keep going while it is RECOVERING, and give up only when it genuinely
+// stalls — three consecutive passes that load nothing new. _BW_AUTO_HARD_CAP is
+// a runaway guard, not a schedule; reaching it means something is wrong.
+const _BW_AUTO_MAX_STALLS = 3;
+const _BW_AUTO_HARD_CAP   = 40;
 
 /* ── HOW LONG IS THIS GOING TO TAKE ─────────────────────────────────────────
    Breezeway's limit is confirmed at 200 req/min and the gate paces to 90% of it,
@@ -1097,18 +1109,28 @@ function _bwAutoAfterResult(stillFailed, retryable, recovered) {
     return;
   }
   if (_bwAuto.stopped) return;
-  if (_bwAuto.attempt >= _BW_AUTO_MAX_TRIES) {
-    // Cause-neutral: the stall may be timeouts or this app's own limiter, not a
-    // refusal by Breezeway. The message above already names what actually happened.
-    _bwAuto.note = `Stopped after ${_BW_AUTO_MAX_TRIES} automatic tries — `
-                 + `${stillFailed} still haven't loaded.`;
-    return;
-  }
 
   // recovered === null is the first import: treat it as progress so the first
   // retry goes out promptly rather than starting part-way up the backoff.
   if (recovered === null || recovered > 0) _bwAuto.stalls = 0;
   else                                     _bwAuto.stalls++;
+
+  // Only stop when it is actually stuck. A pass that loaded houses is progress,
+  // however many passes it has taken — 445 properties simply do not fit in one
+  // 45 s budget at 180 req/min, so "still going" is the normal shape of a full
+  // day, not a fault to be halted.
+  if (_bwAuto.stalls >= _BW_AUTO_MAX_STALLS) {
+    // Cause-neutral: the stall may be timeouts or this app's own limiter, not a
+    // refusal by Breezeway. The message above already names what actually happened.
+    _bwAuto.note = `Stopped after ${_BW_AUTO_MAX_STALLS} tries that loaded nothing `
+                 + `new — ${stillFailed} still haven't loaded.`;
+    return;
+  }
+  if (_bwAuto.attempt >= _BW_AUTO_HARD_CAP) {
+    _bwAuto.note = `Stopped after ${_BW_AUTO_HARD_CAP} attempts — `
+                 + `${stillFailed} still haven't loaded.`;
+    return;
+  }
 
   const wait = _bwAuto.stalls === 0
     ? _BW_AUTO_PROGRESS_S
@@ -1275,7 +1297,7 @@ function _bwManualRetryBtn(n) {
     _bwAutoClearTimers();          // hand the pending automatic attempt to this one
     // A manual try costs Breezeway exactly what an automatic one does, so it spends
     // from the same budget. Untracked, clicking repeatedly walked straight past
-    // _BW_AUTO_MAX_TRIES — the ceiling only ever counted the timer's own attempts.
+    // _BW_AUTO_HARD_CAP — the ceiling only ever counted the timer's own attempts.
     _bwAuto.attempt++;
     _bwAuto.inFlight = true;
     bwRetryMissingImport(btn);
