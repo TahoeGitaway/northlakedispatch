@@ -789,7 +789,26 @@ async function runBwImport() {
       }, data.error);
       return;
     }
-    if (data.message) { _bwImportMsg(data.message, "gray"); return; }
+    // "No Breezeway tasks found for that date/assignee" is NOT the same claim as "this
+    // person has nothing on". It is reached when the sweep returned tasks but none
+    // survived the assignee filter — so if this person's houses were among the ones
+    // Breezeway never answered for, the honest answer is "not yet", and the second or
+    // third pass is what finds them.
+    //
+    // Only a COMPLETE sweep can say "nothing here" and stop. Anything less falls
+    // through to the normal path below, because returning here skipped _bwAutoReset,
+    // _bwLastImport and _bwAutoAfterResult — so the retry was never armed, and the one
+    // result that most needed another pass was the only one that never got one. It was
+    // also gray, which reads as "fine", with no count and no retry button.
+    //
+    // This lands hardest on the lightest routes: someone with fifteen stops almost
+    // always has one house land in the first partial sweep, which keeps the retry
+    // alive. Someone with two often doesn't — and a quiet day is the one nobody
+    // questions, because "Trevor has nothing on the 19th" is perfectly plausible.
+    if (data.message && !data.failed_properties) {
+      _bwImportMsg(data.message, "gray");   // whole portfolio read — genuinely nothing here
+      return;
+    }
 
     {  // single employee
       // Confident matches are added immediately
@@ -801,7 +820,12 @@ async function runBwImport() {
           added++;
         }
       }
-      let msg   = added === 0 ? "All matched properties already in the list." : `Added ${added} stop${added !== 1 ? "s" : ""}.`;
+      // With an incomplete sweep the server's "nothing found" line is the accurate
+      // opener; "All matched properties already in the list" would be a lie, because
+      // there were no matches at all.
+      let msg   = data.message ? data.message
+                : (added === 0 ? "All matched properties already in the list."
+                               : `Added ${added} stop${added !== 1 ? "s" : ""}.`);
       let color = "green";
       const uncertain = data.uncertain || [];
       const unmatched = data.unmatched || [];
