@@ -1273,7 +1273,13 @@ _ROUTE_DISC_TTL = 120
 # Tighter than the import's 45 s: this endpoint fetches reservations first and does
 # heavier post-processing, and a fast partial answer beats a complete one that
 # never arrives.
-_ROUTE_DISC_BUDGET_S = 30
+_ROUTE_DISC_BUDGET_S = 200  # Same arithmetic as the import: ~148 s to sweep 445
+                            # properties at 3 req/s, so 30 s was a fifth of the job
+                            # and guaranteed a partial answer. This endpoint also
+                            # fetches reservations (up to 25 s) and does heavier
+                            # post-processing, and 200 + 25 still clears the 300 s
+                            # gateway. Checks now finish rather than handing back a
+                            # wall of "couldn't be loaded" for work never attempted.
 # Tasks collected so far + the refs that failed, so "try the missing N again" can
 # refetch only those instead of re-running the whole ~442-call sweep.
 _route_disc_partial: dict = {}            # route_id -> (ts, tasks, failed_refs)
@@ -1358,7 +1364,20 @@ def _sweep_day_shared(date_str, sweep_fn, budget_s):
     return [], 0, {}, []
 
 
-_BW_IMPORT_BUDGET_S = 45   # Stop sweeping after this and return what loaded. With
+_BW_IMPORT_BUDGET_S = 200  # Long enough to FINISH, which is the whole point.
+                           #
+                           # 45 s could not. At the confirmed 200 req/min the gate
+                           # sustains ~3 req/s, so 445 properties need ~148 s of
+                           # sweeping — 45 s buys ~135 of them. Every import was
+                           # therefore partial BY CONSTRUCTION, and the retry ladder,
+                           # the Resume button and the "N still haven't loaded"
+                           # counter all existed to paper over a budget that was set
+                           # to a third of the job.
+                           #
+                           # Railway kills a request at 300 s, so 200 s leaves ~100 s
+                           # of margin over the 148 s the sweep actually needs, which
+                           # covers re-asks for houses that 429 along the way. One
+                           # scan, one wait, done — instead of eight partial ones.
                            # no budget the import ran to completion however long it
                            # took — five minutes under throttling — and the gateway
                            # killed it at 300s, leaving no data and nothing to retry
