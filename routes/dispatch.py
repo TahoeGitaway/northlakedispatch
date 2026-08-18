@@ -1978,6 +1978,35 @@ def _task_history_summary(task: dict) -> dict:
 
 
 
+
+@dispatch_bp.route("/admin/bw-runtime")
+@login_required
+@admin_required
+def bw_runtime():
+    """Which process answered this request, and what its gate has seen.
+
+    Exists because a comment claiming "the deployment runs a single Gunicorn
+    worker" was believed instead of checked, and it was wrong. The rate gate, the
+    day cache and the in-flight sweep registry are all process-local, so worker
+    count is not a detail — with more than one, none of them are shared, each gate
+    paces the full 200/min believing it owns the quota, and the app throttles
+    itself while appearing to behave.
+
+    Reload this a few times. Same pid every time = one worker, and the shared
+    state is real. Different pids = several workers, and nothing in-process is
+    shared no matter what the code says.
+    """
+    import os
+    from routes.bw_ratelimit import gate
+    return jsonify({
+        "pid": os.getpid(),
+        "env_web_concurrency": os.environ.get("WEB_CONCURRENCY"),
+        "gate": gate.stats(),
+        "sweeps_in_flight": sorted(_bw_day_inflight.keys()),
+        "day_cache_dates": sorted(_bw_day_cache.keys()),
+        "sweep_progress": _bw_sweep_progress,
+    })
+
 @dispatch_bp.route("/api/bw-sweep-progress")
 @login_required
 def bw_sweep_progress():
