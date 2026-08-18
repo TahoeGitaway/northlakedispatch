@@ -303,6 +303,137 @@ def _fetch_bw_reservations_checked(token: str, params: dict,
     return all_results, True
 
 
+# How long to wait on ONE per-property task read. Kept at 15 s, and deliberately
+# separate from BW_RESV_READ_TIMEOUT_S above: these fan out across a thread pool
+# under a wall-clock budget, so a longer wait means each worker holds its slot
+# longer and FEWER properties get attempted. The API log settles which way that
+# trade goes — 74 real timeouts all-time against 22,433 refusals — so waiting
+# longer here buys almost nothing and costs coverage. Reservations are the
+# opposite case and get their own, longer constant.
+BW_TASK_READ_TIMEOUT_S = 15
+
+
+def fetch_property_tasks_range(token: str, pid: str, ref_id: str,
+                               start, end) -> tuple:
+    """One property's tasks over a date range. Returns (tasks, ok, status).
+
+    ok=False means it genuinely could not be loaded and the caller must NOT treat
+    the empty list as "no tasks". `status` is the last failing HTTP status, or
+    None for a timeout, so callers can name the real cause.
+
+    Preserves the id-fallback every copy of this had: Breezeway's task API takes
+    the external reference id while other calls take Breezeway's own, and a 200
+    carrying no results may just mean we asked in the wrong id space — so an empty
+    200 falls through to the next key rather than being accepted as the answer.
+    """
+    date_range = f"{start.isoformat()},{end.isoformat()}"
+    id_pairs = ([("reference_property_id", ref_id)] if ref_id else []) \
+             + [("property_id", pid), ("home_id", pid)]
+
+    saw_empty_200 = False
+    last_status = None
+    for key, val in id_pairs:
+        for attempt in range(3):
+            try:
+                r = bw_get(
+                    "https://api.breezeway.io/public/inventory/v1/task/",
+                    headers={"Authorization": f"JWT {token}"},
+                    params={"scheduled_date": date_range, key: val, "limit": 100},
+                    timeout=BW_TASK_READ_TIMEOUT_S,
+                )
+                last_status = r.status_code
+                if r.status_code == 200:
+                    body = r.json()
+                    results = body.get("results",
+                                       body.get("data", body if isinstance(body, list) else []))
+                    if results:
+                        return results, True, 200
+                    saw_empty_200 = True
+                    break                       # this id space answered; try the next
+                if r.status_code == 429 or r.status_code >= 500:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue                    # transient — worth another go
+                break                           # 4xx that won't change; try the next id key
+            except Exception:
+                last_status = None              # timeout / transport — retryable
+                time.sleep(0.3 * (attempt + 1))
+
+    # Every id space answered 200 with nothing: a real "no tasks here".
+    if saw_empty_200:
+        return [], True, 200
+    return [], False, last_status
+
+
+def fetch_tasks_for_pids(token: str, pids: list, start, end,
+                         max_workers: int = 16, budget_s: float = 45.0) -> tuple:
+    """Sweep many properties. Returns (tasks, failed_count, failure_statuses).
+
+    failure_statuses is the {"429": n, "timeout": n, "unreached": n} tally the UI
+    needs in order to say WHY, via static/bw-failure.js — the same shape the map
+    import already returns.
+
+    Deliberately does NOT share a contextvars.Context across the workers. Doing
+    that is what broke every sweep in the app on 2026-08-11: a Context cannot be
+    entered by two threads at once, so the first property won the race and the
+    other 441 raised before their request was ever made (60bf848). Caller
+    labelling is not worth that, so it is simply absent here.
+
+    Not a `with` block, for the same reason the import isn't: exiting one calls
+    shutdown(wait=True), which blocks on every already-running request and undoes
+    the budget. Abandoning them is safe — they are GETs whose results we have
+    already given up on.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    ref_cache = _get_live_ref_cache()
+    all_tasks, seen_ids = [], set()
+    failed, statuses = 0, {}
+    deadline = time.monotonic() + budget_s
+
+    ex = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {
+            ex.submit(fetch_property_tasks_range,
+                      token, pid, ref_cache.get(pid, ""), start, end): pid
+            for pid in pids
+        }
+        try:
+            for future in as_completed(futures,
+                                       timeout=max(0.0, deadline - time.monotonic())):
+                try:
+                    tasks, ok, status = future.result()
+                except Exception:
+                    failed += 1
+                    statuses["timeout"] = statuses.get("timeout", 0) + 1
+                    continue
+                if not ok:
+                    failed += 1
+                    k = "timeout" if status is None else str(status)
+                    statuses[k] = statuses.get(k, 0) + 1
+                    continue
+                for t in tasks:
+                    tid = t.get("id")
+                    if tid is None or tid not in seen_ids:
+                        if tid is not None:
+                            seen_ids.add(tid)
+                        all_tasks.append(t)
+        except Exception:
+            pass        # budget reached — the leftovers are counted below
+
+        # Properties the budget cut off were never asked, so they cannot appear in
+        # the API log. Filing them as timeouts is what made a panel claim hundreds
+        # of properties "did not respond within 15 s" for requests never sent.
+        for future, pid in futures.items():
+            if not future.done():
+                future.cancel()
+                failed += 1
+                statuses["unreached"] = statuses.get("unreached", 0) + 1
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    return all_tasks, failed, statuses
+
+
 def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:
     """Generic paginated GET for any Breezeway endpoint.
     Returns (results_list, error_string, http_status).

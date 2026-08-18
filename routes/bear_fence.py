@@ -15,7 +15,6 @@ Endpoints:
 import re
 import requests
 from datetime import date, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required
@@ -51,73 +50,30 @@ def _get_property_name(pid):
             str(pid))
 
 
-def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, end: date) -> list:
-    date_range = f"{start.isoformat()},{end.isoformat()}"
-    id_pairs = []
-    if ref_id:
-        id_pairs.append(("reference_property_id", ref_id))
-    id_pairs += [("property_id", pid), ("home_id", pid)]
-    for key, val in id_pairs:
-        try:
-            r = bw_get(
-                f"{BW_BASE}/public/inventory/v1/task/",
-                headers={"Authorization": f"JWT {token}"},
-                params={"scheduled_date": date_range, key: val, "limit": 100},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                body = r.json()
-                results = body.get("results", body.get("data", body if isinstance(body, list) else []))
-                if results:
-                    return results
-        except Exception:
-            pass
-    return []
+# The per-property task sweep and the reservation pull used to live here as private
+# copies that swallowed every failure as an empty list — a throttled house was
+# indistinguishable from a house with no bear fence task, and a 429 on page 3 of the
+# reservations silently truncated the candidate list. Both now come from briefing.py,
+# which reports what it could not read, so this tool inherits those fixes instead of
+# needing them applied a third time.
+def _fetch_tasks_for_pids(token: str, pids: list, start: date, end: date) -> tuple:
+    """(tasks, failed_count, failure_statuses) — see briefing.fetch_tasks_for_pids."""
+    from routes.briefing import fetch_tasks_for_pids
+    return fetch_tasks_for_pids(token, pids, start, end)
 
 
-def _fetch_tasks_for_pids(token: str, pids: list, start: date, end: date) -> list:
-    from routes.briefing import _get_live_ref_cache
-    ref_cache = _get_live_ref_cache()
-    all_tasks = []
-    seen_ids: set = set()
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
-                   for pid in pids}
-        for future in as_completed(futures):
-            for t in (future.result() or []):
-                tid = t.get("id")
-                if tid is None or tid not in seen_ids:
-                    if tid is not None:
-                        seen_ids.add(tid)
-                    all_tasks.append(t)
-    return all_tasks
+def _fetch_reservations_range(token: str, start: date, end: date) -> tuple:
+    """(reservations, error) — error is non-empty when the set is INCOMPLETE.
 
-
-def _fetch_reservations_range(token: str, start: date, end: date) -> list:
-    all_results = []
-    page = 1
-    while True:
-        try:
-            r = bw_get(
-                f"{BW_BASE}/public/inventory/v1/reservation",
-                headers={"Authorization": f"JWT {token}"},
-                params={"checkin_date_ge": start.isoformat(), "checkin_date_le": end.isoformat(),
-                        "limit": 100, "page": page},
-                timeout=20,
-            )
-            if r.status_code != 200:
-                break
-            body = r.json()
-            results = body.get("results", body.get("data", []))
-            if not results:
-                break
-            all_results.extend(results)
-            if len(results) < 100:
-                break
-            page += 1
-        except Exception:
-            break
-    return all_results
+    Incompleteness matters more here than almost anywhere: the arrivals in this
+    range are what decides which properties get scanned at all, so a truncated pull
+    drops houses out of the proposals with nothing on screen to say so.
+    """
+    from routes.briefing import _fetch_bw_reservations_status
+    return _fetch_bw_reservations_status(token, {
+        "checkin_date_ge": start.isoformat(),
+        "checkin_date_le": end.isoformat(),
+    })
 
 
 def _fetch_task_by_id(token: str, task_id) -> dict | None:
@@ -201,15 +157,19 @@ def bear_fence_scan():
     except ValueError:
         start, end = today, today + timedelta(days=7)
 
-    # Fetch arrivals to narrow down which properties to scan
-    reservations = _fetch_reservations_range(token, start, end + timedelta(days=1))
+    # Fetch arrivals to narrow down which properties to scan. A short read here is
+    # not a smaller day — it is a smaller SCAN, and every house it drops produces no
+    # proposal at all, which reads as "nothing to change".
+    reservations, resv_error = _fetch_reservations_range(token, start, end + timedelta(days=1))
     arrival_pids = list({
         str(r.get("property_id") or r.get("home_id") or "")
         for r in reservations
         if r.get("checkin_date")
     } - {""})
 
-    tasks = _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids else []
+    tasks, failed_props, failure_statuses = (
+        _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids
+        else ([], 0, {}))
 
     # Index tasks by pid
     walk_thrus:  dict[str, list[dict]] = {}
@@ -300,7 +260,19 @@ def bear_fence_scan():
 
     # Sort: by property then current date
     proposals.sort(key=lambda x: (x["property"], x["current_date"]))
-    return jsonify({"proposals": proposals})
+    return jsonify({
+        "proposals": proposals,
+        # What this scan could NOT see. A proposal list is an argument from absence
+        # twice over — a house with no bear fence task is skipped, and a house that
+        # never loaded looks exactly the same — so an incomplete scan that says
+        # nothing is indistinguishable from a clean one that found nothing.
+        "failed_properties": failed_props,
+        "failure_statuses":  failure_statuses,
+        "scanned_properties": len(arrival_pids),
+        # Non-empty when the arrivals themselves came back short, so the candidate
+        # list was already incomplete before a single task was read.
+        "reservations_error": resv_error,
+    })
 
 
 @bear_fence_bp.route("/admin/bear-fence/apply", methods=["POST"])
