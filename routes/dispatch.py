@@ -1968,10 +1968,28 @@ def route_discrepancies():
     # held, or the held copy is too old.
     _partial = _route_disc_partial.get(route_id)
     _seed_tasks, _sweep_keys = [], list(pid_candidates.keys())
+    _shared_from = None          # ts of a day sweep we inherited, for honest reporting
     if retry_failed and _partial and _dt_time.time() - _partial[0] < _ROUTE_DISC_RETRY_WINDOW:
         _retry = [r for r in _partial[2] if r in pid_candidates]
         if _retry:
             _seed_tasks, _sweep_keys = list(_partial[1]), _retry
+    else:
+        # SHARE the day's sweep with every other check running against the same date.
+        # Checking five people's routes for one Saturday used to mean five separate
+        # ~445-call sweeps of identical data, splitting a single 180/min budget five
+        # ways — so each got ~1/5 of what it needed, none finished, and they starved
+        # each other. The import has worked this way for a while (_bw_day_cache):
+        # assignee filtering happens AFTER the fetch, so one sweep serves everybody.
+        _day = _bw_day_cache.get(date_str)
+        if _day:
+            _day_ttl = _BW_DAY_TTL if not _day[2] else _BW_DAY_PARTIAL_TTL
+            if _dt_time.time() - _day[0] < _day_ttl:
+                _seed_tasks = list(_day[1])
+                # Chase only what that sweep never reached. A complete one leaves
+                # nothing to sweep and the check answers immediately.
+                _sweep_keys = [r for r in (_day[4] if len(_day) > 4 else [])
+                               if r in pid_candidates]
+                _shared_from = _day[0]
 
     all_tasks = list(_seed_tasks)
     failed_props = 0
@@ -2031,6 +2049,20 @@ def route_discrepancies():
         _route_disc_partial[route_id] = (_dt_time.time(), all_tasks, failed_refs)
     else:
         _route_disc_partial.pop(route_id, None)
+
+    # Publish the day's tasks for every other check on this date. This is what turns
+    # "six people, six sweeps" into "six people, one sweep": the next route to be
+    # checked seeds from this and chases only the gaps. Written even when incomplete,
+    # WITH its failure count, so the next reader inherits the gaps rather than the
+    # optimism — _BW_DAY_PARTIAL_TTL keeps a gappy copy short-lived so it can't pin
+    # missing tasks for long.
+    #
+    # Only publish a full-portfolio sweep. A per-route retry pass covers just that
+    # route's gaps, so its task list is not the day's — writing it here would hand
+    # the next reader a partial set labelled as the whole day.
+    if not (retry_failed and _partial):
+        _bw_day_cache[date_str] = (_dt_time.time(), all_tasks, failed_props,
+                                   dict(failure_statuses), list(failed_refs))
 
     asgn_lower = assignee.lower()
     seen_ids, mine = set(), []
@@ -2327,6 +2359,12 @@ def route_discrepancies():
         # from failed_properties: that counts houses whose TASKS didn't load, this is
         # the day's check-in list not loading, which mislabels every house at once.
         "arrival_error": arrival_error,
+        # Seconds since the shared day sweep this answer was seeded from, or None when
+        # this check swept for itself. A shared answer must not pass off another
+        # check's freshness as its own: "47 of 445, from a sweep 40 s ago" is a
+        # different claim from "47 of 445, just now".
+        "shared_sweep_age_s": (round(_dt_time.time() - _shared_from)
+                               if _shared_from else None),
         "failed_properties": failed_props,
         # The denominator. failed_properties on its own told the panel only the bad
         # half, so a check that had already read most of the day still rendered as a
