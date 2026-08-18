@@ -1633,6 +1633,7 @@ function _cacRender(route, d) {
   if (!el) return;
 
   if (!d || d.error) {
+    el.dataset.cacDone = "1";
     el.className = "text-red-600 text-xs ml-2";
     el.textContent = "couldn't check — " + (d && d.error ? d.error : "no response");
     return;
@@ -1663,6 +1664,7 @@ function _cacRender(route, d) {
   }
   html += ` <a href="/?load=${route.id}" class="text-indigo-600 hover:underline text-[11px] ml-1">open</a>`;
 
+  el.dataset.cacDone = "1";        // answered — the progress poll leaves it alone
   el.className = "text-xs ml-2";
   el.innerHTML = html;
 }
@@ -1701,6 +1703,27 @@ async function checkAllRoutesForChanges() {
   let done = 0;
   status.textContent = `opening ${routes.length} windows — one Breezeway sweep serves them all`;
 
+  // LIVE progress while the sweep runs. A full day is ~148s of Breezeway calls, and
+  // every window is either running that sweep or blocked on it — so without this the
+  // whole screen sits blank for two and a half minutes, which reads as broken. Poll
+  // the sweep itself rather than showing a spinner: a spinner says "wait", a count
+  // says "137 of 445, about 40s left", and only one of those can be judged.
+  const dateStr = (_dayRoutesShown[0] || {}).route_date || "";
+  const poll = setInterval(async () => {
+    if (!dateStr) return;
+    try {
+      const r = await fetch(`/api/bw-sweep-progress?date=${encodeURIComponent(dateStr)}`);
+      const p = await r.json();
+      if (!p.running) return;                       // finished, or none needed
+      const eta = p.eta_s != null ? ` · ~${p.eta_s}s left` : "";
+      status.textContent = `sweeping Breezeway: ${p.done} of ${p.total} properties${eta}`;
+      document.querySelectorAll("#checkAllResults [data-cac-body]").forEach(b => {
+        if (b.dataset.cacDone) return;              // this list already answered
+        b.textContent = `waiting on the sweep — ${p.done}/${p.total}${eta}`;
+      });
+    } catch (e) { /* a failed poll must never disturb the checks themselves */ }
+  }, 2000);
+
   await Promise.all(routes.map(async route => {
     try {
       const res  = await fetch(`/api/route-discrepancies?route_id=${route.id}`);
@@ -1717,6 +1740,7 @@ async function checkAllRoutesForChanges() {
     }
   }));
 
+  clearInterval(poll);
   btn.disabled = false;
   btn.textContent = "🔄 Open & check all lists";
 }

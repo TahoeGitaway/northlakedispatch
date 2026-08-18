@@ -1308,6 +1308,29 @@ _BW_RETRY_WINDOW = 900     # 15 min to "try the missing N again" before a retry
 #
 # So a sweep is announced before it starts. Anyone arriving for the same date
 # waits for it and reads what it publishes, instead of launching a rival.
+# LIVE progress for a sweep in flight, so a request that takes ~2.5 minutes can
+# say what it is doing instead of showing a blank panel. date_str -> counters.
+# Polled by /api/bw-sweep-progress. This only became answerable once gunicorn had
+# more than one thread: with a single sync worker the poll would have queued
+# behind the very sweep it was asking about.
+_bw_sweep_progress: dict = {}
+
+
+def _progress_start(date_str, total):
+    _bw_sweep_progress[date_str] = {"done": 0, "total": total,
+                                    "started_ms": round(_dt_time.time() * 1000)}
+
+
+def _progress_tick(date_str):
+    p = _bw_sweep_progress.get(date_str)
+    if p:
+        p["done"] += 1
+
+
+def _progress_end(date_str):
+    _bw_sweep_progress.pop(date_str, None)
+
+
 _bw_day_inflight: dict = {}                 # date_str -> threading.Event
 _bw_day_inflight_lock = _threading.Lock()
 
@@ -1659,8 +1682,10 @@ def bw_import():
             # a tiny timeout instead would mark every still-running property as
             # failed — it loaded 0 of 40 in a test.)
             remaining = max(0.0, _import_deadline - _dt_time.monotonic())
+            _progress_start(date_str, len(futures))
             try:
                 for fut in as_completed(futures, timeout=remaining):
+                    _progress_tick(date_str)
                     ref_id = futures[fut]
                     try:
                         tasks, ok, status = fut.result()
@@ -1952,6 +1977,36 @@ def _task_history_summary(task: dict) -> dict:
     }
 
 
+
+@dispatch_bp.route("/api/bw-sweep-progress")
+@login_required
+def bw_sweep_progress():
+    """How far the sweep for a date has got, for anything waiting on it.
+
+    A sweep is ~148s of work, and every caller — the import, each route check,
+    every window opened by "check all" — is either running it or blocked on it.
+    Without this they all render a blank panel for two and a half minutes, which
+    is indistinguishable from broken and is what made a working scan look dead.
+
+    Deliberately trivial: one dict read, no Breezeway call, safe to poll every
+    couple of seconds from a dozen tabs.
+    """
+    date_str = (request.args.get("date") or "").strip()
+    p = _bw_sweep_progress.get(date_str)
+    if not p:
+        # No sweep running. Either it finished (the caller's own request is about
+        # to return) or none was needed, and both are "nothing to report".
+        return jsonify({"running": False})
+    done, total = p.get("done", 0), p.get("total", 0) or 0
+    elapsed_ms  = round(_dt_time.time() * 1000) - p.get("started_ms", 0)
+    # Rate measured from THIS sweep rather than assumed, so the estimate reflects
+    # what the API is actually giving us right now.
+    eta_s = None
+    if done > 0 and total > done and elapsed_ms > 0:
+        eta_s = round((elapsed_ms / done) * (total - done) / 1000)
+    return jsonify({"running": True, "done": done, "total": total,
+                    "elapsed_s": round(elapsed_ms / 1000), "eta_s": eta_s})
+
 @dispatch_bp.route("/api/route-discrepancies")
 @login_required
 def route_discrepancies():
@@ -2128,9 +2183,11 @@ def route_discrepancies():
         futures = {ex.submit(_robust_property_tasks, token, ref, date_str,
                              pid_candidates.get(ref)): ref
                    for ref in _sweep_keys}
+        _progress_start(date_str, len(futures))
         try:
             for fut in _as_completed(
                     futures, timeout=max(0.0, _deadline - _dt_time.monotonic())):
+                _progress_tick(date_str)
                 ref_id = futures[fut]
                 try:
                     tasks, ok, status = fut.result()
