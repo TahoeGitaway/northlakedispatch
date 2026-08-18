@@ -1595,14 +1595,24 @@ def bw_import():
         if _dt_time.time() - _cached[0] < _BW_RETRY_WINDOW:
             _retry_refs = [r for r in _cached[4] if r in pid_candidates]
     if retry_failed and not _retry_refs:
-        # Never let "try the missing N" quietly turn into all ~442 calls. If the
-        # failed list is gone, say so rather than doing the expensive sweep the
-        # user is specifically trying to avoid.
-        return jsonify({
-            "error": "The list of which properties failed has expired, so there's "
-                     "nothing left to retry on its own. Run the import again to do "
-                     "a full load.",
-        }), 200
+        # TWO very different situations, which used to produce the same error.
+        if _cached and _cached_fresh:
+            # Nothing outstanding. Another tab's retry already filled these gaps, or
+            # the sweep finished — the work this click asked for is DONE. Serving the
+            # shared result is the entire point of sharing one sweep; reporting
+            # "your retry list expired" when the data is sitting right there reads as
+            # a failure and sends the user off to run a full ~445-call re-import to
+            # fetch what has already been fetched. Fall through and serve it.
+            retry_failed = False
+        else:
+            # Genuinely gone: no fresh copy to answer from and no record of what
+            # failed. Say so rather than quietly turning "try the missing N" into all
+            # ~445 calls, which is the expense the button exists to avoid.
+            return jsonify({
+                "error": "The record of which properties failed has expired, and "
+                         "there's no recent copy of the day to answer from. Run the "
+                         "import again to do a full load.",
+            }), 200
 
     def _sweep(keys, seed_results):
         """Fetch `keys`, appending onto `seed_results`. Returns
