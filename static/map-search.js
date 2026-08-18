@@ -2145,6 +2145,19 @@ function _rcAutoAfterResult(routeId, data) {
 }
 
 function _rcAutoFire(routeId) {
+  // THIS TIMER MAY BELONG TO A ROUTE THE PANEL HAS MOVED OFF.
+  //
+  // _rcAuto is a single object, and opening another route calls _rcAutoReset,
+  // which repoints it at the new route. A timer left over from the previous one
+  // then lands on the NEW route's schedule: _rcAutoClearTimers below would cancel
+  // the retry that is actually pending, and _rcAutoHalt would mark it stopped —
+  // so a route that was retrying quietly on its own goes dead and needs Resume
+  // pressed by hand. Checking several people in a row is a stale timer per
+  // switch, which is exactly the "clicking Resume over and over" symptom.
+  //
+  // Bail BEFORE touching any shared state. The stale schedule simply expires.
+  if (routeId !== _rcAuto.routeId) return;
+
   _rcAutoClearTimers();
   const body = _rcBody();
   // Panel closed, or a different route is loaded: give up rather than keep
