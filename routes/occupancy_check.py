@@ -232,8 +232,11 @@ def occupancy_check():
     ref_cache = _get_live_ref_cache()
 
     def _job(pid):
+        # Same fallback the sweeps use: no reference id → the key IS the Breezeway
+        # pid, and passing pid tells the fetcher to ask in that id space instead of
+        # sending a pid to a parameter that only matches reference ids.
         ref = ref_cache.get(pid) or str(pid)
-        tasks, ok, status = _robust_property_tasks(token, ref, day_str)
+        tasks, ok, status = _robust_property_tasks(token, ref, day_str, pid)
         return pid, tasks, ok, status
 
     failed   = 0

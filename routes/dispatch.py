@@ -1297,30 +1297,66 @@ _BW_IMPORT_BUDGET_S = 45   # Stop sweeping after this and return what loaded. Wi
                            # against. A partial answer is recoverable; a 502 is not.
 
 
-def _robust_property_tasks(token, ref_id, date_str):
+def _robust_property_tasks(token, ref_id, date_str, bw_pid=None):
     """Fetch ONE property's tasks for a date with retry/backoff, so a momentary
     Breezeway throttle (429 / 5xx) doesn't SILENTLY drop the whole property's
     tasks. Returns (tasks, ok, status); ok=False means it genuinely couldn't be
     loaded, and `status` is the HTTP status of the final failed attempt
     (None = no response/timeout) so callers can name the real cause instead of
     assuming a throttle. Shared by the import, the discrepancy check, and
-    clear-times."""
+    clear-times.
+
+    ASK IN THE RIGHT ID SPACE. The task endpoint matches on the EXTERNAL
+    reference id; property_id / home_id are a different space entirely. Houses
+    with no reference_property_id are swept under their Breezeway pid instead
+    (pid_candidates falls back to str(bw_pid)), and passing that as
+    reference_property_id matches nothing — Breezeway answers 200 with an empty
+    list. Taking that as "no tasks at this house" is how a house's real work
+    vanished behind "All 445 properties loaded": no failure, no warning, just
+    absent.
+
+    `bw_pid` lets this tell the two cases apart. The sweep key equals str(bw_pid)
+    exactly when the house has no reference id, so that comparison identifies a
+    fallback key without threading another flag through every call site.
+
+    Deliberately does NOT try the other id spaces when the reference id is real:
+    an empty 200 there is a true "nothing scheduled", which is the COMMON case
+    (most houses have no task on any given day). Probing further would triple the
+    request count for the majority of a 445-property sweep against a 180/min
+    budget — trading a silent gap for a rate limit, which is a worse deal.
+    """
     from routes.briefing import _fetch_bw_endpoint
     import time as _time
+
+    # A key that IS the Breezeway pid means no reference id existed for this house.
+    id_keys = (["property_id", "home_id"]
+               if bw_pid is not None and str(ref_id) == str(bw_pid)
+               else ["reference_property_id"])
+
     status = None
     for attempt in range(3):
-        r, _, status = _fetch_bw_endpoint(
-            token, "/public/inventory/v1/task",
-            {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
+        saw_empty_200 = False
+        for key in id_keys:
+            r, _, status = _fetch_bw_endpoint(
+                token, "/public/inventory/v1/task",
+                {key: ref_id, "scheduled_date": f"{date_str},{date_str}"})
+            if status == 200:
+                if r:
+                    return (r, True, status)
+                saw_empty_200 = True
+                continue          # right shape, wrong space — try the next key
+            break                 # non-200: fall through to the handling below
+        if saw_empty_200 and (status == 200 or status is None):
+            return ([], True, 200)          # every id space answered: genuinely none
         if status == 200:
-            return (r or [], True, status)
+            return ([], True, status)
         if status is None or status == 429 or status >= 500:
             _time.sleep(0.3 * (attempt + 1))
             continue
         # Non-throttle error (e.g. 400) → try the alternate date param once.
         r2, _, st2 = _fetch_bw_endpoint(
             token, "/public/inventory/v1/task",
-            {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
+            {id_keys[0]: ref_id, "start_date": date_str, "end_date": date_str})
         return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
     return ([], False, status)
 
@@ -1517,7 +1553,10 @@ def bw_import():
         from concurrent.futures import as_completed
         out, nfail, tally, refs = list(seed_results), 0, {}, []
         with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = {executor.submit(_robust_property_tasks, token, ref, date_str): ref
+            # bw_pid lets the fetcher see that a key IS the Breezeway pid, i.e. this
+            # house has no reference id and must be asked for in the other id space.
+            futures = {executor.submit(_robust_property_tasks, token, ref, date_str,
+                                       pid_candidates.get(ref)): ref
                        for ref in keys}
             # Take results AS THEY LAND, up to the budget. (Polling each future with
             # a tiny timeout instead would mark every still-running property as
@@ -1961,7 +2000,8 @@ def route_discrepancies():
     # Abandoning them is safe; they are GETs whose results we have given up on.
     ex = ThreadPoolExecutor(max_workers=16)
     try:
-        futures = {ex.submit(_robust_property_tasks, token, ref, date_str): ref
+        futures = {ex.submit(_robust_property_tasks, token, ref, date_str,
+                             pid_candidates.get(ref)): ref
                    for ref in _sweep_keys}
         try:
             for fut in _as_completed(
@@ -2763,8 +2803,10 @@ def clear_task_times():
     # isn't silently dropped — same fix as the import.
     all_tasks = []
     with ThreadPoolExecutor(max_workers=16) as ex:
-        for tasks, _ok, _status in ex.map(lambda ref: _robust_property_tasks(token, ref, date_str),
-                                 list(pid_candidates.keys())):
+        for tasks, _ok, _status in ex.map(
+                lambda ref: _robust_property_tasks(token, ref, date_str,
+                                                   pid_candidates.get(ref)),
+                list(pid_candidates.keys())):
             all_tasks.extend(tasks)
 
     seen, mine = set(), []
