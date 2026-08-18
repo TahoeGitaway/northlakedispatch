@@ -1673,9 +1673,13 @@ def bw_import():
 
     if _retry_refs:
         # Merge the retried houses into what already loaded — don't refetch the rest.
-        all_results, failed_props, failure_statuses, failed_refs = _sweep(_retry_refs, _cached[1])
-        _bw_day_cache[date_str] = (_dt_time.time(), all_results, failed_props,
-                                   dict(failure_statuses), failed_refs)
+        # Coalesced exactly like a full sweep: three tabs whose automatic retries fire
+        # at the same moment would otherwise run three overlapping gap sweeps against
+        # the same quota, which is the original problem in miniature — and retries are
+        # where several tabs are MOST likely to be in step, because they were started
+        # together and back off on the same ladder.
+        all_results, failed_props, failure_statuses, failed_refs = _sweep_day_shared(
+            date_str, lambda: _sweep(_retry_refs, _cached[1]), _BW_IMPORT_BUDGET_S)
     elif _cached_fresh and not retry_failed:
         all_results, failed_props, failure_statuses = _cached[1], _cached[2], dict(_cached[3])
     else:
