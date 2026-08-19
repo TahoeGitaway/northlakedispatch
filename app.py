@@ -63,6 +63,7 @@ from routes.lease_prep         import lease_prep_bp
 from routes.quick_complete     import quick_complete_bp
 from routes.group_assign       import group_assign_bp
 from routes.pri_rename         import pri_rename_bp
+from routes.lease_stamp        import lease_stamp_bp
 from routes.vip                import vip_bp   # TEMPORARY VIP arrivals tracker
 from routes.productivity       import productivity_bp
 from routes.hot_tub_billing     import hot_tub_billing_bp
@@ -94,6 +95,7 @@ app.register_blueprint(lease_prep_bp)
 app.register_blueprint(quick_complete_bp)
 app.register_blueprint(group_assign_bp)
 app.register_blueprint(pri_rename_bp)
+app.register_blueprint(lease_stamp_bp)
 app.register_blueprint(vip_bp)
 app.register_blueprint(productivity_bp)
 app.register_blueprint(hot_tub_billing_bp)

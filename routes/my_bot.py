@@ -8,7 +8,7 @@ Handles all My Bot routes and Asana integration independently of the Ops Bot
 import json
 import os
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 import requests
 from flask import (Blueprint, render_template, request, jsonify, Response, stream_with_context)
@@ -35,25 +35,57 @@ def _my_bot_required(f):
 
 # ── History trimming ──────────────────────────────────────────────
 
+# Every stamp preview starts with this marker so trimming can recognise — and
+# protect — it. The preview is the ONLY place the task GIDs exist; when it fell
+# out of the window the bot had nothing to apply and invented task lists
+# instead. Never let it be dropped or truncated.
+_STAMP_PREVIEW_MARK = "STAMP PREVIEW"
+
+
+def _is_tool_result_msg(m):
+    c = m.get("content")
+    return (m.get("role") == "user" and isinstance(c, list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c))
+
+
+def _rewind_to_boundary(messages, idx):
+    """Move `idx` BACK to the nearest message that can safely start a request —
+    a user message that isn't a bare tool_result. Rewinding keeps the tool_use /
+    tool_result pair intact; the old code popped forward instead, which deleted
+    the very tool_result the next turn depended on."""
+    i = min(max(idx, 0), len(messages) - 1)
+    while i > 0:
+        m = messages[i]
+        if m.get("role") == "user" and not _is_tool_result_msg(m):
+            return i
+        i -= 1
+    return 0
+
+
+def _last_preview_index(messages):
+    """Index of the newest message carrying a stamp-preview tool_result, or None."""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if not _is_tool_result_msg(m):
+            continue
+        for b in m["content"]:
+            if (isinstance(b, dict) and b.get("type") == "tool_result"
+                    and isinstance(b.get("content"), str)
+                    and b["content"].lstrip().startswith(_STAMP_PREVIEW_MARK)):
+                return i
+    return None
+
+
 def _safe_trim(messages, limit):
-    """Trim history to `limit` messages without orphaning tool_result blocks."""
+    """Trim history to roughly `limit` messages without orphaning tool_result
+    blocks and without ever dropping the newest stamp preview."""
     if len(messages) <= limit:
         return list(messages)
-    trimmed = list(messages[-limit:])
-    while trimmed:
-        first = trimmed[0]
-        content = first.get("content", "")
-        role = first.get("role", "")
-        is_tool_result_msg = (
-            role == "user"
-            and isinstance(content, list)
-            and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-        )
-        if is_tool_result_msg or role == "assistant":
-            trimmed.pop(0)
-        else:
-            break
-    return trimmed
+    keep_from = _rewind_to_boundary(messages, len(messages) - limit)
+    pv = _last_preview_index(messages)
+    if pv is not None and pv < keep_from:
+        keep_from = _rewind_to_boundary(messages, pv)
+    return list(messages[keep_from:])
 
 
 # ── Asana helpers ─────────────────────────────────────────────────
@@ -376,6 +408,10 @@ def _clean_core(name):
 #   "6/28 Dept - Solstice Ridge - Post Lease Activities"
 _STAMP_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}\s+(?:Arrival|Dept)\s+-\s+.+?\s+-\s+",
                        re.IGNORECASE)
+
+# She manages the next couple of months, not the whole book. Stamping only ever
+# looks forward this far unless she asks for a wider window or for past tasks.
+STAMP_WINDOW_DAYS = 90
 
 
 def _detect_lease_kind(name):
@@ -817,6 +853,12 @@ def my_bot_chat():
                 "apply=true AND approved_gids = the exact list of task GIDs the user approved "
                 "(the preview prints each task's GID). apply=true does NOTHING without "
                 "approved_gids, so tasks the user excluded can never be touched. "
+                "SCOPE: by default this only touches tasks dated from TODAY through the "
+                f"next {STAMP_WINDOW_DAYS} days — past-dated tasks are never stamped. Pass "
+                "window_days to widen or narrow that, or include_past=true ONLY if the user "
+                "explicitly asks for overdue/past tasks. The apply=true call MUST repeat the same "
+                "window_days / include_past you used for the preview — otherwise the approved GIDs "
+                "fall outside the window and nothing is stamped. "
                 "Optionally pass property_name to limit the preview to one house."
             ),
             "input_schema": {
@@ -834,6 +876,17 @@ def my_bot_chat():
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Required when apply=true. The exact task GIDs (from the preview) the user approved. Only these are changed.",
+                    },
+                    "window_days": {
+                        "type": "integer",
+                        "description": f"How many days ahead to look. Default {STAMP_WINDOW_DAYS}. "
+                                       "Only set this when the user asks for a different range "
+                                       "(e.g. 'the next 6 months' → 180).",
+                    },
+                    "include_past": {
+                        "type": "boolean",
+                        "description": "Default false. Set true ONLY when the user explicitly asks "
+                                       "to stamp overdue / past-dated tasks.",
                     },
                     "date_overrides": {
                         "type": "array",
@@ -949,11 +1002,14 @@ def my_bot_chat():
         return "\n".join(lines)
 
     def _exec_stamp(property_name=None, apply=False, today_iso=None,
-                    approved_gids=None, date_overrides=None):
+                    approved_gids=None, date_overrides=None,
+                    window_days=None, include_past=False):
         """Restamp lease tasks: rename to '<M/D> <Arrival|Dept> - <House> -
         <original>' and reset the due date. apply=False previews only; apply=True
         stamps ONLY the task GIDs listed in approved_gids. date_overrides supplies
-        a date for tasks whose parent title has no parseable date."""
+        a date for tasks whose parent title has no parseable date. Only tasks
+        dated from today through today+window_days are considered; past-dated
+        tasks are left alone unless include_past is set."""
         tasks, err = _fetch_my_tasks_raw("incomplete", None)
         if err:
             return f"Could not fetch tasks: {err}"
@@ -1028,16 +1084,59 @@ def my_bot_chat():
 
         scope = f" for '{property_name}'" if pf else ""
 
-        # Hard cap: at most 50 tasks per run, so previews stay easy to oversee and
-        # applies don't time out. Deterministic order → the same 50 show each run.
+        # DATE WINDOW — today through today+window_days, nothing behind us.
+        # Previously the plan was sorted OLDEST-first and then capped at 50, so
+        # the cap filled up entirely with past-dated tasks and the upcoming ones
+        # were unreachable no matter how many times you re-ran it.
+        try:
+            today_d = date.fromisoformat(today_iso) if today_iso else date.today()
+        except (ValueError, TypeError):
+            today_d = date.today()
+        try:
+            win_days = STAMP_WINDOW_DAYS if window_days is None else int(window_days)
+        except (ValueError, TypeError):
+            win_days = STAMP_WINDOW_DAYS
+        win_days = max(1, min(win_days, 730))
+        win_end  = today_d + timedelta(days=win_days)
+
+        past_n = ahead_n = 0
+        if not include_past:
+            kept = []
+            for it in plan:
+                try:
+                    d = date.fromisoformat(it[2])
+                except (ValueError, TypeError):
+                    kept.append(it)        # undated — let the normal path handle it
+                    continue
+                if d < today_d:
+                    past_n += 1
+                elif d > win_end:
+                    ahead_n += 1
+                else:
+                    kept.append(it)
+            plan = kept
+
+        window_note = (f"\nWindow: {today_d.isoformat()} → {win_end.isoformat()} "
+                       f"(the next {win_days} days).")
+        if include_past:
+            window_note += " Past-dated tasks INCLUDED this run (you asked for them)."
+        if past_n:
+            window_note += (f" Left alone: {past_n} task(s) dated before today — "
+                            f"say 'include past tasks' if you want those stamped.")
+        if ahead_n:
+            window_note += (f" {ahead_n} task(s) fall past the window — say e.g. "
+                            f"'use a 180 day window' to reach them.")
+
+        # Soonest first, then cap — so the cap now bites the FAR end of the
+        # window, which is the right end to lose.
         plan.sort(key=lambda it: ((it[2] or "9999-99-99"), str(it[0].get("gid"))))
         STAMP_CAP = 50
         total_matched = len(plan)
         cap_note = ""
         if total_matched > STAMP_CAP:
             plan = plan[:STAMP_CAP]
-            cap_note = (f"\n(Showing the first {STAMP_CAP} of {total_matched} matching "
-                        f"tasks — stamp these, then run again for the next batch.)")
+            cap_note = (f"\n(Showing the {STAMP_CAP} soonest of {total_matched} tasks in "
+                        f"the window — stamp these, then run again for the next batch.)")
 
         ov_warn = []
         if bad_overrides:
@@ -1047,7 +1146,7 @@ def my_bot_chat():
                 ov_warn.append(f"  - GID {g}: '{d}'")
 
         if not plan:
-            out = [f"Nothing to stamp{scope}."]
+            out = [f"Nothing to stamp{scope}.{window_note}"]
             if skipped:
                 out.append(f"\n{len(skipped)} task(s) skipped:")
                 for nm, why in skipped:
@@ -1057,8 +1156,9 @@ def my_bot_chat():
 
         if not apply:
             out = [
-                f"PREVIEW{scope} — {len(plan)} task(s) CAN be renamed and have their "
-                f"due date reset. Nothing has changed yet.{cap_note}",
+                f"{_STAMP_PREVIEW_MARK}{scope} — {len(plan)} task(s) CAN be renamed and "
+                f"have their due date reset. Nothing has changed yet."
+                f"{window_note}{cap_note}",
                 "Show the user this NUMBERED list. Ask which to apply — 'all', "
                 "'all except 3, 7', or 'just 1, 2, 5'. Then call stamp_house_and_date again "
                 "with apply=true and approved_gids set to ONLY the GIDs the user approved.",
@@ -1380,7 +1480,11 @@ def my_bot_chat():
                 if isinstance(c, list):
                     for bi, b in enumerate(c):
                         if (isinstance(b, dict) and b.get("type") == "tool_result"
-                                and isinstance(b.get("content"), str)):
+                                and isinstance(b.get("content"), str)
+                                # The stamp preview carries the GIDs the apply step
+                                # needs — truncating it is what left the bot with
+                                # nothing to work from. Shrink anything but this.
+                                and not b["content"].lstrip().startswith(_STAMP_PREVIEW_MARK)):
                             L = len(b["content"])
                             if longest is None or L > longest[0]:
                                 longest = (L, mi, bi)
@@ -1464,6 +1568,12 @@ def my_bot_chat():
             "apply=true without approved_gids, and never invent a GID that wasn't in the preview. "
             "The apply step re-reads each task afterward and reports any whose title or date "
             "didn't stick — relay those to the user. "
+            f"SCOPE — stamping only ever covers TODAY through the next {STAMP_WINDOW_DAYS} days. "
+            "Past-dated tasks are deliberately left alone. The preview prints the exact window it "
+            "used; show that line to the user so she knows what was in scope. Only pass "
+            "window_days or include_past when she explicitly asks for a different range or for "
+            "overdue tasks — never widen the scope on your own, and repeat the SAME window_days / "
+            "include_past on the apply=true call that you used on the preview. "
             "NEEDS A DATE: if the preview lists tasks under 'NEEDS A DATE' (the parser couldn't "
             "read a date from that parent title), tell the user which houses need a date and ask "
             "for them. When they give you a date, re-run the preview with date_overrides "
@@ -1517,7 +1627,7 @@ def my_bot_chat():
             "- After any tool call, report the results honestly: how many succeeded, "
             "which ones timed out or failed, and the exact error message for failures.\n"
             "- CONFIRM EVERY WRITE WITH AN EXPLICIT BEFORE→AFTER. Before ANY write "
-            "(update_asana_task, batch_update_asana_tasks, stamp_house_and_date with apply=true, "
+            "(update_asana_task, batch_update_asana_tasks, "
             "delete_asana_task, batch_delete_asana_tasks, or posting a comment) you MUST print a "
             "CONFIRM_ACTION block that spells out, for EACH affected task, the exact change as "
             "'current → new'. For a rename show 'old title → new title'. For a due-date change show "
@@ -1525,7 +1635,16 @@ def my_bot_chat():
             "or due date, call get_my_asana_tasks FIRST so you can show it — NEVER propose a change "
             "without displaying its current value alongside the new one. Then wait for an explicit "
             "'yes'. NEVER write on the same turn you propose the change, and never treat a vague or "
-            "unrelated reply as confirmation. After a clear yes, call the tool immediately.\n"
+            "unrelated reply as confirmation. After a clear yes, call the tool immediately. "
+            "EXCEPTION — stamp_house_and_date: do NOT write your own before→after block for it. "
+            "Its apply=false preview already IS the before→after list. Paste that preview and ask "
+            "which numbers to apply.\n"
+            "- NEVER INVENT A TASK LIST. Every task name, GID, house and date you show the user "
+            "must come from a tool result that is present in THIS conversation. If you are asked "
+            "to show, re-show, or confirm a list and the tool result is not in front of you, call "
+            "the tool again — do not reconstruct it from memory, do not extrapolate a pattern, and "
+            "do not fill in plausible-looking rows. Saying 'let me re-run that' is always correct; "
+            "producing a table you cannot point at a tool result for is never correct.\n"
             "- Never guess task GIDs — always call get_my_asana_tasks first.\n"
             "- If get_comments_batch returns 404 errors on multiple tasks, the GIDs are stale — "
             "call get_my_asana_tasks again to get fresh GIDs, then retry. Do not tell the user "
@@ -1667,7 +1786,9 @@ def my_bot_chat():
                                  else "Building rename preview") + label + "…"})
                             result = _exec_stamp(prop, apply_now, today_str,
                                                  block.input.get("approved_gids"),
-                                                 block.input.get("date_overrides"))
+                                                 block.input.get("date_overrides"),
+                                                 block.input.get("window_days"),
+                                                 bool(block.input.get("include_past", False)))
                         else:
                             result = f"Unknown tool: {block.name}"
                         tool_results.append({

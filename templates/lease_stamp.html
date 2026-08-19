@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}Stamp Lease Tasks — North Lake Dispatch{% endblock %}
+{% block content %}
+<div class="max-w-4xl xl:max-w-[1300px] mx-auto px-4 py-6">
+
+  <h2 class="text-xl font-bold text-gray-800 mb-1">Stamp Lease Tasks</h2>
+  <p class="text-xs text-gray-400 mb-1">
+    Finds lease tasks still named <strong>“Operations- Pre/Post Lease Activities”</strong> and renames each to
+    <strong>“M/D Arrival — House — task”</strong> (arrival date) or <strong>“M/D Dept — House — task”</strong>
+    (departure date), setting the due date to that same day.
+  </p>
+  <p class="text-xs text-gray-400 mb-5">
+    House and dates are read from the parent lease task’s title.
+    <strong class="text-gray-500">Tasks dated in the past are never included.</strong>
+    Nothing changes until you tick rows and press Apply.
+  </p>
+
+  <!-- Controls -->
+  <div class="flex items-end gap-3 mb-5 flex-wrap">
+    <div class="flex items-center gap-2 text-sm">
+      <label class="text-gray-500 font-medium">Look ahead</label>
+      <input type="number" id="windowDays" value="{{ default_window }}" min="1" max="730"
+             class="w-24 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700
+                    focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      <span class="text-gray-400 text-xs">days</span>
+    </div>
+    <label class="flex items-center gap-2 text-sm text-gray-600">
+      <input type="checkbox" id="incDept" checked class="rounded border-gray-300">
+      Include departures (Post)
+    </label>
+    <div class="flex items-center gap-2 text-sm">
+      <label class="text-gray-500 font-medium">House</label>
+      <input type="text" id="propFilter" placeholder="all houses"
+             class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700
+                    focus:outline-none focus:ring-2 focus:ring-indigo-300">
+    </div>
+    <button onclick="runScan()" id="scanBtn"
+            class="px-4 py-1.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700">
+      Scan
+    </button>
+  </div>
+
+  <div id="status" class="text-sm text-gray-500 mb-4"></div>
+  <div id="summary" class="hidden mb-4 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3"></div>
+
+  <div id="results" class="hidden">
+    <div class="flex items-center gap-3 mb-3">
+      <button onclick="setAll(true)"  class="text-xs text-indigo-600 hover:underline">Select all</button>
+      <button onclick="setAll(false)" class="text-xs text-gray-500 hover:underline">Clear</button>
+      <span id="count" class="text-xs text-gray-400 ml-auto"></span>
+      <button id="applyBtn" onclick="applyStamps()" disabled
+              class="px-4 py-1.5 bg-emerald-600 text-white text-sm font-semibold rounded-lg
+                     hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed">
+        Apply Selected
+      </button>
+    </div>
+    <div class="overflow-x-auto border border-gray-200 rounded-lg">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+          <tr>
+            <th class="px-3 py-2 w-8"></th>
+            <th class="px-3 py-2 text-left">Current</th>
+            <th class="px-3 py-2 text-left">Becomes</th>
+            <th class="px-3 py-2 text-left whitespace-nowrap">Due</th>
+          </tr>
+        </thead>
+        <tbody id="rows" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="skipped" class="hidden mt-5 text-xs text-gray-500"></div>
+  <div id="applyResult" class="hidden mt-5"></div>
+</div>
+
+<script>
+let proposals = [];
+
+function params() {
+  return {
+    window_days: parseInt(document.getElementById('windowDays').value, 10) || 365,
+    include_departures: document.getElementById('incDept').checked,
+    property: document.getElementById('propFilter').value.trim(),
+  };
+}
+
+function esc(s) {
+  return (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function runScan() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true; btn.textContent = 'Scanning…';
+  document.getElementById('status').textContent = 'Reading Asana…';
+  document.getElementById('results').classList.add('hidden');
+  document.getElementById('applyResult').classList.add('hidden');
+  try {
+    const r = await fetch('/admin/lease-stamp/scan', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params()),
+    });
+    const d = await r.json();
+    if (d.error) { document.getElementById('status').textContent = '⚠️ ' + d.error; return; }
+    proposals = d.proposals || [];
+    renderSummary(d.stats, d.skipped || []);
+    renderRows();
+    document.getElementById('status').textContent = '';
+  } catch (e) {
+    document.getElementById('status').textContent = '⚠️ ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Scan';
+  }
+}
+
+function renderSummary(s, skipped) {
+  const bits = [
+    `Scanned <strong>${s.scanned}</strong> incomplete tasks.`,
+    `Window <strong>${s.window_start}</strong> → <strong>${s.window_end}</strong> (${s.window_days} days).`,
+    `<strong>${s.total_proposals}</strong> need stamping.`,
+  ];
+  if (s.skipped_past)          bits.push(`<strong>${s.skipped_past}</strong> dated in the past — never touched.`);
+  if (s.skipped_beyond_window) bits.push(`<strong>${s.skipped_beyond_window}</strong> beyond the window — widen “look ahead” to reach them.`);
+  if (s.capped)                bits.push(`<span class="text-amber-600">Showing only the first ${s.shown} — apply these, then scan again.</span>`);
+  if (skipped.length)          bits.push(`<strong>${skipped.length}</strong> unreadable (listed below).`);
+  const el = document.getElementById('summary');
+  el.innerHTML = bits.join(' ');
+  el.classList.remove('hidden');
+
+  const sk = document.getElementById('skipped');
+  if (skipped.length) {
+    sk.innerHTML = '<div class="font-semibold text-gray-600 mb-1">Couldn’t read these — left alone:</div>' +
+      skipped.map(x => `<div class="py-0.5">• ${esc(x.name)} — <span class="text-gray-400">${esc(x.why)}</span><br>
+        <span class="text-gray-300 pl-3">parent: ${esc(x.parent)}</span></div>`).join('');
+    sk.classList.remove('hidden');
+  } else { sk.classList.add('hidden'); }
+}
+
+function renderRows() {
+  const tb = document.getElementById('rows');
+  tb.innerHTML = proposals.map((p, i) => `
+    <tr class="${p.was_stamped ? 'bg-amber-50/40' : ''}">
+      <td class="px-3 py-2 align-top">
+        <input type="checkbox" class="rowChk rounded border-gray-300" data-i="${i}"
+               ${p.default_on ? 'checked' : ''} onchange="updateCount()">
+      </td>
+      <td class="px-3 py-2 align-top text-gray-500">
+        ${esc(p.old_name)}
+        ${p.was_stamped ? '<span class="ml-1 text-[10px] text-amber-600">(already stamped — re-stamp)</span>' : ''}
+        <div class="text-[11px] text-gray-300 mt-0.5">${esc(p.parent)}</div>
+      </td>
+      <td class="px-3 py-2 align-top font-medium text-gray-800">${esc(p.new_name)}</td>
+      <td class="px-3 py-2 align-top whitespace-nowrap text-gray-600">
+        ${p.old_due ? esc(p.old_due) : '<span class="text-gray-300">none</span>'}
+        <span class="text-gray-400">→</span> <strong>${esc(p.new_due)}</strong>
+      </td>
+    </tr>`).join('');
+  document.getElementById('results').classList.toggle('hidden', proposals.length === 0);
+  updateCount();
+}
+
+function setAll(on) {
+  document.querySelectorAll('.rowChk').forEach(c => { c.checked = on; });
+  updateCount();
+}
+
+function selectedGids() {
+  return [...document.querySelectorAll('.rowChk')]
+    .filter(c => c.checked).map(c => proposals[+c.dataset.i].gid);
+}
+
+function updateCount() {
+  const n = selectedGids().length;
+  document.getElementById('count').textContent = `${n} of ${proposals.length} selected`;
+  document.getElementById('applyBtn').disabled = n === 0;
+}
+
+async function applyStamps() {
+  const gids = selectedGids();
+  if (!gids.length) return;
+  if (!confirm(`Rename and re-date ${gids.length} task(s) in Asana?`)) return;
+  const btn = document.getElementById('applyBtn');
+  btn.disabled = true; btn.textContent = 'Applying…';
+  try {
+    const r = await fetch('/admin/lease-stamp/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...params(), gids}),
+    });
+    const d = await r.json();
+    const el = document.getElementById('applyResult');
+    if (d.error) {
+      el.innerHTML = `<div class="text-red-600 text-sm">⚠️ ${esc(d.error)}</div>`;
+    } else {
+      let html = `<div class="text-emerald-700 font-semibold text-sm">✓ ${d.ok} task(s) stamped and verified.</div>`;
+      if (d.failed?.length) {
+        html += `<div class="mt-2 text-sm text-red-600 font-semibold">${d.failed.length} problem(s):</div>` +
+          d.failed.map(f => `<div class="text-xs text-red-600">• ${esc(f.new_name)} — ${esc(f.status)}: ${esc(f.detail)}</div>`).join('');
+      }
+      if (d.stale?.length) {
+        html += `<div class="mt-2 text-xs text-amber-600">${d.stale.length} task(s) changed in Asana since the scan and were left alone — scan again.</div>`;
+      }
+      el.innerHTML = html;
+      await runScan();
+    }
+    el.classList.remove('hidden');
+  } catch (e) {
+    const el = document.getElementById('applyResult');
+    el.innerHTML = `<div class="text-red-600 text-sm">⚠️ ${esc(e.message)}</div>`;
+    el.classList.remove('hidden');
+  } finally {
+    btn.textContent = 'Apply Selected'; updateCount();
+  }
+}
+</script>
+{% endblock %}
