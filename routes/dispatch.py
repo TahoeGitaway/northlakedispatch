@@ -2182,60 +2182,81 @@ def route_discrepancies():
                                if r in pid_candidates]
                 _shared_from = _day[0]
 
-    all_tasks = list(_seed_tasks)
-    failed_props = 0
-    failure_statuses: dict = {}
-    # WHICH properties failed, not just how many. "Removed" below is inferred from
-    # the ABSENCE of a task — so a throttled house looks exactly like one taken off
-    # the list, and the UI would offer to delete a stop that is still assigned.
-    unverified_pids: set = set()
-    failed_refs: list = []
+    # WHICH properties failed, not just how many. "Removed" is inferred from the
+    # ABSENCE of a task, so a throttled house looks exactly like one taken off the
+    # list. All four values come from the sweep below, or are inherited from
+    # whichever request owned it.
     from concurrent.futures import as_completed as _as_completed
 
-    def _note_failure(ref_id, status):
-        nonlocal failed_props
-        failed_props += 1
-        failed_refs.append(ref_id)
-        unverified_pids.add(str(pid_candidates.get(ref_id)))
-        k = _failure_key(status)
-        failure_statuses[k] = failure_statuses.get(k, 0) + 1
+    def _run_sweep():
+        """One pass over _sweep_keys → (tasks, nfail, tally, failed_refs).
 
-    _deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
-    # NOT a `with` block, deliberately. Exiting one calls shutdown(wait=True), which
-    # blocks until every already-running request finishes — so the budget would stop
-    # us collecting results and the teardown would then wait for the stragglers
-    # anyway. Measured with a stand-in: 8 s to return against a 3 s budget with
-    # `with`, versus exactly 3 s with shutdown(wait=False, cancel_futures=True).
-    # Abandoning them is safe; they are GETs whose results we have given up on.
-    ex = ThreadPoolExecutor(max_workers=16)
-    try:
-        futures = {ex.submit(_robust_property_tasks, token, ref, date_str,
-                             pid_candidates.get(ref)): ref
-                   for ref in _sweep_keys}
-        _progress_start(date_str, len(futures))
+        Wrapped in _sweep_day_shared below, so six lists opened for one date run
+        ONE sweep instead of six rivals splitting a 180/min budget six ways.
+        """
+        out, nfail, tally, refs = list(_seed_tasks), 0, {}, []
+
+        def _fail(ref_id, status):
+            nonlocal nfail
+            nfail += 1
+            refs.append(ref_id)
+            k = _failure_key(status)
+            tally[k] = tally.get(k, 0) + 1
+
+        _deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
+        # NOT a `with` block, deliberately: exiting one calls shutdown(wait=True),
+        # so the budget would stop us collecting while teardown waited anyway.
+        ex = ThreadPoolExecutor(max_workers=16)
         try:
-            for fut in _as_completed(
-                    futures, timeout=max(0.0, _deadline - _dt_time.monotonic())):
-                _progress_tick(date_str)
-                ref_id = futures[fut]
-                try:
-                    tasks, ok, status = fut.result()
-                except Exception:
-                    _note_failure(ref_id, None)
-                    continue
-                all_tasks.extend(tasks)
-                if not ok:
-                    _note_failure(ref_id, status)
-        except Exception:
-            pass        # budget reached — leftovers handled below
-        # Unfinished properties are reported as not-reached rather than silently
-        # missing, so the panel warns and the retry knows what to ask for again.
-        for fut, ref_id in futures.items():
-            if not fut.done():
-                fut.cancel()
-                _note_failure(ref_id, "unreached")   # never asked, not slow
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+            futures = {ex.submit(_robust_property_tasks, token, ref, date_str,
+                                 pid_candidates.get(ref)): ref
+                       for ref in _sweep_keys}
+            _progress_start(date_str, len(futures))
+            try:
+                for fut in _as_completed(
+                        futures, timeout=max(0.0, _deadline - _dt_time.monotonic())):
+                    _progress_tick(date_str)
+                    ref_id = futures[fut]
+                    try:
+                        tasks, ok, status = fut.result()
+                    except Exception:
+                        _fail(ref_id, None)
+                        continue
+                    out.extend(tasks)
+                    if not ok:
+                        _fail(ref_id, status)
+            except Exception:
+                pass        # budget reached — leftovers handled below
+            # Unfinished properties are reported as not-reached, so the panel warns
+            # and the retry knows what to ask for again.
+            for fut, ref_id in futures.items():
+                if not fut.done():
+                    fut.cancel()
+                    _fail(ref_id, "unreached")
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+            _progress_end(date_str)
+        return out, nfail, tally, refs
+
+    # A retry pass covers only THIS route's gaps, so its task list is not the day's.
+    # Deliberately NOT shared: _sweep_day_shared publishes into _bw_day_cache, and
+    # publishing a one-route list as the whole portfolio is how the next check comes
+    # to believe houses have no work. Same reason the publish below is skipped.
+    _is_full_sweep = not (retry_failed and _partial)
+    if _sweep_keys and _is_full_sweep:
+        all_tasks, failed_props, failure_statuses, failed_refs = _sweep_day_shared(
+            date_str, _run_sweep, _ROUTE_DISC_BUDGET_S)
+    elif _sweep_keys:
+        all_tasks, failed_props, failure_statuses, failed_refs = _run_sweep()
+    else:
+        all_tasks, failed_props, failure_statuses, failed_refs = list(_seed_tasks), 0, {}, []
+
+    # Rebuilt from the returned refs, NOT accumulated during the sweep: a request
+    # that WAITED on somebody else's sweep never ran the per-failure hook, and
+    # without this its stops would all look verified when nobody read them — which
+    # is exactly the state that offers to delete a stop that is still assigned.
+    unverified_pids = {str(pid_candidates.get(r)) for r in failed_refs
+                       if r in pid_candidates}
 
     # Hold what loaded plus what failed, so the next click can retry only the gaps.
     if failed_props:
