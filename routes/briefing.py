@@ -12,6 +12,7 @@ loads don't burn API quota.
 import calendar as cal_mod
 import json
 import os
+import threading
 import time
 from datetime import date as date_cls, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -56,6 +57,12 @@ _OWNER_CLEAN_JOB_WORKERS = 8       # scheduled scan: gentler than a one-off day-
 _prop_status_cache:   dict  = {}   # {property_id: (timestamp, payload)}
 _PROP_STATUS_TTL            = 20 * 60   # 20 minutes per property
 _bw_token:            dict  = {"value": None, "expires_at": 0}
+# Serialises token FETCHES. Breezeway rate-limits auth separately from the data
+# endpoints, so four route checks opening together with a cold token all POSTed
+# auth at once: one won and three got a 429, returned None, and their windows
+# showed "Could not authenticate with Breezeway" and no changes at all. Reproduced
+# 1 of 4 succeeding. Holders of a VALID token never take this lock.
+_bw_token_lock = threading.Lock()
 _property_cache:      dict  = {}   # {property_id: name}
 _property_cache_ts:   float = 0
 
@@ -103,6 +110,19 @@ def _get_breezeway_token() -> str | None:
     now = time.time()
     if _bw_token["value"] and now < _bw_token["expires_at"] - 60:
         return _bw_token["value"]
+    # Cold or stale: exactly one caller fetches, the rest wait and then find the
+    # token already there. Without this they stampede the auth endpoint and all but
+    # one are throttled into returning None.
+    with _bw_token_lock:
+        now = time.time()
+        if _bw_token["value"] and now < _bw_token["expires_at"] - 60:
+            return _bw_token["value"]
+        return _fetch_breezeway_token_locked(now)
+
+
+def _fetch_breezeway_token_locked(now: float) -> str | None:
+    """The actual auth call. Only ever entered holding _bw_token_lock."""
+    global _bw_token_last_error, _bw_auth_retry_at
     # Auth is rate-limited SEPARATELY from the data endpoints, and a failure leaves
     # no cached token — so every later request retried auth, each one earning another
     # 429 and pushing the reset further out. That is self-sustaining: it does not
