@@ -597,12 +597,18 @@ async function loadRouteById(loadId) {
     }
     return;
   }
-  // The "then=" cascade is GONE. Check all lists no longer opens windows at all —
-  // it shows the summary and you open what you want. This relay is kept only as a
-  // no-op that strips the parameter, because a stale browser tab or a bookmarked
-  // URL from before that change would otherwise still carry "then=" and start the
-  // chain of windows all over again against a page that no longer expects it.
+  // CASCADE: "Check all lists" hands each window the ids still to open, and each
+  // one opens the next. Browsers allow only a single popup per user gesture, so
+  // opening six from one click silently drops five — the Breezeway import hit this
+  // and solved it the same way. Fire it before loading, so all the windows are up
+  // while the routes are still fetching.
+  const _thenIds = (params.get("then") || "").split(",").map(s => s.trim()).filter(Boolean);
   window.history.replaceState({}, "", window.location.pathname);
+  if (_thenIds.length) {
+    const [_next, ..._rest] = _thenIds;
+    const _q = _rest.length ? `&then=${encodeURIComponent(_rest.join(","))}` : "";
+    window.open(`/?load=${encodeURIComponent(_next)}${_q}`, "_blank");
+  }
   await loadRouteById(loadId);
   // Opening a saved route: pop the right sidebar open immediately so the
   // "Changes vs Breezeway" check starts right away instead of waiting for a

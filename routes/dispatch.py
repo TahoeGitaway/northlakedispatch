@@ -1270,9 +1270,9 @@ _ROUTE_DISC_TTL = 120
 # every one of ~442 properties finished, so under throttling the request outran the
 # hosting proxy and the browser got "Failed to fetch" / HTTP 502 with NOTHING —
 # no partial comparison, no failed-refs list, because the function never returned.
-# The sweep is also COALESCED (via _sweep_day_shared), so several routes opened for
-# one date share a single sweep instead of each starting a rival against the same
-# 180/min quota — which is what made four windows four times slower than one.
+# Tighter than the import's 45 s: this endpoint fetches reservations first and does
+# heavier post-processing, and a fast partial answer beats a complete one that
+# never arrives.
 _ROUTE_DISC_BUDGET_S = 200  # Same arithmetic as the import: ~148 s to sweep 445
                             # properties at 3 req/s, so 30 s was a fifth of the job
                             # and guaranteed a partial answer. This endpoint also
@@ -2182,88 +2182,60 @@ def route_discrepancies():
                                if r in pid_candidates]
                 _shared_from = _day[0]
 
+    all_tasks = list(_seed_tasks)
+    failed_props = 0
+    failure_statuses: dict = {}
     # WHICH properties failed, not just how many. "Removed" below is inferred from
     # the ABSENCE of a task — so a throttled house looks exactly like one taken off
     # the list, and the UI would offer to delete a stop that is still assigned.
-    # All four are produced by the sweep below, or inherited from whoever owned it.
+    unverified_pids: set = set()
+    failed_refs: list = []
     from concurrent.futures import as_completed as _as_completed
 
-    def _run_sweep():
-        """One pass over _sweep_keys. Returns (tasks, nfail, tally, failed_refs).
+    def _note_failure(ref_id, status):
+        nonlocal failed_props
+        failed_props += 1
+        failed_refs.append(ref_id)
+        unverified_pids.add(str(pid_candidates.get(ref_id)))
+        k = _failure_key(status)
+        failure_statuses[k] = failure_statuses.get(k, 0) + 1
 
-        Wrapped in _sweep_day_shared below so that opening four routes for the same
-        day runs ONE sweep, not four. Four rival sweeps split a 180/min budget four
-        ways and none of them finished, which is why the opened windows showed no
-        changes: every house the check never reached was reported as "couldn't
-        check" rather than compared.
-        """
-        out, nfail, tally, refs = list(_seed_tasks), 0, {}, []
-
-        def _fail(ref_id, status):
-            nonlocal nfail
-            nfail += 1
-            refs.append(ref_id)
-            k = _failure_key(status)
-            tally[k] = tally.get(k, 0) + 1
-
-        deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
-        # NOT a `with` block, deliberately. Exiting one calls shutdown(wait=True),
-        # which blocks until every already-running request finishes — so the budget
-        # would stop us collecting results and the teardown would then wait for the
-        # stragglers anyway. Measured with a stand-in: 8 s to return against a 3 s
-        # budget with `with`, versus exactly 3 s with shutdown(cancel_futures=True).
-        # Abandoning them is safe; they are GETs whose results we have given up on.
-        ex = ThreadPoolExecutor(max_workers=16)
+    _deadline = _dt_time.monotonic() + _ROUTE_DISC_BUDGET_S
+    # NOT a `with` block, deliberately. Exiting one calls shutdown(wait=True), which
+    # blocks until every already-running request finishes — so the budget would stop
+    # us collecting results and the teardown would then wait for the stragglers
+    # anyway. Measured with a stand-in: 8 s to return against a 3 s budget with
+    # `with`, versus exactly 3 s with shutdown(wait=False, cancel_futures=True).
+    # Abandoning them is safe; they are GETs whose results we have given up on.
+    ex = ThreadPoolExecutor(max_workers=16)
+    try:
+        futures = {ex.submit(_robust_property_tasks, token, ref, date_str,
+                             pid_candidates.get(ref)): ref
+                   for ref in _sweep_keys}
+        _progress_start(date_str, len(futures))
         try:
-            futures = {ex.submit(_robust_property_tasks, token, ref, date_str,
-                                 pid_candidates.get(ref)): ref
-                       for ref in _sweep_keys}
-            _progress_start(date_str, len(futures))
-            try:
-                for fut in _as_completed(
-                        futures, timeout=max(0.0, deadline - _dt_time.monotonic())):
-                    _progress_tick(date_str)
-                    ref_id = futures[fut]
-                    try:
-                        tasks, ok, status = fut.result()
-                    except Exception:
-                        _fail(ref_id, None)
-                        continue
-                    out.extend(tasks)
-                    if not ok:
-                        _fail(ref_id, status)
-            except Exception:
-                pass        # budget reached — leftovers handled below
-            # Unfinished properties are reported as not-reached rather than silently
-            # missing, so the panel warns and the retry knows what to ask for again.
-            for fut, ref_id in futures.items():
-                if not fut.done():
-                    fut.cancel()
-                    _fail(ref_id, "unreached")   # never asked, not slow
-        finally:
-            ex.shutdown(wait=False, cancel_futures=True)
-            _progress_end(date_str)
-        return out, nfail, tally, refs
-
-    _is_full_sweep = not (retry_failed and _partial)
-    if _sweep_keys and _is_full_sweep:
-        # Coalesced with every other check (and import) wanting this same date.
-        all_tasks, failed_props, failure_statuses, failed_refs = _sweep_day_shared(
-            date_str, _run_sweep, _ROUTE_DISC_BUDGET_S)
-    elif _sweep_keys:
-        # A retry pass covers only THIS route's gaps, so its task list is not the
-        # day's. Deliberately not shared: _sweep_day_shared publishes into
-        # _bw_day_cache, which would hand the next check a one-route list labelled
-        # as the whole portfolio. Same reason the publish below is skipped.
-        all_tasks, failed_props, failure_statuses, failed_refs = _run_sweep()
-    else:
-        all_tasks, failed_props, failure_statuses, failed_refs = list(_seed_tasks), 0, {}, []
-
-    # Rebuilt from the failed refs rather than accumulated during the sweep: a
-    # request that WAITED on somebody else's sweep never ran the per-failure hook,
-    # and without this its route stops would all look verified when they are not.
-    unverified_pids = {str(pid_candidates.get(r)) for r in failed_refs
-                       if r in pid_candidates}
+            for fut in _as_completed(
+                    futures, timeout=max(0.0, _deadline - _dt_time.monotonic())):
+                _progress_tick(date_str)
+                ref_id = futures[fut]
+                try:
+                    tasks, ok, status = fut.result()
+                except Exception:
+                    _note_failure(ref_id, None)
+                    continue
+                all_tasks.extend(tasks)
+                if not ok:
+                    _note_failure(ref_id, status)
+        except Exception:
+            pass        # budget reached — leftovers handled below
+        # Unfinished properties are reported as not-reached rather than silently
+        # missing, so the panel warns and the retry knows what to ask for again.
+        for fut, ref_id in futures.items():
+            if not fut.done():
+                fut.cancel()
+                _note_failure(ref_id, "unreached")   # never asked, not slow
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
     # Hold what loaded plus what failed, so the next click can retry only the gaps.
     if failed_props:
@@ -2493,18 +2465,8 @@ def route_discrepancies():
     baseline_state = "active" if baseline else "seeded"
 
     if baseline:
-        # A house with NO baseline row has never been recorded — almost always
-        # because an earlier, throttled sweep never reached it. Its absence is not
-        # evidence that its tasks are new, so record it silently now instead of
-        # reporting every task on it as a change. Getting this wrong turned one
-        # partial sweep into a dozen phantom "new tasks" on the next complete one.
-        newly_seen = {k: v for k, v in live_houses.items()
-                      if k not in baseline and _house_was_read(k)}
-        if newly_seen:
-            _write_task_baseline(route_id, newly_seen)
-
         for key, info in live_houses.items():
-            if not _house_was_read(key) or key not in baseline:
+            if not _house_was_read(key):
                 continue
             base = baseline.get(key, {}).get("tasks", {})
             for tid, tname in info["tasks"].items():

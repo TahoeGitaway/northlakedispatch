@@ -1645,11 +1645,6 @@ function _cacRender(route, d) {
   if (n.removed)     bits.push(`<span class="text-amber-700 font-semibold">−${n.removed} no tasks</span>`);
   if (n.moved)       bits.push(`<span class="text-blue-700">${n.moved} time changed</span>`);
   if (n.new_checkin) bits.push(`<span class="text-amber-800 font-semibold">☀️ ${n.new_checkin} new check-in</span>`);
-  // Task-level changes at stops already on the list. Counted here or this row says
-  // "no changes" for a list whose panel then shows a dozen — the summary and the
-  // route panel must never disagree about whether a list needs looking at.
-  if (n.added_tasks)   bits.push(`<span class="text-red-700 font-semibold">🔔 ${n.added_tasks} new task${n.added_tasks === 1 ? "" : "s"}</span>`);
-  if (n.removed_tasks) bits.push(`<span class="text-gray-600">${n.removed_tasks} task${n.removed_tasks === 1 ? "" : "s"} gone</span>`);
 
   // Warnings come SECOND but decide the colour: a list with nothing to report is
   // only "clean" if the check could actually see the whole list.
@@ -1682,23 +1677,31 @@ async function checkAllRoutesForChanges() {
   const status = document.getElementById("checkAllStatus");
   const out    = document.getElementById("checkAllResults");
 
-  // Deliberately opens NOTHING. It used to cascade one window per list before the
-  // checks had even finished, so a click on a result then opened that route AGAIN
-  // — a second window for a list already open — and navigated away from the very
-  // summary that said which lists needed looking at. The summary below is the
-  // point of this button; which routes to open is the user's call, and opening one
-  // by hand now costs no extra Breezeway calls because the sweep is shared.
+  // OPEN A WINDOW PER LIST, so each one can be acted on directly — its own map,
+  // its own Changes vs Breezeway sidebar, its own Apply button.
+  //
+  // Opened as a CASCADE, not a loop of window.open: browsers permit one popup per
+  // user gesture, so six calls from one click silently drops five. Each window
+  // receives the ids still to open and opens the next. The Breezeway import hit
+  // this exact wall and solves it the same way.
+  //
+  // They all land on the server together, which used to mean six ~445-call sweeps
+  // fighting over one 180/min budget. One sweep per date now serves all of them.
+  const ids = routes.map(r => r.id);
+  const [first, ...rest] = ids;
+  const q = rest.length ? `&then=${encodeURIComponent(rest.join(","))}` : "";
+  window.open(`/?load=${encodeURIComponent(first)}${q}`, "_blank");
 
   // Keep an overview HERE too, so this page says which lists actually changed
   // without hunting through the windows to find the two that need you. Costs one
   // cached read each — the sweep they share has already been paid for.
   btn.disabled = true;
-  btn.textContent = "Checking…";
+  btn.textContent = "Opening…";
   out.classList.remove("hidden");
   out.innerHTML = routes.map(_cacRow).join("");
 
   let done = 0;
-  status.textContent = `checking ${routes.length} lists — one Breezeway sweep serves them all`;
+  status.textContent = `opening ${routes.length} windows — one Breezeway sweep serves them all`;
 
   // LIVE progress while the sweep runs. A full day is ~148s of Breezeway calls, and
   // every window is either running that sweep or blocked on it — so without this the
