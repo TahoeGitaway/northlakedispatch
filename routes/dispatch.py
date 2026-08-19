@@ -2493,8 +2493,18 @@ def route_discrepancies():
     baseline_state = "active" if baseline else "seeded"
 
     if baseline:
+        # A house with NO baseline row has never been recorded — almost always
+        # because an earlier, throttled sweep never reached it. Its absence is not
+        # evidence that its tasks are new, so record it silently now instead of
+        # reporting every task on it as a change. Getting this wrong turned one
+        # partial sweep into a dozen phantom "new tasks" on the next complete one.
+        newly_seen = {k: v for k, v in live_houses.items()
+                      if k not in baseline and _house_was_read(k)}
+        if newly_seen:
+            _write_task_baseline(route_id, newly_seen)
+
         for key, info in live_houses.items():
-            if not _house_was_read(key):
+            if not _house_was_read(key) or key not in baseline:
                 continue
             base = baseline.get(key, {}).get("tasks", {})
             for tid, tname in info["tasks"].items():
