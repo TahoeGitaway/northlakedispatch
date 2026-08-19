@@ -86,6 +86,12 @@
        style="background:#fef2f2; border:1px solid #fecaca;"></div>
 
   <!-- Results -->
+  <!-- The overnight scan's own answer, shown IMMEDIATELY. The red banner links
+       here, and this page used to greet that click with a live re-scan — several
+       paginated reservation pulls, throttleable, and slow — to recompute what the
+       7:30 job had already worked out and written to pri_banner_alerts. Following
+       an alert should show you the alert, not make you regenerate it. -->
+  <div id="storedAlerts" class="hidden mb-6"></div>
   <div id="results" class="hidden space-y-6"></div>
 
 </div>
@@ -498,5 +504,56 @@ async function runAlertRefresh() {
   document.getElementById("startDate").value = _isoDate(today);
   document.getElementById("endDate").value   = _isoDate(end);
 })();
+
+/* ── The 7:30 AM scan's stored result ────────────────────────────────────────
+   /api/pri-alerts is a single database read of what the scheduled job already
+   computed. It answers instantly and cannot be throttled, so it is what should
+   meet you when you follow the banner. The live Scan stays available for the
+   fuller breakdown and for "recheck right now". */
+function _fmtScanTime(iso) {
+  if (!iso) return "";
+  const utc = /[zZ]|[+\-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z";
+  const d = new Date(utc);
+  return isNaN(d.getTime()) ? "" : d.toLocaleString("en-US",
+    { month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      timeZone: "America/Los_Angeles" });
+}
+
+async function loadStoredAlerts() {
+  const box = document.getElementById("storedAlerts");
+  if (!box) return;
+  try {
+    const res  = await fetch("/api/pri-alerts");
+    const data = await res.json();
+    const items = data.alerts || data.items || (Array.isArray(data) ? data : []);
+    if (!items.length) return;                 // nothing outstanding — stay quiet
+
+    const when = _fmtScanTime(items[0].created_at);
+    let h = `<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:10px;padding:14px 16px;">
+      <div style="font-weight:700;color:#b91c1c;font-size:0.85rem;">
+        PRI action required (${items.length})
+      </div>
+      <div style="font-size:0.7rem;color:#7f1d1d;margin-top:2px;">
+        From the scheduled scan${when ? ` — ${when} PT` : ""}. No Breezeway call needed.
+      </div>`;
+    for (const a of items) {
+      h += `<div style="font-size:0.78rem;color:#7f1d1d;margin-top:8px;">
+        <span style="font-weight:600;">${(a.property_name || "").replace(/[&<>"]/g, "")}</span>
+        — guest out ${_fmtDate(a.checkout_date)}${a.next_checkin ? `, next in ${_fmtDate(a.next_checkin)}` : ""}
+        <span style="color:#b45309;">· ${(a.alert_type || "").replace(/[&<>"]/g, "")}</span>
+      </div>`;
+    }
+    h += `<div style="font-size:0.7rem;color:#6b7280;margin-top:10px;">
+      Use Scan above for the full breakdown, or to recheck against Breezeway right now.
+    </div></div>`;
+    box.innerHTML = h;
+    box.classList.remove("hidden");
+  } catch (e) {
+    // A failed read here must never block the page — Scan still works.
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadStoredAlerts);
+
 </script>
 {% endblock %}

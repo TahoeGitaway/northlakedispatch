@@ -384,7 +384,8 @@ def api_pri_alerts():
     # Exclude anything snoozed for today (✕) — snoozed_until is the snoozer's
     # local midnight, so the alert returns on its own the next day.
     cur.execute(
-        "SELECT item_key, property_name, checkout_date, next_checkin, alert_type "
+        "SELECT item_key, property_name, checkout_date, next_checkin, alert_type, "
+        "       created_at "
         "FROM pri_banner_alerts "
         "WHERE dismissed_at IS NULL "
         "  AND (snoozed_until IS NULL OR snoozed_until <= %s) "
