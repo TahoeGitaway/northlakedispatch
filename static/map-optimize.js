@@ -597,18 +597,12 @@ async function loadRouteById(loadId) {
     }
     return;
   }
-  // CASCADE: "Check all lists" hands each window the ids still to open, and each
-  // one opens the next. Browsers allow only a single popup per user gesture, so
-  // opening six from one click silently drops five — the Breezeway import hit this
-  // and solved it the same way. Fire it before loading, so all the windows are up
-  // while the routes are still fetching.
-  const _thenIds = (params.get("then") || "").split(",").map(s => s.trim()).filter(Boolean);
+  // The "?then=" window cascade is gone along with the check-all button. Nothing
+  // creates such a URL any more, and honouring one from a tab or bookmark opened
+  // before the removal would start the very chain of windows that was removed.
+  // The replaceState stays: it strips the query string from the address bar after
+  // a route loads, which is unrelated to the cascade.
   window.history.replaceState({}, "", window.location.pathname);
-  if (_thenIds.length) {
-    const [_next, ..._rest] = _thenIds;
-    const _q = _rest.length ? `&then=${encodeURIComponent(_rest.join(","))}` : "";
-    window.open(`/?load=${encodeURIComponent(_next)}${_q}`, "_blank");
-  }
   await loadRouteById(loadId);
   // Opening a saved route: pop the right sidebar open immediately so the
   // "Changes vs Breezeway" check starts right away instead of waiting for a

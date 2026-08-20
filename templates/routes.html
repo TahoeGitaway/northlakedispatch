@@ -361,19 +361,11 @@
       {% endif %}
 
       <!-- Routes list (populated by JS when a day is selected) -->
-      <!-- Check every saved list for this day in ONE go. Six checks used to mean six
-           ~445-call Breezeway sweeps competing for one 180/min budget; the server now
-           runs a single sweep per date and the rest read it, which is what makes
-           firing them all at once viable rather than self-defeating. -->
-      <div class="flex items-center justify-between gap-3 mb-3">
-        <button id="checkAllBtn" onclick="checkAllRoutesForChanges()"
-                class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold
-                       px-4 py-2 rounded-lg transition-colors disabled:opacity-60">
-          🔄 Open &amp; check all lists
-        </button>
-        <span id="checkAllStatus" class="text-xs text-gray-500"></span>
-      </div>
-      <div id="checkAllResults" class="hidden mb-5 space-y-2"></div>
+      <!-- No "check all lists" button here. It only worked while the server ran ONE
+           shared sweep per date; without that, each list runs its own ~445-call
+           Breezeway sweep against a single 180/min budget, so firing six at once is
+           ~15 minutes of API time stuffed into requests gunicorn kills at 300s —
+           they came back HTTP 502 with no changes at all. Open lists one at a time. -->
       <div id="dayDetailRoutes" class="space-y-3"></div>
 
       <!-- Archived routes — kept for the record, hidden from the day view + AI summary -->
@@ -1111,10 +1103,6 @@ function selectDay(ds) {
   document.getElementById("daySummaryPrompt").classList.add("hidden");
   loadDaySummary(ds);
 
-  // What "check all" acts on: exactly the lists this day view is showing.
-  _dayRoutesShown = routes;
-  document.getElementById("checkAllResults").classList.add("hidden");
-  document.getElementById("checkAllStatus").textContent = "";
   const container = document.getElementById("dayDetailRoutes");
   container.innerHTML = "";
 
@@ -1604,146 +1592,6 @@ function closeChartModal() {
   loadReservationChart();
 })();
 
-/* ── Check every saved list for one day, together ─────────────────────────────
-   Fires the SAME per-route check the map sidebar uses, once per list, in
-   parallel. They are not independent requests to Breezeway: the server runs one
-   sweep per date and every other check waits for it and reads the result, so
-   six lists cost one sweep rather than six competing ones.
-
-   Each row reports for itself. A single combined verdict would hide the case
-   that matters — five lists clean and one with a house that never loaded reads
-   as "all clear" unless the sixth can say otherwise. */
-let _dayRoutesShown = [];
-
-function _cacRow(route) {
-  return `<div id="cac-${route.id}" class="bg-white border border-gray-200 rounded-lg px-4 py-2.5 text-sm">
-    <span class="font-semibold text-gray-800">${_cacEsc(route.name)}</span>
-    ${route.assigned_to ? `<span class="text-indigo-700 text-xs ml-2">👤 ${_cacEsc(route.assigned_to)}</span>` : ""}
-    <span class="text-gray-400 text-xs ml-2" data-cac-body>checking…</span>
-  </div>`;
-}
-
-function _cacEsc(v) {
-  return String(v == null ? "" : v).replace(/[&<>"]/g, c =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-}
-
-function _cacRender(route, d) {
-  const el = document.querySelector(`#cac-${route.id} [data-cac-body]`);
-  if (!el) return;
-
-  if (!d || d.error) {
-    el.dataset.cacDone = "1";
-    el.className = "text-red-600 text-xs ml-2";
-    el.textContent = "couldn't check — " + (d && d.error ? d.error : "no response");
-    return;
-  }
-
-  const n = d.summary || {};
-  const bits = [];
-  if (n.added)       bits.push(`<span class="text-red-700 font-semibold">+${n.added} additional</span>`);
-  if (n.removed)     bits.push(`<span class="text-amber-700 font-semibold">−${n.removed} no tasks</span>`);
-  if (n.moved)       bits.push(`<span class="text-blue-700">${n.moved} time changed</span>`);
-  if (n.new_checkin) bits.push(`<span class="text-amber-800 font-semibold">☀️ ${n.new_checkin} new check-in</span>`);
-
-  // Warnings come SECOND but decide the colour: a list with nothing to report is
-  // only "clean" if the check could actually see the whole list.
-  const warn = [];
-  if (d.arrival_error)     warn.push("check-in flags unreliable");
-  if (d.failed_properties) warn.push(`${d.failed_properties} propert${d.failed_properties === 1 ? "y" : "ies"} not loaded`);
-  if (n.unverified)        warn.push(`${n.unverified} couldn't be checked`);
-
-  let html = bits.length
-    ? bits.join(' <span class="text-gray-300">·</span> ')
-    : (warn.length ? '<span class="text-gray-500">no changes found</span>'
-                   : '<span class="text-green-600 font-medium">✓ no changes</span>');
-  if (warn.length) html += ` <span class="text-amber-700">⚠ ${_cacEsc(warn.join(", "))}</span>`;
-  if (d.swept_at_ms) {
-    const t = new Date(d.swept_at_ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
-    html += ` <span class="text-gray-400 text-[11px]">· read ${_cacEsc(t)}</span>`;
-  }
-  html += ` <a href="/?load=${route.id}" class="text-indigo-600 hover:underline text-[11px] ml-1">open</a>`;
-
-  el.dataset.cacDone = "1";        // answered — the progress poll leaves it alone
-  el.className = "text-xs ml-2";
-  el.innerHTML = html;
-}
-
-async function checkAllRoutesForChanges() {
-  const routes = (_dayRoutesShown || []).filter(r => !r.archived);
-  if (!routes.length) return;
-
-  const btn    = document.getElementById("checkAllBtn");
-  const status = document.getElementById("checkAllStatus");
-  const out    = document.getElementById("checkAllResults");
-
-  // OPEN A WINDOW PER LIST, so each one can be acted on directly — its own map,
-  // its own Changes vs Breezeway sidebar, its own Apply button.
-  //
-  // Opened as a CASCADE, not a loop of window.open: browsers permit one popup per
-  // user gesture, so six calls from one click silently drops five. Each window
-  // receives the ids still to open and opens the next. The Breezeway import hit
-  // this exact wall and solves it the same way.
-  //
-  // They all land on the server together, which used to mean six ~445-call sweeps
-  // fighting over one 180/min budget. One sweep per date now serves all of them.
-  const ids = routes.map(r => r.id);
-  const [first, ...rest] = ids;
-  const q = rest.length ? `&then=${encodeURIComponent(rest.join(","))}` : "";
-  window.open(`/?load=${encodeURIComponent(first)}${q}`, "_blank");
-
-  // Keep an overview HERE too, so this page says which lists actually changed
-  // without hunting through the windows to find the two that need you. Costs one
-  // cached read each — the sweep they share has already been paid for.
-  btn.disabled = true;
-  btn.textContent = "Opening…";
-  out.classList.remove("hidden");
-  out.innerHTML = routes.map(_cacRow).join("");
-
-  let done = 0;
-  status.textContent = `opening ${routes.length} windows — one Breezeway sweep serves them all`;
-
-  // LIVE progress while the sweep runs. A full day is ~148s of Breezeway calls, and
-  // every window is either running that sweep or blocked on it — so without this the
-  // whole screen sits blank for two and a half minutes, which reads as broken. Poll
-  // the sweep itself rather than showing a spinner: a spinner says "wait", a count
-  // says "137 of 445, about 40s left", and only one of those can be judged.
-  const dateStr = (_dayRoutesShown[0] || {}).route_date || "";
-  const poll = setInterval(async () => {
-    if (!dateStr) return;
-    try {
-      const r = await fetch(`/api/bw-sweep-progress?date=${encodeURIComponent(dateStr)}`);
-      const p = await r.json();
-      if (!p.running) return;                       // finished, or none needed
-      const eta = p.eta_s != null ? ` · ~${p.eta_s}s left` : "";
-      status.textContent = `sweeping Breezeway: ${p.done} of ${p.total} properties${eta}`;
-      document.querySelectorAll("#checkAllResults [data-cac-body]").forEach(b => {
-        if (b.dataset.cacDone) return;              // this list already answered
-        b.textContent = `waiting on the sweep — ${p.done}/${p.total}${eta}`;
-      });
-    } catch (e) { /* a failed poll must never disturb the checks themselves */ }
-  }, 2000);
-
-  await Promise.all(routes.map(async route => {
-    try {
-      const res  = await fetch(`/api/route-discrepancies?route_id=${route.id}`);
-      const text = await res.text();
-      let d;
-      try { d = JSON.parse(text); }
-      catch (e) { d = { error: `server returned HTTP ${res.status}` }; }
-      _cacRender(route, d);
-    } catch (e) {
-      _cacRender(route, { error: e.message });
-    } finally {
-      done++;
-      status.textContent = `${done} of ${routes.length} checked`;
-    }
-  }));
-
-  clearInterval(poll);
-  btn.disabled = false;
-  btn.textContent = "🔄 Open & check all lists";
-}
 
 </script>
 
