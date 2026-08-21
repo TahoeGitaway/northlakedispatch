@@ -12,6 +12,7 @@ loads don't burn API quota.
 import calendar as cal_mod
 import json
 import os
+import re
 import time
 from datetime import date as date_cls, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -327,8 +328,12 @@ def fetch_property_tasks_range(token: str, pid: str, ref_id: str,
     200 falls through to the next key rather than being accepted as the answer.
     """
     date_range = f"{start.isoformat()},{end.isoformat()}"
-    id_pairs = ([("reference_property_id", ref_id)] if ref_id else []) \
-             + [("property_id", pid), ("home_id", pid)]
+    # home_id before property_id. Breezeway aliases property_id onto
+    # reference_property_id, so a raw Breezeway pid there can only ever 422 — it was
+    # costing every house a guaranteed-failed request before the one that works.
+    # Kept last rather than deleted: cheap insurance if home_id ever fails too.
+    id_pairs = (([("reference_property_id", ref_id)] if ref_id else [])
+                + [("home_id", pid), ("property_id", pid)])
 
     saw_empty_200 = False
     last_status = None
@@ -392,9 +397,12 @@ def fetch_tasks_for_pids(token: str, pids: list, start, end,
 
     ex = ThreadPoolExecutor(max_workers=max_workers)
     try:
+        # _ref_for, not ref_cache.get: both callers of this sweeper (Bear Fence and
+        # Bear Fence Delete) build their pid list with str(), and the cache is
+        # int-keyed — so every house missed its ref id and took the slow path.
         futures = {
             ex.submit(fetch_property_tasks_range,
-                      token, pid, ref_cache.get(pid, ""), start, end): pid
+                      token, pid, _ref_for(ref_cache, pid), start, end): pid
             for pid in pids
         }
         try:
@@ -660,6 +668,34 @@ def _get_live_ref_cache() -> dict:
     """Return the current _property_ref_cache, refreshing if stale."""
     _ensure_property_cache()
     return _property_ref_cache
+
+
+def _ref_for(ref_cache, pid):
+    """reference_property_id for a property id, whichever type either side is.
+
+    The cache is keyed by whatever Breezeway returned from the property endpoint —
+    `p.get("id")`, an int — while the scanners carry pids around as strings,
+    because that is what reservation JSON and the database hand them. So
+    `{858109: "..."}.get("858109")` missed on every house, every time, and the
+    single-request path was simply unreachable: each property fell through to the
+    id-form fallback and cost two calls instead of one, one of which Breezeway
+    could only ever answer 422.
+
+    Nothing looked broken, which is why it lasted — the fallback returns the right
+    tasks. It just spent half the shared 180/min budget to do it.
+
+    Lives here, next to the cache it reads, rather than in the module that first
+    needed it. Originally written in carpet_scan.py, where it fixed exactly one
+    caller while eight others went on missing.
+    """
+    if pid in ref_cache:
+        return ref_cache[pid]
+    s = str(pid)
+    if s in ref_cache:
+        return ref_cache[s]
+    if s.isdigit() and int(s) in ref_cache:
+        return ref_cache[int(s)]
+    return ""
 
 
 def _get_property_name(property_id) -> str:
@@ -1585,14 +1621,21 @@ def save_day_summary():
 # arrivals list can flag them.
 
 def _is_owner_cleaned_title(title: str) -> bool:
-    """True ONLY for the owner-handled placeholder clean, titled exactly
-    'Owner Clean' / 'Owner Cleaned'.
+    """True when a title contains the owner-handled clean as a PHRASE, anywhere.
+    'Owner Cleaned 3/15', 'Walk Thru - Owner Cleaned' and plain 'Owner Clean' all
+    match, so a dated or prefixed title no longer slips through unflagged.
 
-    Strict exact match on purpose: a mere 'owner' + 'clean' substring test wrongly
-    catches the standard 'Owner Departure Clean' turnover task, which is NOT owner-
-    handled and must not raise the flag. Prefer a miss over a wrong flag."""
-    t = " ".join((title or "").split()).lower().strip(" .-")
-    return t in ("owner clean", "owner cleaned")
+    The two words must be ADJACENT, and that adjacency is the whole safeguard: it
+    is what still rejects the standard 'Owner Departure Clean' turnover task, which
+    is NOT owner-handled and must never raise the flag. A loose 'owner' + 'clean'
+    substring test would wrongly catch it.
+
+    Punctuation is a separator, so 'Walk Thru - Owner Cleaned', '(Owner Cleaned)'
+    and 'Owner-Cleaned' all match. Same normalisation the PCI title rule uses."""
+    t = " " + re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip() + " "
+    return (" owner clean " in t
+            or " owner cleaned " in t
+            or " owner cleaning " in t)
 
 
 def _task_dept_str(task: dict) -> str:
@@ -1741,7 +1784,7 @@ def _scan_owner_cleaned(token, date_str: str, arrival_date, checkins: list = Non
     start_str = (arrival_date - timedelta(days=14)).isoformat()
 
     def _job(pid):
-        ref = ref_cache.get(pid) or str(pid)
+        ref = _ref_for(ref_cache, pid) or str(pid)
         tasks, ok, status = _robust_property_tasks_window(token, ref, start_str, date_str)
         if not ok:
             # None == load failed, distinct from False (loaded, not flagged).

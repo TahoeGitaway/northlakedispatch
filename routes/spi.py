@@ -66,9 +66,13 @@ def _fetch_tasks_for_property(token, pid, ref_id, start, end):
     from routes.briefing import _fetch_bw_tasks
 
     date_range = f"{start},{end}"
+    # home_id before property_id. Breezeway aliases property_id onto
+    # reference_property_id, so a raw Breezeway pid there can only ever 422 — it was
+    # costing every house a guaranteed-failed request before the one that works.
+    # Kept last rather than deleted: cheap insurance if home_id ever fails too.
     id_pairs = (
         [("reference_property_id", ref_id)] if ref_id else []
-    ) + [("property_id", pid), ("home_id", pid)]
+    ) + [("home_id", pid), ("property_id", pid)]
 
     for key, val in id_pairs:
         results, err = _fetch_bw_tasks(token, {
@@ -138,6 +142,7 @@ def fetch_spi_data(force_refresh=False):
         _get_breezeway_token,
         _get_live_property_cache,
         _get_live_ref_cache,
+        _ref_for,
         _ensure_property_cache,
     )
 
@@ -192,7 +197,7 @@ def fetch_spi_data(force_refresh=False):
     else:
         # ── Strategy 2: per-property fallback ──
         work = [
-            (pid, name, ref_cache.get(pid, ""), win_start, win_end)
+            (pid, name, _ref_for(ref_cache, pid), win_start, win_end)
             for pid, name in prop_cache.items()
             for win_start, win_end in _2026_WINDOWS
         ]

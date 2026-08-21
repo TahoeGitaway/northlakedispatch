@@ -361,19 +361,9 @@ def _paginate(token, key, val, date_range):
     return out, "", True, True
 
 
-def _ref_for(ref_cache, pid):
-    """reference_property_id for a property id. The cache is keyed by whatever type
-    Breezeway returned — ints in practice, but we carry pids around as strings — so
-    try both rather than missing the ref and falling back to slower id forms on
-    every single house."""
-    if pid in ref_cache:
-        return ref_cache[pid]
-    s = str(pid)
-    if s in ref_cache:
-        return ref_cache[s]
-    if s.isdigit() and int(s) in ref_cache:
-        return ref_cache[int(s)]
-    return ""
+# Promoted to briefing.py, next to the cache it reads — this module was solving the
+# key mismatch for itself while every other scanner went on missing the ref id.
+from routes.briefing import _ref_for
 
 
 def _fetch_year_tasks(token, pid, ref_id, year):
@@ -386,7 +376,11 @@ def _fetch_year_tasks(token, pid, ref_id, year):
     id_pairs = []
     if ref_id:
         id_pairs.append(("reference_property_id", ref_id))
-    id_pairs += [("property_id", str(pid)), ("home_id", str(pid))]
+    # home_id first. Breezeway aliases property_id onto reference_property_id,
+    # so a raw Breezeway pid there can only ever 422 — it was costing every
+    # house a guaranteed-failed request before the one that works. Kept last
+    # rather than deleted: cheap insurance if home_id ever fails too.
+    id_pairs += [("home_id", str(pid)), ("property_id", str(pid))]
 
     last_err = ""
     for key, val in id_pairs:

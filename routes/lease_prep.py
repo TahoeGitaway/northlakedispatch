@@ -208,8 +208,12 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
     """
     from routes.briefing import _fetch_bw_endpoint
     date_range = f"{start.isoformat()},{end.isoformat()}"
-    id_pairs = ([("reference_property_id", ref_id)] if ref_id else []) + \
-               [("property_id", pid), ("home_id", pid)]
+    # home_id before property_id. Breezeway aliases property_id onto
+    # reference_property_id, so a raw Breezeway pid there can only ever 422 — it was
+    # costing every house a guaranteed-failed request before the one that works.
+    # Kept last rather than deleted: cheap insurance if home_id ever fails too.
+    id_pairs = (([("reference_property_id", ref_id)] if ref_id else [])
+                + [("home_id", pid), ("property_id", pid)])
     errors, answered = [], False
     for key, val in id_pairs:
         results, err, _st = _fetch_bw_endpoint(
@@ -614,6 +618,12 @@ def _work_leases(token: str, mode: str, rows: list, ref_cache: dict,
     succeed, which is what stops the next retry pass re-reading the call that
     already worked and spending budget on data we hold.
     """
+    # _ref_for rather than ref_cache.get: `pid` below is a string (it comes back
+    # from the cache table, and originally from reservation JSON via str()), while
+    # the ref cache is keyed by the int Breezeway sends. The plain .get missed on
+    # every lease, so every one took the two-request fallback path.
+    from routes.briefing import _ref_for
+
     def one(row):
         pid    = str(row.get("property_id") or "")
         anchor = str(row.get("anchor_date") or "")
@@ -630,7 +640,7 @@ def _work_leases(token: str, mode: str, rows: list, ref_cache: dict,
         tub,   h_err = None, ""
         if need_tasks:
             raw, t_err = _fetch_tasks_for_property(
-                token, pid, ref_cache.get(pid, ""), w_start, w_end)
+                token, pid, _ref_for(ref_cache, pid), w_start, w_end)
             tasks = _fmt_tasks(raw)
         if need_tub:
             tub, h_err = _property_has_hot_tub(token, pid)
@@ -850,7 +860,7 @@ def lease_prep_house_week():
     Mirrors the VIP /vip/house-tasks week view, generalised for either direction.
     """
     from routes.briefing import (_ensure_property_cache, _get_live_ref_cache,
-                                  _fetch_bw_endpoint, _classify_reservation)
+                                  _fetch_bw_endpoint, _classify_reservation, _ref_for)
     from routes.dispatch import _bw_task_title
     from routes.vip import _task_status, _assignees, _guest_name
 
@@ -874,12 +884,26 @@ def lease_prep_house_week():
         return jsonify({"error": "Breezeway not configured."}), 503
     _ensure_property_cache()
     ref_cache = _get_live_ref_cache()
-    ref_id    = ref_cache.get(pid) or str(pid)
+    ref_id    = _ref_for(ref_cache, pid)
+
+    # This panel showed NO TASKS for every house, silently, for as long as it has
+    # existed. `pid` arrives as a query-string str and the ref cache is int-keyed,
+    # so the old `ref_cache.get(pid) or str(pid)` always fell through to the pid
+    # itself — which was then sent as reference_property_id, a value Breezeway can
+    # never match. It answers 200 with an empty list, and an empty list here is
+    # indistinguishable from a house with nothing scheduled.
+    #
+    # Unlike the sweeps there is no fallback chain here, so pick the right id form
+    # explicitly: the reference id when the house has one, else home_id, which is
+    # the form that works for a raw Breezeway pid. Never property_id — Breezeway
+    # aliases it onto reference_property_id and 422s.
+    id_param = ({"reference_property_id": ref_id} if ref_id
+                else {"home_id": str(pid)})
 
     drange = f"{start.isoformat()},{end.isoformat()}"
     results, _err, _st = _fetch_bw_endpoint(
         token, "/public/inventory/v1/task",
-        {"reference_property_id": ref_id, "scheduled_date": drange})
+        {**id_param, "scheduled_date": drange})
 
     tasks = []
     for t in (results or []):

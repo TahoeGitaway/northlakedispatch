@@ -1065,9 +1065,13 @@ def _execute_fetch_tasks_multi_standalone(start_str, end_str, property_names, st
         if not pid:
             return f"Property '{name}' not found."
         ref_id = _get_live_ref_cache().get(pid)
+        # home_id before property_id. Breezeway aliases property_id onto
+        # reference_property_id, so a raw Breezeway pid there can only ever 422 — it was
+        # costing every house a guaranteed-failed request before the one that works.
+        # Kept last rather than deleted: cheap insurance if home_id ever fails too.
         for prop_key, prop_val in (
             [("reference_property_id", ref_id)] if ref_id else []
-        ) + [("property_id", pid), ("home_id", pid)]:
+        ) + [("home_id", pid), ("property_id", pid)]:
             t, _, sc = _fetch_bw_endpoint(tok, "/public/inventory/v1/task/", {**params, prop_key: prop_val})
             if sc == 200:
                 if not t:

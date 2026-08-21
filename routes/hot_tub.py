@@ -171,7 +171,11 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str, start: date, en
     id_pairs = []
     if ref_id:
         id_pairs.append(("reference_property_id", ref_id))
-    id_pairs += [("property_id", pid), ("home_id", pid)]
+    # home_id first. Breezeway aliases property_id onto reference_property_id,
+    # so a raw Breezeway pid there can only ever 422 — it was costing every
+    # house a guaranteed-failed request before the one that works. Kept last
+    # rather than deleted: cheap insurance if home_id ever fails too.
+    id_pairs += [("home_id", pid), ("property_id", pid)]
     for key, val in id_pairs:
         try:
             r = bw_get(
@@ -210,7 +214,8 @@ def hot_tub_scan():
             and _scan_cache["data"] is not None and _time.time() - _scan_cache["ts"] < _SCAN_TTL:
         return jsonify(_scan_cache["data"])
 
-    from routes.briefing import _get_live_property_cache, _get_live_ref_cache, _ensure_property_cache
+    from routes.briefing import (_get_live_property_cache, _get_live_ref_cache,
+                                 _ensure_property_cache, _ref_for)
     _ensure_property_cache()
     prop_cache = _get_live_property_cache()
     ref_cache  = _get_live_ref_cache()
@@ -267,7 +272,7 @@ def hot_tub_scan():
     lookahead = today + timedelta(days=45)
 
     def fetch_tasks(pid):
-        return pid, _fetch_tasks_for_property(token, pid, ref_cache.get(pid, ""), lookback, lookahead)
+        return pid, _fetch_tasks_for_property(token, pid, _ref_for(ref_cache, pid), lookback, lookahead)
 
     tasks_by_pid: dict[str, list] = {}
     with ThreadPoolExecutor(max_workers=16) as ex:

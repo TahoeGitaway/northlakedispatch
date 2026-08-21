@@ -89,7 +89,11 @@ def _fetch_tasks_for_property(token: str, pid: str, ref_id: str,
     id_pairs = []
     if ref_id:
         id_pairs.append(("reference_property_id", ref_id))
-    id_pairs += [("property_id", pid), ("home_id", pid)]
+    # home_id first. Breezeway aliases property_id onto reference_property_id,
+    # so a raw Breezeway pid there can only ever 422 — it was costing every
+    # house a guaranteed-failed request before the one that works. Kept last
+    # rather than deleted: cheap insurance if home_id ever fails too.
+    id_pairs += [("home_id", pid), ("property_id", pid)]
 
     from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
 
@@ -151,7 +155,7 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
     turns into a sentence, the same shape the map import already returns.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from routes.briefing import _get_live_ref_cache
+    from routes.briefing import _get_live_ref_cache, _ref_for
     ref_cache = _get_live_ref_cache()
 
     all_tasks = []
@@ -160,7 +164,10 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
     statuses: dict = {}
 
     with ThreadPoolExecutor(max_workers=16) as ex:
-        futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
+        # _ref_for, not ref_cache.get: these pids are strings and the cache is
+        # int-keyed, so a plain .get missed every house and sent the whole sweep
+        # down the two-request fallback.
+        futures = {ex.submit(_fetch_tasks_for_property, token, pid, _ref_for(ref_cache, pid), start, end): pid
                    for pid in pids}
         for future in as_completed(futures):
             pid = futures[future]

@@ -80,7 +80,11 @@ def _fetch_tasks_for_property(token, pid, ref_id, start, end):
     id_pairs = []
     if ref_id:
         id_pairs.append(("reference_property_id", ref_id))
-    id_pairs += [("property_id", pid), ("home_id", pid)]
+    # home_id first. Breezeway aliases property_id onto reference_property_id,
+    # so a raw Breezeway pid there can only ever 422 — it was costing every
+    # house a guaranteed-failed request before the one that works. Kept last
+    # rather than deleted: cheap insurance if home_id ever fails too.
+    id_pairs += [("home_id", pid), ("property_id", pid)]
     for key, val in id_pairs:
         try:
             r = bw_get(
@@ -100,11 +104,12 @@ def _fetch_tasks_for_property(token, pid, ref_id, start, end):
 
 
 def _fetch_tasks_for_pids(token, pids, start, end):
-    from routes.briefing import _get_live_ref_cache
+    from routes.briefing import _get_live_ref_cache, _ref_for
     ref_cache = _get_live_ref_cache()
     all_tasks, seen = [], set()
     with ThreadPoolExecutor(max_workers=16) as ex:
-        futures = {ex.submit(_fetch_tasks_for_property, token, pid, ref_cache.get(pid, ""), start, end): pid
+        # _ref_for, not ref_cache.get — str pids against an int-keyed cache.
+        futures = {ex.submit(_fetch_tasks_for_property, token, pid, _ref_for(ref_cache, pid), start, end): pid
                    for pid in pids}
         for fut in as_completed(futures):
             for t in (fut.result() or []):
