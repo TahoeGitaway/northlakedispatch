@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Assign by Group — North Lake Dispatch{% endblock %}
 {% block content %}
+<style>
+  /* Same progress bar the carpet scan uses, so a batched write reads the same
+     way as the app's other batched job. */
+  .cs-bar     { height:6px; border-radius:999px; background:#e5e7eb; overflow:hidden; max-width:220px; }
+  .cs-bar > i { display:block; height:100%; background:#4f46e5; width:0; transition:width .3s; }
+</style>
 <div class="max-w-6xl mx-auto px-4 py-6 pb-32">
 
   <div class="mb-5">
@@ -215,8 +221,8 @@ async function removeCandidate(name) {
            onchange="addShownPerson()"
            onkeydown="if(event.key==='Enter'){event.preventDefault();addShownPerson();}">
     <datalist id="addPersonList"></datalist>
-    <button onclick="assignSelected()"
-            class="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors">
+    <button id="assignBtn" onclick="assignSelected()"
+            class="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
       Assign selected
     </button>
     <span class="text-[11px] text-amber-600">⚠ Writes to Breezeway · sets the task's assignee to the chosen person</span>
@@ -225,11 +231,28 @@ async function removeCandidate(name) {
 
     <input type="date" id="moveDate" title="New date to move the ticked tasks to"
            class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-rose-300 outline-none">
-    <button onclick="changeDateSelected()"
-            class="px-4 py-2 bg-rose-600 text-white text-sm font-semibold rounded-lg hover:bg-rose-700 transition-colors">
+    <button id="changeDateBtn" onclick="changeDateSelected()"
+            class="px-4 py-2 bg-rose-600 text-white text-sm font-semibold rounded-lg hover:bg-rose-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
       Change date
     </button>
     <span class="text-[11px] text-rose-600">⚠ Permanently reschedules in Breezeway · cannot be undone</span>
+  </div>
+
+  <!-- Live progress for a write in flight. Lives HERE, in the fixed bottom bar,
+       rather than only in #assignResult at the top of the page: you press a button
+       pinned to the bottom of the screen, so that is where the answer has to
+       appear. Feedback rendered above the fold on a long task list is feedback
+       nobody sees, which is what made a three-minute write look like a dead page. -->
+  <div id="writeProgress" class="hidden border-t border-gray-100 bg-gray-50">
+    <div class="max-w-4xl mx-auto px-4 py-2 flex items-center gap-3">
+      <div class="w-5 h-5 border-2 border-indigo-300 border-t-indigo-500 rounded-full animate-spin flex-shrink-0"></div>
+      <span id="writeProgressMsg" class="text-sm font-semibold text-gray-700">Working…</span>
+      <div class="cs-bar flex-1"><i id="writeProgressBar"></i></div>
+      <button type="button" id="writeStopBtn" onclick="stopWrite()"
+              class="px-3 py-1 text-xs font-semibold text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100">
+        Stop
+      </button>
+    </div>
   </div>
 </div>
 
@@ -821,6 +844,104 @@ async function runScan(force, retryFailed) {
   }
 }
 
+/* ── Bulk-write plumbing ────────────────────────────────────────────────────
+   Shared by Assign selected and Change date. Both write to Breezeway in bulk and
+   both used to send every task in ONE request, show a static "Assigning…" line at
+   the top of the page, and leave their button live the whole time.
+
+   Three consequences, all of which this replaces:
+     * A 20-task write could outlast gunicorn's 300 s ceiling, and a killed request
+       returns nothing at all — no result panel, no error, no record of what landed.
+     * The only feedback rendered far above the fold, while the button sits in the
+       fixed bottom bar, so the page looked dead for minutes.
+     * Nothing stopped a second click, and each one fires a fresh storm of Breezeway
+       calls into the API the first click is already waiting on — impatient clicking
+       measurably slowed down the very write it was waiting for.                    */
+
+// One bulk write at a time, across BOTH buttons. Not derived from the buttons'
+// disabled state on purpose: this has to hold for the whole multi-batch run and
+// cover the keyboard and the change-date modal, not just one pointer event.
+let _writeInFlight  = false;
+let _writeStopped   = false;
+
+// Tasks per request. Small enough that no single trip can approach the server's
+// 300 s limit even when Breezeway is timing out every call, which is what makes
+// the run un-killable and the progress real.
+const _WRITE_BATCH = 5;
+
+function _chunk(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+// Take the write lock, or refuse. Returns false when a write is already running.
+function _beginWrite(label, total) {
+  if (_writeInFlight) return false;
+  _writeInFlight = true;
+  _writeStopped  = false;
+  ['assignBtn', 'changeDateBtn'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = true;
+  });
+  const wrap = document.getElementById('writeProgress');
+  if (wrap) wrap.classList.remove('hidden');
+  _writeProgress(label, 0, total);
+  return true;
+}
+
+// Release it. MUST run on every exit path — a guard that sticks after an error
+// locks both buttons until a reload, which would be worse than the original bug.
+function _endWrite() {
+  _writeInFlight = false;
+  ['assignBtn', 'changeDateBtn'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = false;
+  });
+  const wrap = document.getElementById('writeProgress');
+  if (wrap) wrap.classList.add('hidden');
+}
+
+function _writeProgress(label, done, total) {
+  const msg = document.getElementById('writeProgressMsg');
+  const bar = document.getElementById('writeProgressBar');
+  if (msg) msg.textContent = `${label} ${done} of ${total}`;
+  if (bar) bar.style.width = total ? `${Math.round((done / total) * 100)}%` : '0%';
+}
+
+function stopWrite() {
+  _writeStopped = true;
+  const msg = document.getElementById('writeProgressMsg');
+  if (msg) msg.textContent = 'Stopping after this batch…';
+}
+
+/* POST one batch and return its parsed body.
+   Reads the response as TEXT first, exactly as runScan() does. A gateway timeout
+   answers with an HTML error page, and `await resp.json()` on that throws a
+   SyntaxError that surfaced as "Network error: Unexpected token '<'" — which tells
+   you nothing about the thing you actually need to know, namely that some of the
+   write may already have landed. */
+async function _postWriteBatch(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const raw = await resp.text();
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    throw new Error('SERVER_TIMEOUT');
+  }
+}
+
+// Scroll the detail panel into view. It lives at the top of a long page, so after
+// a write that ran from the bottom bar it is otherwise easy to miss entirely.
+function _revealResult() {
+  const box = document.getElementById('assignResult');
+  if (box) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 async function assignSelected() {
   const ids = _selectedIds();
   const sel = document.getElementById('personSel');
@@ -845,39 +966,86 @@ async function assignSelected() {
   if (!confirm(`Assign ${ids.length} task(s) to ${personName}?\n\n${_shown}\n\n`
              + `This writes to Breezeway and sets the assignee.`)) return;
 
+  // Take the write lock BEFORE any await. Refusing here is what stops a second
+  // click firing a second storm of Breezeway calls at the run already in progress.
+  if (!_beginWrite('Assigning…', ids.length)) return;
+
   const eb  = document.getElementById('errorBox');
   const box = document.getElementById('assignResult');
   eb.classList.add('hidden');
   box.classList.remove('hidden');
   box.innerHTML = '<div style="color:#6b7280;">Assigning…</div>';
+
+  // Results accumulated across batches. Whatever has landed stays landed: a batch
+  // that dies must never discard the assignments made before it.
+  const results = [];
+  let interrupted = '';
+  // The batch that was in flight when it died. Those tasks WERE sent and their
+  // fate is unknown — they are not the same as the ones never sent at all, and
+  // reporting them together would be the false certainty this change exists to
+  // remove. A PATCH that times out may still have applied server-side.
+  let unconfirmed = 0;
   try {
-    const resp = await fetch('/admin/group-assign/assign', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ task_ids: ids, assignee_id: Number(assignee_id) }),
-    });
-    const data = await resp.json();
-    if (data.error) {
-      box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">${esc(data.error)}</div>`;
-      return;
+    for (const batch of _chunk(ids, _WRITE_BATCH)) {
+      if (_writeStopped) { interrupted = 'STOPPED'; break; }
+      try {
+        const data = await _postWriteBatch('/admin/group-assign/assign',
+          { task_ids: batch, assignee_id: Number(assignee_id) });
+        if (data.error) {          // refused outright (bad person, not a candidate)
+          box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">${esc(data.error)}</div>`;
+          return;                  // finally still releases the lock
+        }
+        results.push(...(data.results || []));
+      } catch (e) {
+        interrupted  = e.message === 'SERVER_TIMEOUT' ? 'SERVER_TIMEOUT' : e.message;
+        unconfirmed  = batch.length;
+        break;
+      }
+      _writeProgress('Assigning…', results.length, ids.length);
     }
-    _renderAssignResults(data, personName);
+
+    const ok   = results.filter(r => r.ok).length;
+    const fail = results.length - ok;
+    _renderAssignResults({ results, ok_count: ok, fail_count: fail }, personName);
 
     // Update the SHARED scan model (single source of truth) so BOTH tabs reflect the
     // change; successes relocate under the new person with a persistent tag + a flash,
     // failures stay red and selected for one-click retry. Then re-render the tab.
-    const ok = data.ok_count || 0, fail = data.fail_count || 0;
-    _applyAssignResults(data.results || [], personName, Number(assignee_id));
+    _applyAssignResults(results, personName, Number(assignee_id));
     _rerenderActive();
+
+    // Say plainly what happened, including the case the old code could not report
+    // at all: the run stopped part way and SOME of the write already landed.
+    const notes = [];
+    if (interrupted === 'SERVER_TIMEOUT') {
+      const neverSent = ids.length - results.length - unconfirmed;
+      notes.push(`<b>The server stopped responding part way through.</b> `
+        + `<b>${ok}</b> assigned and confirmed — that is done, not undone. `
+        + `<b>${unconfirmed}</b> were sent but never confirmed: they may or may not have `
+        + `gone through. <b>${neverSent}</b> were never sent. `
+        + `Press <b>Scan</b> to see what actually landed before retrying.`);
+    } else if (interrupted === 'STOPPED') {
+      notes.push(`<b>Stopped at your request.</b> ${results.length} of ${ids.length} were sent; `
+        + `the rest are untouched and still selected.`);
+    } else if (interrupted) {
+      notes.push(`<b>Interrupted:</b> ${esc(interrupted)}. `
+        + `${results.length} of ${ids.length} were sent.`);
+    }
     if (fail) {
-      const eb = document.getElementById('errorBox');
-      eb.innerHTML = `<b>⚠ ${fail} assignment${fail !== 1 ? 's' : ''} FAILED.</b> `
+      notes.push(`<b>⚠ ${fail} assignment${fail !== 1 ? 's' : ''} FAILED.</b> `
         + `${fail === 1 ? 'It is' : 'They are'} highlighted red and still selected — click `
-        + `<b>Assign selected</b> to retry, or open “Raw response data” for details.`;
+        + `<b>Assign selected</b> to retry, or open “Raw response data” for details.`);
+    }
+    if (notes.length) {
+      eb.innerHTML = notes.join('<div style="height:6px;"></div>');
       eb.classList.remove('hidden');
     }
-    _toast(`✓ ${ok} task${ok !== 1 ? 's' : ''} → ${personName}` + (fail ? ` · ${fail} FAILED` : ''), fail === 0);
-  } catch (e) {
-    box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">Network error: ${esc(e.message)}</div>`;
+    _toast(`✓ ${ok} task${ok !== 1 ? 's' : ''} → ${personName}`
+           + (fail ? ` · ${fail} FAILED` : '') + (interrupted ? ' · stopped early' : ''),
+           fail === 0 && !interrupted);
+    _revealResult();
+  } finally {
+    _endWrite();     // every exit path, or both buttons stay dead until a reload
   }
 }
 
@@ -998,6 +1166,10 @@ function _allScanTasks() {
 }
 
 function changeDateSelected() {
+  // Don't even open the modal while a write is running — the buttons are disabled,
+  // but this also covers the keyboard path, and a modal queued behind an in-flight
+  // assign would be confirming against a task list that is still changing.
+  if (_writeInFlight) return;
   const ids = _selectedIds();
   if (!ids.length) { alert('Tick at least one task first.'); return; }
   const toDate = (document.getElementById('moveDate').value || '').slice(0, 10);
@@ -1111,33 +1283,75 @@ function _openDateChangeModal(ids, sel, fromDate, toDate) {
 }
 
 async function _doChangeDate(ids, fromDate, toDate) {
+  // Same lock as Assign — one bulk write at a time across the whole page. A date
+  // move is the change that "cannot be undone", so a duplicate run here matters
+  // more than a duplicate assign, not less.
+  if (!_beginWrite('Moving…', ids.length)) return;
+
   const eb  = document.getElementById('errorBox');
   const box = document.getElementById('assignResult');
   eb.classList.add('hidden');
   box.classList.remove('hidden');
   box.innerHTML = `<div style="color:#6b7280;">Moving ${ids.length} task(s) ${esc(fromDate)} → ${esc(toDate)}…</div>`;
+
+  const results = [];
+  let interrupted = '';
+  let unconfirmed = 0;   // sent, never confirmed — see the note in assignSelected()
   try {
-    const resp = await fetch('/admin/group-assign/change-date', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ task_ids: ids, new_date: toDate, from_date: fromDate }),
-    });
-    const data = await resp.json();
-    if (data.error) {
-      box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">${esc(data.error)}</div>`;
-      return;
+    for (const batch of _chunk(ids, _WRITE_BATCH)) {
+      if (_writeStopped) { interrupted = 'STOPPED'; break; }
+      try {
+        const data = await _postWriteBatch('/admin/group-assign/change-date',
+          { task_ids: batch, new_date: toDate, from_date: fromDate });
+        if (data.error) {
+          box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">${esc(data.error)}</div>`;
+          return;
+        }
+        results.push(...(data.results || []));
+      } catch (e) {
+        interrupted = e.message === 'SERVER_TIMEOUT' ? 'SERVER_TIMEOUT' : e.message;
+        unconfirmed = batch.length;
+        break;
+      }
+      _writeProgress('Moving…', results.length, ids.length);
     }
-    _renderDateChangeResults(data);
-    const ok = data.ok_count || 0, fail = data.fail_count || 0;
-    (data.results || []).forEach(r => { if (r.ok) _markMoved(r.task_id, toDate); else _markDateFailed(r.task_id); });
+
+    const ok   = results.filter(r => r.ok).length;
+    const fail = results.length - ok;
+    _renderDateChangeResults({ results, ok_count: ok, fail_count: fail,
+                               from_date: fromDate, new_date: toDate });
+    results.forEach(r => { if (r.ok) _markMoved(r.task_id, toDate); else _markDateFailed(r.task_id); });
     _refreshCount();
+
+    const notes = [];
+    if (interrupted === 'SERVER_TIMEOUT') {
+      const neverSent = ids.length - results.length - unconfirmed;
+      notes.push(`<b>The server stopped responding part way through.</b> `
+        + `<b>${ok}</b> already moved to ${esc(toDate)} — done, and not undoable from here. `
+        + `<b>${unconfirmed}</b> were sent but never confirmed, so they may have moved too. `
+        + `<b>${neverSent}</b> were never sent. `
+        + `<b>Scan ${esc(toDate)} and ${esc(fromDate)} before retrying</b> — retrying a move `
+        + `that already went through is not harmless.`);
+    } else if (interrupted === 'STOPPED') {
+      notes.push(`<b>Stopped at your request.</b> ${results.length} of ${ids.length} were sent; `
+        + `the rest are untouched.`);
+    } else if (interrupted) {
+      notes.push(`<b>Interrupted:</b> ${esc(interrupted)}. ${results.length} of ${ids.length} were sent.`);
+    }
     if (fail) {
-      eb.innerHTML = `<b>⚠ ${fail} date change${fail !== 1 ? 's' : ''} FAILED.</b> `
-        + `${fail === 1 ? 'It is' : 'They are'} highlighted red and still selected — retry, or open “Raw response data” for details.`;
+      notes.push(`<b>⚠ ${fail} date change${fail !== 1 ? 's' : ''} FAILED.</b> `
+        + `${fail === 1 ? 'It is' : 'They are'} highlighted red and still selected — retry, or open “Raw response data” for details.`);
+    }
+    if (notes.length) {
+      eb.innerHTML = notes.join('<div style="height:6px;"></div>');
       eb.classList.remove('hidden');
     }
-    _toast(`✓ ${ok} task${ok !== 1 ? 's' : ''} moved → ${toDate}` + (fail ? ` · ${fail} FAILED` : ''), fail === 0);
-  } catch (e) {
-    box.innerHTML = `<div style="color:#b91c1c;font-weight:600;">Network error: ${esc(e.message)}</div>`;
+    _toast(`✓ ${ok} task${ok !== 1 ? 's' : ''} moved → ${toDate}`
+           + (fail ? ` · ${fail} FAILED` : '') + (interrupted ? ' · stopped early' : ''),
+           fail === 0 && !interrupted);
+    _revealResult();
+  } finally {
+    _endWrite();
   }
 }
 

@@ -27,6 +27,9 @@ from flask_login import login_required
 
 from routes.auth import admin_required
 from routes.bw_api_log import bw_get, bw_patch
+# Module level, not inside the write functions: these run on ThreadPoolExecutor
+# workers, and an import there is re-resolved per task under the import lock.
+from routes.bw_ratelimit import gate
 
 group_assign_bp = Blueprint("group_assign", __name__)
 
@@ -673,17 +676,34 @@ def group_assign_apply():
         # silently dropped because Breezeway was momentarily busy.
         for attempt in range(3):
             try:
+                # Writes share the API budget with every read in the app, so they
+                # have to be paced by the same gate — the pattern
+                # breezeway_sync._patch_task_time already follows. Ungated, a
+                # 20-task assign fired 8 PATCHes plus 8 confirming GETs into an API
+                # already saturated by the route sweeps, and Breezeway stopped
+                # answering: the failures came back as 20 s read timeouts rather
+                # than 429s, each costing three attempts before giving up.
+                if not gate.acquire():
+                    # Refused by THIS app, not by Breezeway — nothing was sent, so
+                    # it is always worth another attempt rather than a failure.
+                    last = "held back by this app's rate limiter — not sent"
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
                 r = bw_patch(url, headers=headers,
-                                   json={"assignments": [assignee_id]}, timeout=20)
+                                   json={"assignments": [assignee_id]}, timeout=15)
+                gate.on_response(r.status_code)
                 last = f"status={r.status_code}"
                 if r.status_code in (200, 201):
                     # Re-read from Breezeway so the raw panel shows who is actually
-                    # assigned now — confirmation, not just the PATCH status.
+                    # assigned now — confirmation, not just the PATCH status. Gated
+                    # too: it is half the requests this endpoint makes.
                     after = None
                     try:
-                        g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
-                        if g.ok:
-                            after = _assignee_names(g.json())
+                        if gate.acquire():
+                            g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+                            gate.on_response(g.status_code)
+                            if g.ok:
+                                after = _assignee_names(g.json())
                     except Exception:
                         pass
                     _audit(True, last, after)
@@ -875,11 +895,22 @@ def group_assign_change_date():
         # dropped because Breezeway was momentarily busy.
         for attempt in range(3):
             try:
+                # Paced by the shared gate, same as the assign path above and
+                # breezeway_sync._patch_task_time — an ungated write path spends
+                # budget the gate cannot see, and the reads elsewhere in the app
+                # absorb the refusals.
+                if not gate.acquire():
+                    last = "held back by this app's rate limiter — not sent"
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
                 r = bw_patch(url, headers=headers,
-                                   json={"scheduled_date": new_date}, timeout=20)
+                                   json={"scheduled_date": new_date}, timeout=15)
+                gate.on_response(r.status_code)
                 last = f"status={r.status_code}"
                 if r.status_code in (200, 201):
-                    # Confirm by reading the date Breezeway actually stored.
+                    # Confirm by reading the date Breezeway actually stored. The
+                    # PATCH body usually carries it, so the extra GET is only paid
+                    # when it doesn't — and it is gated when it is.
                     after = None
                     try:
                         after = (r.json().get("scheduled_date") or "")[:10]
@@ -887,9 +918,11 @@ def group_assign_change_date():
                         after = None
                     if not after:
                         try:
-                            g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
-                            if g.ok:
-                                after = (g.json().get("scheduled_date") or "")[:10]
+                            if gate.acquire():
+                                g = bw_get(url, headers={"Authorization": f"JWT {token}"}, timeout=15)
+                                gate.on_response(g.status_code)
+                                if g.ok:
+                                    after = (g.json().get("scheduled_date") or "")[:10]
                         except Exception:
                             pass
                     confirmed = (after == new_date)
