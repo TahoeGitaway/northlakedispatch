@@ -240,7 +240,28 @@ async function runScan(retryFailed) {
     }
 
     if (proposals.length === 0) {
-      document.getElementById('emptyBox').classList.remove('hidden');
+      // Say WHERE the tasks went, not just that there are none. "Nothing to
+      // rename" and "everything was silently dropped" looked identical here,
+      // which is exactly how a broken scan passes for a clean one.
+      const f = data.funnel || {};
+      const box = document.getElementById('emptyBox');
+      const reasons = [
+        [f.already_dated,    'already have a date in the title'],
+        [f.not_walk_thru,    'are not Walk Thru tasks'],
+        [f.back_to_back,     'are back-to-back (b/b) tasks'],
+        [f.no_arrival_match, 'have no guest arrival on or after the task date'],
+        [f.bad_date,         'have no readable scheduled date'],
+      ].filter(([n]) => n > 0)
+       .map(([n, why]) => `<li>${n} ${why}</li>`).join('');
+
+      box.innerHTML = f.fetched
+        ? `<div style="font-weight:600;color:#6b7280;">No Walk Thru tasks need a date added.</div>`
+          + `<div style="margin-top:8px;font-size:0.8rem;color:#9ca3af;text-align:left;display:inline-block;">`
+          + `Read ${f.fetched} task${f.fetched === 1 ? '' : 's'} in this span. Of those:`
+          + `<ul style="margin:4px 0 0 18px;list-style:disc;">${reasons}</ul></div>`
+        : `No tasks were read at all for this span — that is not the same as nothing to rename. `
+          + `Check the failures above, or try Scan again.`;
+      box.classList.remove('hidden');
       return;
     }
 

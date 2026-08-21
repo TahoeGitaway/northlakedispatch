@@ -189,6 +189,15 @@ def _fetch_tasks_for_pids(token: str, pids: list[str], start: date,
                 if tid is None or tid not in seen_ids:
                     if tid is not None:
                         seen_ids.add(tid)
+                    # Stamp the pid we ASKED about. The caller matches tasks to a
+                    # property's arrivals, and it used to re-derive that from the
+                    # task payload — which only works if the payload's property_id
+                    # is in the same id space as the reservation's. It is not
+                    # always: a task fetched by reference_property_id can come back
+                    # carrying the external reference there, and the match then
+                    # finds no arrivals and silently drops every task. The pid is
+                    # not in doubt here, so don't rediscover it.
+                    t["_swept_pid"] = str(pid)
                     all_tasks.append(t)
     return all_tasks, failed_pids, statuses
 
@@ -354,6 +363,12 @@ def walk_thru_scan():
             tasks.append(t)
     failed_props = len(failed_pids)
 
+    # Where the tasks went. "No Walk Thrus to rename" is a real answer and also
+    # what a silent bug looks like, and the two were indistinguishable — so count
+    # each filter and hand the tally back with the result.
+    funnel = {"fetched": len(tasks), "not_walk_thru": 0, "already_dated": 0,
+              "back_to_back": 0, "bad_date": 0, "no_arrival_match": 0}
+
     proposals = []
     for t in tasks:
         title = (t.get("title") or t.get("name") or "")
@@ -361,23 +376,33 @@ def walk_thru_scan():
             title = title.get("value") or title.get("name") or ""
 
         if not WALK_THRU_PATTERNS.search(title):
+            funnel["not_walk_thru"] += 1
             continue
         if ALREADY_DATED.search(title):
+            funnel["already_dated"] += 1
             continue
         if BB_PREFIX.match(title):
+            funnel["back_to_back"] += 1
             continue
 
         task_id = t.get("id") or t.get("task_id")
-        pid     = str(t.get("property_id") or t.get("home_id") or "")
+        # The pid this task was FETCHED for, which is the same id space
+        # reso_by_prop is keyed in. The payload fields are the fallback, and
+        # home_id leads them: dispatch.py reads them in that order for the same
+        # reason, and taking property_id first is what broke the arrival match.
+        pid = (t.get("_swept_pid")
+               or str(t.get("home_id") or t.get("property_id") or ""))
         sched   = t.get("scheduled_date") or ""
         try:
             task_date = date.fromisoformat(sched[:10])
         except (ValueError, TypeError):
+            funnel["bad_date"] += 1
             continue
 
         arrivals = reso_by_prop.get(pid, [])
         arrival  = next((d for d in arrivals if d >= task_date), None)
         if not arrival:
+            funnel["no_arrival_match"] += 1
             continue
 
         proposals.append({
@@ -397,7 +422,12 @@ def walk_thru_scan():
     result = {"proposals": proposals,
               "failed_properties":  failed_props,
               "failure_statuses":   failure_statuses,
-              "scanned_properties": len(arrival_pids)}
+              "scanned_properties": len(arrival_pids),
+              # Why the proposal list is the length it is. An empty result with
+              # 300 tasks fetched and 300 dropped at one filter is a bug; an empty
+              # result with 300 fetched and 300 already dated is the tool working.
+              # Reporting only the proposals made those identical on screen.
+              "funnel": funnel}
     # A short reservation list is a DIFFERENT failure from a property whose tasks
     # wouldn't load, and it has no per-property remedy: the houses it lost are
     # unknown, so "load just the missing N" cannot ask about them. Report it

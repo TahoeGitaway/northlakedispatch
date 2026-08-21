@@ -213,6 +213,52 @@ class EmptyVersusFailedTests(unittest.TestCase):
         self.assertIn("429", err)
 
 
+class SweptPidTests(unittest.TestCase):
+    """A task must stay attached to the property it was fetched for.
+
+    walk_thru_rename matches each task to that property's guest arrivals, in a map
+    keyed by the reservation's property_id. It used to re-derive the pid from the
+    task payload, preferring `property_id` — which holds only while every task is
+    fetched by home_id. Once the reference-id path started working, tasks came back
+    from a different id space, the match found no arrivals, and every task was
+    dropped: a scan that looked perfectly healthy and proposed nothing at all.
+    """
+
+    def test_the_sweep_stamps_the_pid_it_asked_about(self):
+        from routes import walk_thru_rename as wtr
+
+        # A payload whose property_id is NOT the Breezeway pid — the shape that
+        # breaks a match derived from the task alone.
+        task = {"id": 77, "title": "Walk Thru", "scheduled_date": "2026-08-30",
+                "property_id": 326417, "home_id": 858240}
+
+        with mock.patch.object(wtr, "_fetch_tasks_for_property",
+                               return_value=([task], True, 200)), \
+             mock.patch("routes.briefing._get_live_ref_cache", return_value={}):
+            tasks, failed, _ = wtr._fetch_tasks_for_pids(
+                "tok", ["858240"], date(2026, 8, 29), date(2026, 9, 5))
+
+        self.assertEqual(failed, [])
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["_swept_pid"], "858240",
+                         "the task lost the property it was fetched for — the "
+                         "arrival match will drop it")
+
+    def test_the_stamp_wins_over_a_payload_in_another_id_space(self):
+        """The proposal loop must prefer the swept pid over the payload."""
+        task = {"_swept_pid": "858240", "property_id": 326417, "home_id": 858240}
+        pid = (task.get("_swept_pid")
+               or str(task.get("home_id") or task.get("property_id") or ""))
+        self.assertEqual(pid, "858240")
+
+        # And with no stamp (a task held from an older cached scan), home_id leads
+        # — the precedence dispatch.py already uses.
+        legacy = {"property_id": 326417, "home_id": 858240}
+        pid = (legacy.get("_swept_pid")
+               or str(legacy.get("home_id") or legacy.get("property_id") or ""))
+        self.assertEqual(pid, "858240")
+
+
 class CacheKeyContractTests(unittest.TestCase):
     """Pin what the loader stores, so a change there is caught here.
 
