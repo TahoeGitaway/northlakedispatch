@@ -268,22 +268,49 @@ class AlreadyDatedTests(unittest.TestCase):
     "nothing to do" look the same on screen.
     """
 
-    def test_a_trailing_date_still_counts_as_dated(self):
+    def test_a_trailing_date_counts_as_dated(self):
         from routes.walk_thru_rename import ALREADY_DATED
         for title in ("Walk Thru for 8/30", "Walk Thru 8/30",
                       "Walk Thru *8/30", "Guest Arrival for 12/1"):
             self.assertTrue(ALREADY_DATED.search(title),
                             f"{title!r} is dated and must be skipped")
 
-    def test_a_fraction_mid_title_is_not_a_date(self):
+    def test_a_date_followed_by_a_note_counts_as_dated(self):
+        """Real titles from a live scan. Every one of these was proposed for a
+        SECOND date when the pattern was anchored to end-of-string — the rename
+        would have written "... for 8/22 *Owner Cleaned for 8/22" to Breezeway."""
         from routes.walk_thru_rename import ALREADY_DATED
-        for title in ("Walk Thru — check 1/2 bath",
-                      "Walk Thru - 3/4 beds made",
-                      "Guest Arrival — 24/7 code on lockbox",
-                      "Walk Thru — replace 100/200 micron filter",
-                      "Walk Thru w/ owner 2/3 of house done"):
+        for title in ("Walk Thru for 8/22 *Owner Cleaned",
+                      "Lease Walk Thru for 9/1 *see notes",
+                      "Walk Thru for 8/25 *Comments",
+                      "Walk Thru for 8/28*10:30 CO",
+                      "Walk Thru for 8/29 *see notes"):
+            self.assertTrue(ALREADY_DATED.search(title),
+                            f"{title!r} already carries a date — proposing another "
+                            f"would duplicate it")
+
+    def test_an_undated_title_is_still_proposed(self):
+        from routes.walk_thru_rename import ALREADY_DATED
+        for title in ("(PCI) Walk Thru", "Walk Thru", "Walk Thru *Owner Cleaned",
+                      "Managed Services Arrival"):
             self.assertIsNone(ALREADY_DATED.search(title),
-                              f"{title!r} has no date — it must still be proposed")
+                              f"{title!r} has no date — it must be proposed")
+
+    def test_digit_runs_that_are_not_dates(self):
+        """Bounded and range-checked, so these are not mistaken for dates: month 24
+        does not exist, and 100/200 has no 1-2 digit run between word boundaries."""
+        from routes.walk_thru_rename import ALREADY_DATED
+        for title in ("Guest Arrival — 24/7 code on lockbox",
+                      "Walk Thru — replace 100/200 micron filter"):
+            self.assertIsNone(ALREADY_DATED.search(title),
+                              f"{title!r} contains no date")
+
+    def test_a_bare_fraction_is_treated_as_a_date_on_purpose(self):
+        """"1/2 bath" reads as Jan 2 and the task gets skipped. Deliberate: the
+        alternative is appending a duplicate date to a live Breezeway task, and of
+        the two ways to be wrong only one writes anything."""
+        from routes.walk_thru_rename import ALREADY_DATED
+        self.assertTrue(ALREADY_DATED.search("Walk Thru — check 1/2 bath"))
 
 
 class FilterOrderTests(unittest.TestCase):

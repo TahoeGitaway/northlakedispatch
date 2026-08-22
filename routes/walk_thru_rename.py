@@ -43,19 +43,24 @@ WALK_THRU_PATTERNS = re.compile(
     r"arrival[\s\-]?task|guest[\s\-]?arrival|managed[\s\-]?services?[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
-# ANCHORED to the end of the title. The old form — `(\bfor\s+)?\d{1,2}/\d{1,2}` —
-# had no anchor and no word boundary, and its `for` group was optional and unused,
-# so it was really a bare search for two digit runs around a slash ANYWHERE in the
-# title. That silently skipped real work: "Walk Thru — check 1/2 bath" and
-# "24/7 lockbox code" read as dated, and "replace 100/200 micron filter" matched on
-# the substring "00/20". Those tasks were counted as already-done and never
-# proposed.
+# A date ANYWHERE in the title means this task is already dated. Not anchored to
+# the end: real titles carry the date mid-string with a note after it —
+# "Walk Thru for 8/22 *Owner Cleaned", "Walk Thru for 8/28*10:30 CO",
+# "Lease Walk Thru for 9/1 *see notes". Anchoring to `$` missed every one of those
+# and proposed appending a SECOND date, which is how you get
+# "Walk Thru for 8/22 *Owner Cleaned for 8/22" written into Breezeway.
 #
-# A date this tool cares about is always a trailing suffix — that is the shape
-# _build_proposed_title writes — so anchoring costs nothing and is what makes a
-# fraction mid-title not a date. Same form as pri_rename.TRAILING_DATE, which has
-# been correct all along.
-ALREADY_DATED = re.compile(r"\s*(?:for\s+|\*\s*)?\d{1,2}/\d{1,2}\s*$", re.IGNORECASE)
+# Bounded and range-checked rather than anchored, which is what separates a date
+# from the digit runs the old unanchored version tripped on: month 1-12 and day
+# 1-31 reject "24/7", and \b rejects "100/200" (its 3-digit runs cannot match
+# \d{1,2} between boundaries).
+#
+# A bare fraction — "1/2 bath", "3/4 beds" — is still read as a date, and that is
+# the deliberate choice. The two ways to be wrong are not equal: treating a dated
+# task as undated appends a duplicate date to a live Breezeway task, while
+# treating an undated one as dated just means renaming it by hand. Err toward the
+# one that writes nothing.
+ALREADY_DATED = re.compile(r"\b(?:1[0-2]|0?[1-9])/(?:3[01]|[12][0-9]|0?[1-9])\b")
 BB_PREFIX     = re.compile(r"^b/b\s+", re.IGNORECASE)
 
 # How far past the end of the span to look for the arrival a task is preparing for.
