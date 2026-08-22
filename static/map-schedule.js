@@ -260,6 +260,8 @@ function renderStops() {
   const container = document.getElementById("selectedStops");
   const countEl   = document.getElementById("stopCount");
 
+  if (typeof _ensureOwnerCleaned === "function") _ensureOwnerCleaned(renderStops);
+
   _updateGoogleCostHint();
 
   if (isOptimized) {
@@ -286,8 +288,14 @@ function renderStops() {
     const div = document.createElement("div");
     div.className = "stop-card bg-gray-50 p-2 rounded shadow-sm text-sm";
 
+    // Same flag as the schedule card, in the smaller pill size that fits this card,
+    // so an owner-cleaned house is visible BEFORE the route is optimized too.
+    const ocPill = (typeof _stopIsOwnerCleaned === "function"
+                    && _stopIsOwnerCleaned(s.name) && window.NLD)
+      ? ` ${NLD.ownerCleanBadgeHtml()}` : "";
+
     div.innerHTML = `
-      <div class="font-medium text-gray-800 mb-1 break-words" title="${s.name}">${s.name}</div>
+      <div class="font-medium text-gray-800 mb-1 break-words" title="${s.name}">${s.name}${ocPill}</div>
       <div class="stop-card-row items-center">
         <label class="flex items-center gap-1 cursor-pointer">
           <input type="checkbox" class="accent-green-600" data-role="checkin"
@@ -500,6 +508,11 @@ function renderSchedule() {
   list.innerHTML = "";
   let num = 1;
 
+  // Owner-clean flags are fetched per route date, not per stop. Cheap to ask on
+  // every render — it no-ops once the cached date matches, and re-renders once
+  // when a new date's flags land. Guarded for pages that don't load map-search.js.
+  if (typeof _ensureOwnerCleaned === "function") _ensureOwnerCleaned(renderSchedule);
+
   optimizedSchedule.forEach((stop, si) => {
     const li = document.createElement("li");
 
@@ -642,6 +655,11 @@ function renderSchedule() {
     // BY NOON  ⭐ VIP". _stopHasVip lives in map-search.js; guard for pages without it.
     if (typeof _stopHasVip === "function" && _stopHasVip(stop.name) && window.NLD)
       badge += NLD.vipBannerHtml();
+    // Owner-cleaned is independent of BOTH chains above, same as VIP: the last clean
+    // being owner-handled says nothing about whether the house is a check-in or a VIP,
+    // and a house that is all three must show all three banners.
+    if (typeof _stopIsOwnerCleaned === "function" && _stopIsOwnerCleaned(stop.name) && window.NLD)
+      badge += NLD.ownerCleanBannerHtml();
 
     // Always render BOTH toggles (active or muted) so every card has the same
     // controls in the same place — no content-driven wrapping between cards.

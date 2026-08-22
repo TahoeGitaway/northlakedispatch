@@ -186,6 +186,29 @@
     return x;
   };
 
+  /* ── OWNER-CLEANED badge ──
+     The last clean before this arrival was done by the owner, not staff, so the
+     house needs a closer look and its Walk Thru wants to happen in the morning.
+     Teal on purpose: violet is already PCI and gold is VIP, and an owner clean is
+     an independent fact from both — a house can be all three and show all three. */
+  const OC_STYLE =
+    "display:inline-block;font-size:0.62rem;font-weight:700;padding:1px 6px;" +
+    "border-radius:99px;background:#ccfbf1;color:#115e59;border:1px solid #5eead4;";
+
+  window.NLD.ownerCleanBadgeHtml = function () {
+    return '<span data-oc-badge="1" title="Last clean was done by the owner — inspect in the morning" ' +
+      'style="' + OC_STYLE + '">\ud83e\uddf9 OWNER CLEANED</span>';
+  };
+
+  // House-level banner, sized to match the PCI and VIP banners on the schedule card
+  // so all three read at the same glance-distance.
+  window.NLD.ownerCleanBannerHtml = function () {
+    return '<span data-oc-banner="1" title="Last clean was done by the owner, not staff — inspect this house in the morning" ' +
+      'style="display:inline-block;background:#0d9488;color:#fff;font-weight:800;' +
+      'font-size:0.72rem;padding:3px 10px;border-radius:6px;letter-spacing:0.03em;' +
+      'box-shadow:0 0 0 2px #99f6e4;">\ud83e\uddf9 OWNER CLEANED \u2014 INSPECT AM</span>';
+  };
+
   // Kick off the load immediately (pages are behind auth; a 401 just yields an
   // empty set). Fires in <head> so the set is usually ready before any render.
   window.NLD.loadDismissedFlags();
