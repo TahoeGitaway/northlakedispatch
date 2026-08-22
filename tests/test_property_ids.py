@@ -20,7 +20,7 @@ dependencies, and adding pytest to requirements.txt would ship it to production.
 import os
 import sys
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -257,6 +257,108 @@ class SweptPidTests(unittest.TestCase):
         pid = (legacy.get("_swept_pid")
                or str(legacy.get("home_id") or legacy.get("property_id") or ""))
         self.assertEqual(pid, "858240")
+
+
+class AlreadyDatedTests(unittest.TestCase):
+    """A fraction in the middle of a title is not a date.
+
+    ALREADY_DATED decides a task needs no rename. Unanchored, it matched two digit
+    runs around a slash ANYWHERE in the title, so real undated work was counted as
+    done and never proposed — invisibly, because "skipped as already dated" and
+    "nothing to do" look the same on screen.
+    """
+
+    def test_a_trailing_date_still_counts_as_dated(self):
+        from routes.walk_thru_rename import ALREADY_DATED
+        for title in ("Walk Thru for 8/30", "Walk Thru 8/30",
+                      "Walk Thru *8/30", "Guest Arrival for 12/1"):
+            self.assertTrue(ALREADY_DATED.search(title),
+                            f"{title!r} is dated and must be skipped")
+
+    def test_a_fraction_mid_title_is_not_a_date(self):
+        from routes.walk_thru_rename import ALREADY_DATED
+        for title in ("Walk Thru — check 1/2 bath",
+                      "Walk Thru - 3/4 beds made",
+                      "Guest Arrival — 24/7 code on lockbox",
+                      "Walk Thru — replace 100/200 micron filter",
+                      "Walk Thru w/ owner 2/3 of house done"):
+            self.assertIsNone(ALREADY_DATED.search(title),
+                              f"{title!r} has no date — it must still be proposed")
+
+
+class FilterOrderTests(unittest.TestCase):
+    """A dated back-to-back must be counted as back-to-back, not as dated.
+
+    Both are skipped either way, so this changes no proposal — it changes the
+    tally that exists to explain an empty result, and a diagnostic that
+    misattributes its own numbers is worse than none.
+    """
+
+    def test_a_dated_bb_title_is_counted_as_back_to_back(self):
+        from routes.walk_thru_rename import ALREADY_DATED, BB_PREFIX
+        title = "b/b Walk Thru 6/15"
+
+        # The production order: b/b is tested first.
+        self.assertTrue(BB_PREFIX.match(title))
+        # And it genuinely is also dated — which is why order decides the bucket.
+        self.assertTrue(ALREADY_DATED.search(title))
+
+
+class ArrivalLookaheadTests(unittest.TestCase):
+    """A walk thru runs 1-3 days before its arrival, so the arrival can fall past
+    the end of the span. Fetching reservations only to end + 1 dropped the tail of
+    every scan."""
+
+    def test_the_window_covers_an_arrival_a_few_days_past_the_span(self):
+        from routes.walk_thru_rename import ARRIVAL_LOOKAHEAD_DAYS
+        self.assertGreaterEqual(
+            ARRIVAL_LOOKAHEAD_DAYS, 3,
+            "a walk thru is scheduled up to 3 days before its arrival; a shorter "
+            "lookahead silently drops tasks at the end of the span")
+
+        span_end = date(2026, 9, 5)
+        reachable = span_end + timedelta(days=ARRIVAL_LOOKAHEAD_DAYS)
+        # A Walk Thru on the last day, for an arrival three days later.
+        self.assertGreaterEqual(reachable, date(2026, 9, 8))
+
+
+class SiblingSweeperTests(unittest.TestCase):
+    """The stamp has to be in EVERY sweeper, not just the one that got noticed.
+
+    One commit changed the id space five modules fetch in; the next repaired one of
+    them. These pin the other two so the pair cannot drift apart again.
+    """
+
+    def test_pri_rename_stamps_the_swept_pid(self):
+        from routes import pri_rename
+
+        task = {"id": 91, "title": "Post Rental Inspection",
+                "scheduled_date": "2026-08-30",
+                "property_id": 326417, "home_id": 858240}
+
+        with mock.patch.object(pri_rename, "_fetch_tasks_for_property",
+                               return_value=[task]), \
+             mock.patch("routes.briefing._get_live_ref_cache", return_value={}):
+            tasks = pri_rename._fetch_tasks_for_pids(
+                "tok", ["858240"], date(2026, 8, 29), date(2026, 9, 5))
+
+        self.assertEqual(tasks[0]["_swept_pid"], "858240")
+
+    def test_the_shared_briefing_sweeper_stamps_too(self):
+        """Bear Fence and Bear Fence Delete both read through this one."""
+        from routes import briefing
+
+        task = {"id": 92, "title": "Bear Fence", "scheduled_date": "2026-08-30",
+                "property_id": 326417, "home_id": 858240}
+
+        with mock.patch.object(briefing, "fetch_property_tasks_range",
+                               return_value=([task], True, 200)), \
+             mock.patch.object(briefing, "_get_live_ref_cache", return_value={}):
+            tasks, failed, _ = briefing.fetch_tasks_for_pids(
+                "tok", ["858240"], date(2026, 8, 29), date(2026, 9, 5))
+
+        self.assertEqual(failed, 0)
+        self.assertEqual(tasks[0]["_swept_pid"], "858240")
 
 
 class CacheKeyContractTests(unittest.TestCase):

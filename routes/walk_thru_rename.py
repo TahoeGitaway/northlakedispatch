@@ -43,8 +43,32 @@ WALK_THRU_PATTERNS = re.compile(
     r"arrival[\s\-]?task|guest[\s\-]?arrival|managed[\s\-]?services?[\s\-]?arrival)\b",
     re.IGNORECASE,
 )
-ALREADY_DATED = re.compile(r"(\bfor\s+)?\d{1,2}/\d{1,2}", re.IGNORECASE)
+# ANCHORED to the end of the title. The old form — `(\bfor\s+)?\d{1,2}/\d{1,2}` —
+# had no anchor and no word boundary, and its `for` group was optional and unused,
+# so it was really a bare search for two digit runs around a slash ANYWHERE in the
+# title. That silently skipped real work: "Walk Thru — check 1/2 bath" and
+# "24/7 lockbox code" read as dated, and "replace 100/200 micron filter" matched on
+# the substring "00/20". Those tasks were counted as already-done and never
+# proposed.
+#
+# A date this tool cares about is always a trailing suffix — that is the shape
+# _build_proposed_title writes — so anchoring costs nothing and is what makes a
+# fraction mid-title not a date. Same form as pri_rename.TRAILING_DATE, which has
+# been correct all along.
+ALREADY_DATED = re.compile(r"\s*(?:for\s+|\*\s*)?\d{1,2}/\d{1,2}\s*$", re.IGNORECASE)
 BB_PREFIX     = re.compile(r"^b/b\s+", re.IGNORECASE)
+
+# How far past the end of the span to look for the arrival a task is preparing for.
+# A walk thru runs 1-3 days AHEAD of its arrival, so fetching reservations only to
+# end + 1 day meant every scan lost its own tail: a Walk Thru on the last day, for
+# an arrival two days later, found no arrival and was dropped in silence. Seven
+# covers the real range with margin for an outlier.
+#
+# Deliberately not pri_rename's LOOKAHEAD_DAYS = 180. That tool chases owner/hold
+# arrivals, which can be months out; a guest arrival a walk thru prepares for is
+# days away, and a wide window here would just buy pages of reservations nobody
+# needs.
+ARRIVAL_LOOKAHEAD_DAYS = 7
 
 
 def _get_token():
@@ -331,7 +355,7 @@ def walk_thru_scan():
     reso_complete, reso_status = True, 200
     if reso_by_prop is None:
         reservations, reso_complete, reso_status = _fetch_reservations_range(
-            token, start, end + timedelta(days=1))
+            token, start, end + timedelta(days=ARRIVAL_LOOKAHEAD_DAYS))
 
         reso_by_prop = {}
         for r in reservations:
@@ -369,6 +393,20 @@ def walk_thru_scan():
     funnel = {"fetched": len(tasks), "not_walk_thru": 0, "already_dated": 0,
               "back_to_back": 0, "bad_date": 0, "no_arrival_match": 0}
 
+    # What the id fields on a real task actually hold, taken from tasks the scan
+    # already fetched — no probe, no extra call. Three commits have now ASSERTED
+    # that a task fetched by reference_property_id comes back carrying the external
+    # reference in property_id, and not one of them observed it. One scan settles
+    # it: if `swept` matches `home_id`/`property_id` here, the assertion is wrong
+    # and the comments repeating it should be corrected.
+    funnel["id_sample"] = [
+        {"swept":     t.get("_swept_pid"),
+         "property_id": t.get("property_id"),
+         "home_id":     t.get("home_id"),
+         "reference_property_id": t.get("reference_property_id")}
+        for t in tasks[:3]
+    ]
+
     proposals = []
     for t in tasks:
         title = (t.get("title") or t.get("name") or "")
@@ -378,11 +416,16 @@ def walk_thru_scan():
         if not WALK_THRU_PATTERNS.search(title):
             funnel["not_walk_thru"] += 1
             continue
-        if ALREADY_DATED.search(title):
-            funnel["already_dated"] += 1
-            continue
+        # b/b BEFORE already-dated. Back-to-back titles usually carry a date, so
+        # testing already_dated first filed every one of them in the wrong bucket:
+        # back_to_back read zero and already_dated was inflated by exactly the
+        # tasks it was not describing — a miscount in the very tally added to make
+        # silent drops visible.
         if BB_PREFIX.match(title):
             funnel["back_to_back"] += 1
+            continue
+        if ALREADY_DATED.search(title):
+            funnel["already_dated"] += 1
             continue
 
         task_id = t.get("id") or t.get("task_id")

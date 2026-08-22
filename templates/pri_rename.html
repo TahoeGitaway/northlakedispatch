@@ -360,7 +360,26 @@ async function runScan() {
 
     proposals = data.proposals || [];
     if (proposals.length === 0) {
-      document.getElementById('emptyBox').classList.remove('hidden');
+      // Say where the tasks went. "Nothing to rename" and "every task was
+      // silently dropped" read identically otherwise, which is how a broken
+      // arrival match passes for a clean scan.
+      const f = data.funnel || {};
+      const box = document.getElementById('emptyBox');
+      const reasons = [
+        [f.already_correct,  'are already dated correctly'],
+        [f.not_pri,          'are not Post Rental Inspections'],
+        [f.no_arrival_match, 'have no owner/hold arrival on or after the task date'],
+        [f.bad_date,         'have no readable scheduled date'],
+      ].filter(([n]) => n > 0)
+       .map(([n, why]) => `<li>${n} ${why}</li>`).join('');
+
+      box.innerHTML = f.fetched
+        ? `<div style="font-weight:600;color:#6b7280;">No Post Rental Inspection tasks need a date.</div>`
+          + `<div style="margin-top:8px;font-size:0.8rem;color:#9ca3af;text-align:left;display:inline-block;">`
+          + `Read ${f.fetched} task${f.fetched === 1 ? '' : 's'} in this span. Of those:`
+          + `<ul style="margin:4px 0 0 18px;list-style:disc;">${reasons}</ul></div>`
+        : `No tasks were read at all for this span — that is not the same as nothing to rename.`;
+      box.classList.remove('hidden');
       return;
     }
 

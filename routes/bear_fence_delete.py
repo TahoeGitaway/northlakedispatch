@@ -127,7 +127,13 @@ def _task_status(t: dict) -> str:
 
 
 def _pid_of(t: dict) -> str:
-    return str(t.get("property_id") or t.get("home_id") or "")
+    """The pid this task was FETCHED for, in the id space the arrival map uses.
+
+    Payload fields are only a fallback, home_id first: re-deriving the pid from
+    the task alone holds while everything is fetched by home_id, and stopped
+    holding once the reference-id lookup started working."""
+    return (t.get("_swept_pid")
+            or str(t.get("home_id") or t.get("property_id") or ""))
 
 
 def _summarize(t: dict) -> dict:

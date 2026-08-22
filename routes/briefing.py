@@ -408,6 +408,7 @@ def fetch_tasks_for_pids(token: str, pids: list, start, end,
         try:
             for future in as_completed(futures,
                                        timeout=max(0.0, deadline - time.monotonic())):
+                swept_pid = futures[future]
                 try:
                     tasks, ok, status = future.result()
                 except Exception:
@@ -424,6 +425,13 @@ def fetch_tasks_for_pids(token: str, pids: list, start, end,
                     if tid is None or tid not in seen_ids:
                         if tid is not None:
                             seen_ids.add(tid)
+                        # Stamp the pid we ASKED for. Callers of this sweeper match
+                        # tasks back to a property — against reservation-derived
+                        # pids — and re-deriving that from the task payload only
+                        # holds while every task is fetched by home_id. That
+                        # stopped being true when the reference-id lookup started
+                        # working, and the match then silently found nothing.
+                        t["_swept_pid"] = str(swept_pid)
                         all_tasks.append(t)
         except Exception:
             pass        # budget reached — the leftovers are counted below

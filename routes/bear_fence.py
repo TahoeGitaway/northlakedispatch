@@ -180,7 +180,11 @@ def bear_fence_scan():
         title = (t.get("title") or t.get("name") or "")
         if isinstance(title, dict):
             title = title.get("value") or title.get("name") or ""
-        pid   = str(t.get("property_id") or t.get("home_id") or "")
+        # The pid this task was FETCHED for, in the same id space the arrival
+        # map is keyed in. Payload fields are the fallback, home_id first — the
+        # precedence dispatch.py uses; property_id first is what broke the match.
+        pid   = (t.get("_swept_pid")
+                 or str(t.get("home_id") or t.get("property_id") or ""))
         sched = t.get("scheduled_date") or ""
         entry = {"title": title, "date": sched[:10], "id": t.get("id"),
                  "assignees": _assignee_names(t)}

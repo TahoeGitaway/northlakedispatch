@@ -112,11 +112,20 @@ def _fetch_tasks_for_pids(token, pids, start, end):
         futures = {ex.submit(_fetch_tasks_for_property, token, pid, _ref_for(ref_cache, pid), start, end): pid
                    for pid in pids}
         for fut in as_completed(futures):
+            pid = futures[fut]
             for t in (fut.result() or []):
                 tid = t.get("id")
                 if tid is None or tid not in seen:
                     if tid is not None:
                         seen.add(tid)
+                    # Stamp the pid we ASKED for. The caller matches each task to
+                    # that property's owner arrivals, in a map keyed by the
+                    # reservation's property_id — and it used to re-derive the pid
+                    # from the task payload instead. That only holds while every
+                    # task is fetched by home_id, which stopped being true when the
+                    # reference-id lookup started working. The pid is not in doubt
+                    # here; don't rediscover it. Same fix as walk_thru_rename.
+                    t["_swept_pid"] = str(pid)
                     all_tasks.append(t)
     return all_tasks
 
@@ -226,28 +235,42 @@ def pri_rename_scan():
     pids  = list(owner_arrivals.keys())
     tasks = _fetch_tasks_for_pids(token, pids, start, end) if pids else []
 
+    # Where the tasks went. Without this, "no PRIs to rename" and "every task was
+    # silently discarded" are the same sentence on screen — which is exactly how
+    # this module's arrival match could break without anyone noticing.
+    funnel = {"fetched": len(tasks), "not_pri": 0, "bad_date": 0,
+              "no_arrival_match": 0, "already_correct": 0}
+
     proposals = []
     for t in tasks:
         title = (t.get("title") or t.get("name") or "")
         if isinstance(title, dict):
             title = title.get("value") or title.get("name") or ""
         if not PRI_PATTERN.search(title):
+            funnel["not_pri"] += 1
             continue
 
         task_id = t.get("id") or t.get("task_id")
-        pid     = str(t.get("property_id") or t.get("home_id") or "")
+        # The pid this task was FETCHED for, in the same id space the arrival
+        # map is keyed in. Payload fields are the fallback, home_id first — the
+        # precedence dispatch.py uses; property_id first is what broke the match.
+        pid     = (t.get("_swept_pid")
+                   or str(t.get("home_id") or t.get("property_id") or ""))
         sched   = t.get("scheduled_date") or ""
         try:
             task_date = date.fromisoformat(sched[:10])
         except (ValueError, TypeError):
+            funnel["bad_date"] += 1
             continue
 
         arrival = next((d for d in owner_arrivals.get(pid, []) if d >= task_date), None)
         if not arrival:
+            funnel["no_arrival_match"] += 1
             continue
 
         proposed = _build_proposed_title(title, arrival)
         if proposed == title.strip():
+            funnel["already_correct"] += 1
             continue   # already correctly dated — nothing to change
 
         proposals.append({
@@ -262,7 +285,8 @@ def pri_rename_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    result = {"proposals": proposals}
+    # funnel travels with the result so an empty list can explain itself.
+    result = {"proposals": proposals, "funnel": funnel}
     _scan_cache[ck] = (_time.time(), result)
     return jsonify(result)
 
