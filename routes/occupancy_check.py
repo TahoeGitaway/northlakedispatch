@@ -21,7 +21,6 @@ Endpoints:
   GET /admin/occupancy-check                      — the scan page
 """
 
-import time as _time
 from datetime import date as date_cls
 from concurrent.futures import ThreadPoolExecutor
 
@@ -133,28 +132,12 @@ def _task_assignee_ids(t: dict) -> list:
             if isinstance(a, dict) and a.get("assignee_id") is not None]
 
 
-def _robust_property_tasks(token, ref_id, date_str):
-    """Fetch ONE property's tasks for a single day with retry/backoff, so a
-    momentary Breezeway throttle (429 / 5xx) doesn't silently drop the property.
-    Returns (tasks, ok, status); ok=False means it genuinely couldn't be loaded,
-    and `status` is the HTTP status of the final failed attempt (None = no
-    response/timeout) so the UI can name the cause instead of assuming a throttle."""
-    from routes.briefing import _fetch_bw_endpoint
-    status = None
-    for attempt in range(3):
-        r, _, status = _fetch_bw_endpoint(
-            token, "/public/inventory/v1/task",
-            {"reference_property_id": ref_id, "scheduled_date": f"{date_str},{date_str}"})
-        if status == 200:
-            return (r or [], True, status)
-        if status is None or status == 429 or status >= 500:
-            _time.sleep(0.3 * (attempt + 1))
-            continue
-        r2, _, st2 = _fetch_bw_endpoint(
-            token, "/public/inventory/v1/task",
-            {"reference_property_id": ref_id, "start_date": date_str, "end_date": date_str})
-        return (r2 or [], True, st2) if st2 == 200 else ([], False, st2)
-    return ([], False, status)
+# NOTE: the per-property task fetch (_robust_property_tasks) lives in
+# routes/dispatch.py — ONE copy, so the id-space rule (external reference id vs.
+# Breezeway pid) and the retry/backoff can't drift apart per route. This file
+# used to keep its own 3-arg copy; when the canonical one grew a bw_pid argument
+# the call site below started passing four arguments to a three-argument
+# function, and every scan died with a TypeError before reaching Breezeway.
 
 
 @occupancy_bp.route("/briefing/occupancy-check")
@@ -168,6 +151,7 @@ def occupancy_check():
     # Reuse the app's canonical "whose tasks" roster — the assignment allow-list —
     # so the person filter here shows the exact same people as the batcher.
     from routes.group_assign import _fetch_people, _candidate_keys, _is_candidate
+    from routes.dispatch import _robust_property_tasks, _failure_key
 
     def _people_roster():
         try:
@@ -249,7 +233,7 @@ def occupancy_check():
         for pid, tasks, ok, status in ex.map(_job, list(occupied.keys())):
             if not ok:
                 failed += 1
-                k = "timeout" if status is None else str(status)
+                k = _failure_key(status)
                 failure_statuses[k] = failure_statuses.get(k, 0) + 1
                 continue
             stay      = occupied[pid]

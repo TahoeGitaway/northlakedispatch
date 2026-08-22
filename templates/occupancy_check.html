@@ -259,47 +259,96 @@ function renderFromScan() {
   resultsEl.classList.remove("hidden");
 }
 
+// Show a real failure: what was asked, what came back, and the server's own
+// diagnostics when it managed to send them. Never guess a cause — a wrong,
+// confident explanation ("just click again") costs more time than no answer.
+let LAST_ERROR = null;
+
+function _stripHtml(s) {
+  const d = document.createElement("div");
+  d.innerHTML = String(s || "");
+  return (d.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function showError(title, lines, diag) {
+  LAST_ERROR = diag || null;
+  const eb = document.getElementById("errorBox");
+  const detail = (lines || []).filter(Boolean)
+    .map(l => `<div style="margin-top:3px;">${_esc(l)}</div>`).join("");
+  const copy = LAST_ERROR
+    ? `<div style="margin-top:8px;"><button onclick="bwCopyDiagnostics(LAST_ERROR, this)"
+         style="text-decoration:underline;color:#b91c1c;background:none;border:none;
+                cursor:pointer;padding:0;font-size:11px;">Copy error details</button></div>`
+    : "";
+  eb.innerHTML = `<div style="font-weight:700;">${_esc(title)}</div>${detail}${copy}`;
+  eb.classList.remove("hidden");
+}
+
 async function load() {
   document.getElementById("loading").classList.remove("hidden");
   document.getElementById("errorBox").classList.add("hidden");
   document.getElementById("results").classList.add("hidden");
   document.getElementById("subtitle").textContent = "";
 
+  const dv  = document.getElementById("theDate").value;
+  const url = `/briefing/occupancy-check?${new URLSearchParams(dv ? { date: dv } : {})}`;
+  const t0  = Date.now();
+
+  let res, rawBody;
   try {
-    const dv = document.getElementById("theDate").value;
-    const params = new URLSearchParams();
-    if (dv) params.set("date", dv);
-
-    const res     = await fetch(`/briefing/occupancy-check?${params.toString()}`);
-    const rawBody = await res.text();
-    document.getElementById("loading").classList.add("hidden");
-
-    let data;
-    try {
-      data = JSON.parse(rawBody);
-    } catch (_) {
-      const eb = document.getElementById("errorBox");
-      eb.innerHTML =
-        `<div style="font-weight:700;margin-bottom:3px;">This isn't broken — the check just took longer than the server waits.</div>`
-        + `<div>It most likely finished in the background — <b>click “Check” again</b> and it should load faster.</div>`;
-      eb.classList.remove("hidden");
-      return;
-    }
-
-    if (data.error) {
-      document.getElementById("errorBox").textContent = data.error;
-      document.getElementById("errorBox").classList.remove("hidden");
-      return;
-    }
-
-    SCAN = data;
-    _populatePeople(data.people);
-    renderFromScan();
+    // Ask for JSON explicitly: app.py only returns its JSON error payload (with the
+    // exception type and the file:line that raised) when the request wants JSON —
+    // otherwise Flask's HTML error page comes back and the real fault is lost.
+    res     = await fetch(url, { headers: { "Accept": "application/json" } });
+    rawBody = await res.text();
   } catch (e) {
     document.getElementById("loading").classList.add("hidden");
-    document.getElementById("errorBox").textContent = "Could not load: " + e.message;
-    document.getElementById("errorBox").classList.remove("hidden");
+    showError("Couldn't reach the server.",
+      [`${e.name}: ${e.message}`,
+       `Request: GET ${url}`,
+       `Gave up after ${Math.round((Date.now() - t0) / 1000)}s.`,
+       "The connection failed or was dropped — the check never got an answer."],
+      { stage: "network", error: String(e), url, elapsed_ms: Date.now() - t0 });
+    return;
   }
+  const secs = Math.round((Date.now() - t0) / 1000);
+  document.getElementById("loading").classList.add("hidden");
+
+  let data = null;
+  try { data = JSON.parse(rawBody); } catch (_) { /* not JSON — handled below */ }
+
+  // Non-JSON body: a gateway or Flask's HTML error page. Report the status and
+  // the actual text that came back rather than explaining it away.
+  if (data === null) {
+    const snippet = _stripHtml(rawBody).slice(0, 300) || "(empty response body)";
+    const gateway = [408, 502, 503, 504].includes(res.status);
+    showError(`The check failed — HTTP ${res.status} ${res.statusText || ""}`.trim(),
+      [gateway
+        ? `The server didn't finish in time and the gateway cut the request off after ${secs}s.`
+        : `The server returned a non-JSON response after ${secs}s.`,
+       `Request: GET ${url}`,
+       `Response: ${snippet}`],
+      { stage: "non_json_response", http_status: res.status, url,
+        elapsed_ms: Date.now() - t0, body: String(rawBody).slice(0, 2000) });
+    return;
+  }
+
+  // JSON error — app.py's handler includes the exception type and file:line.
+  if (data.error || !res.ok) {
+    const d = data.diagnostics || null;
+    showError(data.error || `The check failed — HTTP ${res.status}`,
+      [d && d.where ? `Raised in ${d.where}` : "",
+       d && d.exception ? `Exception: ${d.exception}` : "",
+       `Request: GET ${url}`,
+       `Took ${secs}s.`],
+      { stage: "server_error", http_status: res.status, url,
+        elapsed_ms: Date.now() - t0, ...(d || {}), error: data.error || null });
+    return;
+  }
+
+  SCAN = data;
+  _populatePeople(data.people);
+  renderFromScan();
 }
 
 // Default the date to today, but DON'T scan — wait for the Check button.
