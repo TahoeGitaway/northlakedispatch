@@ -355,10 +355,11 @@ scheduler.add_job(
 def _scheduled_vip_scan():
     """Pull VIP-tagged reservations onto the VIP board without anyone pressing Scan.
 
-    Cheap enough to run often: unlike the lease sweep this is a single paginated
-    reservation read for a 24-day window, not two Breezeway calls per house. So it
-    runs through the day rather than once overnight, and a VIP tagged this morning
-    is on the board within the hour instead of whenever somebody remembers.
+    Runs once overnight. It is a single paginated reservation read for a 24-day
+    window rather than two Breezeway calls per house, so it is cheap — but cheap is
+    not a reason to run it repeatedly, and hourly runs were load nobody asked for.
+    A VIP tagged during the day lands on the board that night, or immediately if
+    someone presses Force scan.
 
     Safe to repeat because the scan is insert-only and deduped against every row
     including hand-removed ones: it cannot duplicate a card, edit one being worked
@@ -382,12 +383,12 @@ scheduler.add_job(
     id="pri_alert_check",
     replace_existing=True,
 )
-# Early, so the board is current before anyone opens it, then hourly through the
-# working day. A VIP tag added mid-morning is the case this exists for — the manual
-# button stays for when someone needs it sooner than the next hour.
+# Once, overnight, so the board is current before anyone opens it in the morning.
+# Nothing needs it more often than that; when it IS needed sooner, that is exactly
+# what the Force scan button on the page is for.
 scheduler.add_job(
     _scheduled_vip_scan,
-    CronTrigger(hour="5,7-19", minute=20, timezone="America/Los_Angeles"),
+    CronTrigger(hour=0, minute=0, timezone="America/Los_Angeles"),
     id="vip_scan",
     replace_existing=True,
 )

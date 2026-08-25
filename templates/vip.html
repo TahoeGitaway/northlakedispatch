@@ -6,27 +6,23 @@
 <div class="max-w-4xl xl:max-w-[1400px] mx-auto px-4 py-6 pb-24">
 
   <div class="mb-4">
-    <h2 class="text-xl font-bold text-gray-800">⭐ VIP Arrivals — Inspect Early</h2>
-    <p class="text-sm text-gray-500 mt-1 leading-relaxed">
-      Extra-special VIP reservations needing more than a card and a bottle of wine.
-      Tap <strong>Scan Breezeway</strong> to pull in every reservation tagged <strong>VIP</strong>
-      (checking in from a few days ago through the next 3 weeks). Scanning only ever <em>adds</em> —
-      it never removes a card you're already tracking. Guest count and total aren't in Breezeway,
-      so on scanned cards you can click to fill them in.
-    </p>
-    <div class="mt-3 flex items-center gap-3 flex-wrap">
-      <button id="scanBtn"
-        style="font-size:0.85rem;font-weight:700;color:#fff;background:#2563eb;border:none;border-radius:10px;padding:8px 16px;cursor:pointer;">
-        🔎 Scan Breezeway for VIP reservations</button>
-      <button id="exportBtn" title="Download every card's notes as a file — your copy before departed cards are removed"
-        style="font-size:0.85rem;font-weight:600;color:#374151;background:#fff;border:1px solid #d1d5db;border-radius:10px;padding:8px 14px;cursor:pointer;">
-        ⬇ Export notes</button>
-      <span id="scanStatus" class="text-sm text-gray-500"></span>
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <h2 class="text-xl font-bold text-gray-800">⭐ VIP Arrivals — Inspect Early</h2>
+      <div class="flex items-center gap-3 flex-wrap justify-end">
+        <span id="scanStatus" class="text-sm text-gray-500"></span>
+        <button id="exportBtn" title="Download every card's notes as a file — your copy before departed cards are removed"
+          style="font-size:0.85rem;font-weight:600;color:#374151;background:#fff;border:1px solid #d1d5db;border-radius:10px;padding:8px 14px;cursor:pointer;">
+          ⬇ Export notes</button>
+        <button id="scanBtn"
+          title="Runs the Breezeway scan right now instead of waiting for the next automatic one. Only ever adds cards — it never removes one you are already tracking."
+          style="font-size:0.85rem;font-weight:700;color:#fff;background:#2563eb;border:none;border-radius:10px;padding:8px 16px;cursor:pointer;">
+          🔎 Force scan now</button>
+      </div>
     </div>
     <!-- The board refreshes itself; this says when it last did, so nobody has to
          press Scan just to find out whether they are looking at current data. -->
     <div id="autoBox" class="mt-2 text-xs" style="display:none;"></div>
-    <div id="departedTop" class="mt-2"></div>
+    <div id="departedTop" class="mt-2 flex justify-end"></div>
     <div id="busyBanner" class="mt-3 rounded-xl px-4 py-2.5 text-sm"
          style="display:none;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;"></div>
   </div>
@@ -671,19 +667,19 @@ function _renderAuto(a){
   if(!a || !a.updated_at){
     // No automatic run on record yet — say that, rather than implying it is current.
     box.style.cssText = 'margin-top:8px;font-size:0.75rem;background:#f9fafb;border:1px solid #e5e7eb;color:#6b7280;border-radius:10px;padding:6px 12px;';
-    box.textContent = 'Updates automatically through the day. No automatic scan has run yet — press Scan to fill the board now.';
+    box.textContent = 'Updates automatically overnight. No automatic scan has run yet — press Force scan to fill the board now.';
     box.style.display = '';
     return;
   }
   const when = _fmtWhen(a.updated_at);
   if(a.complete){
     box.style.cssText = 'margin-top:8px;font-size:0.75rem;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;border-radius:10px;padding:6px 12px;';
-    box.textContent = `Updated automatically ${when}. New VIP tags appear here on their own — Scan is only for when you need it sooner.`;
+    box.textContent = `Updated automatically ${when}. The board refreshes overnight on its own — Force scan is for when you need it sooner.`;
   }else{
     box.style.cssText = 'margin-top:8px;font-size:0.75rem;background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:10px;padding:6px 12px;';
     box.textContent = `Last automatic update ${when} could not finish reading Breezeway`
       + (a.error ? ` (${a.error})` : '')
-      + `, so a VIP could be missing. The next run will pick it up, or press Scan.`;
+      + `, so a VIP could be missing. Tonight's run will pick it up, or press Force scan.`;
   }
   box.style.display = '';
 }
