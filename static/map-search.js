@@ -2303,11 +2303,27 @@ function _appendRouteChanges(content) {
   // thing, and "Recheck" meant nothing before anything had been checked.
   const _hasResult = () => _routeChangesCache.routeId === rid && !!_routeChangesCache.data;
 
+  // Is a check ALREADY running for this route? This panel is rebuilt on every
+  // sidebar sync, and the occupancy fetch fired by _syncSidebarToSchedule lands a
+  // second or two after the sidebar opens — right when the first click usually
+  // happens. That rebuild painted a fresh, enabled "Check now" over a check that
+  // was genuinely running, so the click looked ignored and the working remedy was
+  // to click it again. The check had started both times; only the second one's
+  // progress was ever visible.
+  const _isChecking = () =>
+    _routeChangesInflight.routeId === rid && !!_routeChangesInflight.promise;
+
   const paintChrome = () => {
     const st = _routeChangesUiState;
     caret.textContent  = st.collapsed ? "▸" : "▾";
     staleB.classList.toggle("hidden", !st.stale);
     body.style.display = st.collapsed ? "none" : "";
+    if (_isChecking()) {                      // survive a rebuild mid-check
+      refreshB.textContent = "Checking…";
+      refreshB.disabled    = true;
+      return;
+    }
+    refreshB.disabled = false;
     // "Check now" the first time, "Check again" once there's something to replace.
     refreshB.textContent = (_hasResult() || st.stale) ? "Check again" : "Check now";
   };
@@ -2316,6 +2332,16 @@ function _appendRouteChanges(content) {
   // automatically whenever the panel rendered, so opening a route spent the rate
   // limit whether or not anyone wanted the answer. It now waits to be asked.
   const paintBody = () => {
+    // A running check with nothing yet to show outranks both messages below —
+    // otherwise a rebuild replaces "Checking Breezeway…" with "Not checked yet",
+    // which is the same lie the button was telling. Stop is delegated from the
+    // document, so it keeps working in the freshly built node.
+    if (_isChecking() && !_hasResult()) {
+      body.innerHTML = `<span class="text-gray-400">Checking Breezeway…</span> `
+        + `<button data-rc-stop style="text-decoration:underline;font-weight:700;color:#6b7280;`
+        + `background:none;border:none;padding:0;cursor:pointer;font-size:11px;">Stop</button>`;
+      return;
+    }
     if (_routeChangesUiState.stale) {
       body.innerHTML = `<span class="text-amber-700">These changes have been applied, so this list no `
                      + `longer matches. Use <b>Check again</b> above to compare with Breezeway.</span>`;
@@ -2473,7 +2499,10 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
     // renders already knows whether another attempt is queued.
     _rcAutoAfterResult(routeId, data);
     const html = _renderChangesHtml(data);
-    body.innerHTML = html;
+    // The panel may have been rebuilt while this was in flight, which leaves the
+    // captured `body` detached — results written there are invisible. _rcBody()
+    // is the node currently on screen.
+    (_rcBody() || body).innerHTML = html;
     _rcTick();
     _routeChangesCache = { routeId, html, data };
     _reconcileFlagsFromScan(data);   // the live scan is the authority on check-in / PCI flags
