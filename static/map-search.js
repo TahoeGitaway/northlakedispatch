@@ -2555,66 +2555,6 @@ function _tasksForStop(name) {
 // clears the house flag too. Reads both task sources: the BW-tasks payload and the
 // discrepancy-scan payload (daily-routes mode), since only one is populated at a time.
 // Shared by both sidebars so they can never disagree about which house is VIP.
-/* ── OWNER-CLEANED ARRIVALS (route-level flag) ─────────────────────────────
-   Unlike PCI, this cannot be read off a stop: the flag comes from scanning the
-   house's LAST clean before arrival, so it is keyed by date + property rather
-   than by task title. Fetch the day's flags once, cache them against that date,
-   and let the schedule cards match by name or property id.
-
-   Same endpoint the Day Summary uses, so a date the 5:30am job already covered
-   costs no Breezeway calls at all. Failure is deliberately silent — a missing
-   badge is a far smaller problem than a route list that fails to render. */
-let _ownerCleanedNames = new Set();   // lowercased property names
-let _ownerCleanedPids  = new Set();   // property ids, as strings
-let _ownerCleanedDate  = "";          // the date the two sets above describe
-let _ownerCleanedBusy  = false;       // one in-flight request at a time
-
-function _routeDateValue() {
-  const el = document.getElementById("routeDateField");
-  return el ? (el.value || "").trim() : "";
-}
-
-/* Load the flags for whatever date the route is set to, if we don't have them.
-   Cheap to call on every render: it returns immediately once the cached date
-   matches, which is also what stops `rerender` from looping. */
-async function _ensureOwnerCleaned(rerender) {
-  const d = _routeDateValue();
-  if (!d) {                       // no date yet — drop stale flags, don't fetch
-    if (_ownerCleanedDate) {
-      _ownerCleanedNames = new Set(); _ownerCleanedPids = new Set(); _ownerCleanedDate = "";
-    }
-    return;
-  }
-  if (d === _ownerCleanedDate || _ownerCleanedBusy) return;
-  _ownerCleanedBusy = true;
-  try {
-    const res  = await fetch(`/briefing/owner-cleaned-check?date=${encodeURIComponent(d)}`);
-    const data = await res.json();
-    const flagged = (data && Array.isArray(data.flagged)) ? data.flagged : [];
-    _ownerCleanedNames = new Set(
-      flagged.map(f => String(f.name || "").toLowerCase()).filter(Boolean));
-    _ownerCleanedPids = new Set(
-      flagged.map(f => String(f.property_id || "")).filter(Boolean));
-    _ownerCleanedDate = d;        // set BEFORE re-rendering, or the rerender refetches
-    if (typeof rerender === "function") rerender();
-  } catch (_) {
-    /* silent — see the note above */
-  } finally {
-    _ownerCleanedBusy = false;
-  }
-}
-
-/* True when this stop's last clean was owner-handled. Matches on name first and
-   falls back to the Breezeway property id, the same two-key match the Day Summary
-   overlay uses, so a house whose display name drifted still lights up. */
-function _stopIsOwnerCleaned(name) {
-  const n = String(name || "").toLowerCase();
-  if (n && _ownerCleanedNames.has(n)) return true;
-  const pid = (typeof _bwPropIdByName !== "undefined" && _bwPropIdByName)
-    ? _bwPropIdByName[name] : null;
-  return !!(pid && _ownerCleanedPids.has(String(pid)));
-}
-
 function _stopHasVip(name) {
   if (!window.NLD) return false;
   const vip = (title, id) => NLD.isVipTitle(title) && !NLD.isFlagDismissed(id);
