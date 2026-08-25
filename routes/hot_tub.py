@@ -5,7 +5,7 @@ Applies to properties tagged "Hot Tub - TG Service" in Breezeway, OR
 properties with a current 30+ night guest lease that also carry a plain
 "Hot Tub" tag.
 Looks back 45 days for tasks whose title contains "hot tub" AND
-("arrival" OR "biweekly"). Alerts on any property where the last
+("arrival" OR "biweekly" OR "mid stay" OR …). Alerts on any property where the last
 service was more than 14 days ago (or never found in the window).
 
 Also flags "too close" services: any two hot tub services on the same
@@ -39,8 +39,14 @@ from routes.bw_api_log import bw_get
 _scan_cache = {"ts": 0.0, "data": None}
 _SCAN_TTL = 300
 
+# A hot tub task counts as a SERVICE when the title names the tub and the kind of
+# visit. Both spellings of the mid-stay visit are accepted — Breezeway titles carry
+# it abbreviated ("Hot Tub Service - Mid Str") as well as written out — because a
+# service that does not match here is invisible to the whole scan: it cannot satisfy
+# an overdue check and cannot be flagged as a double-booking.
 HOT_TUB_PATTERN = re.compile(
-    r"(?=.*\bhot[\s\-]?tub\b)(?=.*\b(arrival|biweekly|bi[\s\-]?weekly|lease|d\s*&\s*s)\b)",
+    r"(?=.*\bhot[\s\-]?tub\b)"
+    r"(?=.*\b(arrival|biweekly|bi[\s\-]?weekly|lease|mid[\s\-]?st(ay|r)|d\s*&\s*s)\b)",
     re.IGNORECASE,
 )
 HOT_TUB_TAG_NAME = "hot tub - tg service"
