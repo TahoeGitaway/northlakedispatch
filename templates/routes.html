@@ -175,6 +175,12 @@
   .summary-oc-status.is-found   { color: #92400e; }
   .summary-oc-status.is-clear   { color: #9ca3af; }
   .summary-oc-status.is-warn    { color: #b45309; }
+  /* Far-out date: the scan was deliberately NOT run. Clickable, because the
+     answer is still available on demand — it just isn't worth ~1 Breezeway
+     request per arriving house every time someone browses ahead. */
+  .summary-oc-status.is-idle    { color: #9ca3af; cursor: pointer;
+                                  text-decoration: underline dotted; }
+  .summary-oc-status.is-idle:hover { color: #6b7280; }
   @keyframes oc-spin { to { transform: rotate(360deg); } }
 </style>
 
@@ -605,8 +611,17 @@ async function loadDaySummary(ds, force = false) {
     // the list, so the normal load just paints what came back — no second request,
     // no Breezeway calls. Only a date the job hasn't covered (or an explicit Refresh)
     // falls back to scanning live, which is the one-call-per-arriving-house fan-out.
-    if (data.owner_cleaned) applyOwnerCleaned(data.owner_cleaned, ds, "saved");
-    else                    decorateOwnerCleaned(ds, force);
+    if (data.owner_cleaned) {
+      applyOwnerCleaned(data.owner_cleaned, ds, "saved");     // stored: free, always paint it
+    } else if (force || _ocDaysAhead(ds) <= OC_AUTO_SCAN_DAYS) {
+      decorateOwnerCleaned(ds, force);
+    } else {
+      // Weeks out. There is no stored scan this far ahead, and running it live
+      // costs one Breezeway request per arriving house — on a heavy day that is
+      // 40+ requests spent just because someone clicked forward to look. The flag
+      // is for scheduling a Walk Thru soon, so it is not actionable yet anyway.
+      _ocOfferManual(ds);
+    }
   } catch (e) {
     loading.classList.add("hidden");
   }
@@ -614,9 +629,35 @@ async function loadDaySummary(ds, force = false) {
 
 /* Set the owner-clean scan status shown on the Arrivals header.
    state: "" | "checking" | "found" | "clear" | "warn" */
+/* How far ahead the morning snapshot job reaches. Beyond this there is no stored
+   owner-clean scan, so the only way to show the flag is the live per-house fan-out.
+   Matches refresh_day_summaries(days=8) in app.py — keep the two in step. */
+const OC_AUTO_SCAN_DAYS = 8;
+
+/* Whole days from today to a YYYY-MM-DD string. Built from the parts rather than
+   Date.parse so it stays local-midnight and does not drift a day on UTC. */
+function _ocDaysAhead(ds) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ds || ""));
+  if (!m) return 0;                       // unparseable: behave as before
+  const target = new Date(+m[1], +m[2] - 1, +m[3]);
+  const today  = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((target - today) / 86400000);
+}
+
+/* Say the check was skipped and offer it on one click, rather than running it. */
+function _ocOfferManual(ds) {
+  setOcStatus("idle", "🧹 cleans not checked — check",
+    `This date is more than ${OC_AUTO_SCAN_DAYS} days out, so no clean scan is stored `
+    + `for it. Checking live costs one Breezeway request per arriving house — click `
+    + `to run it anyway.`);
+  const el = document.getElementById("daySummaryOcStatus");
+  if (el) el.onclick = () => { el.onclick = null; decorateOwnerCleaned(ds, true); };
+}
+
 function setOcStatus(state, text, title = "") {
   const el = document.getElementById("daySummaryOcStatus");
   if (!el) return;
+  el.onclick = null;                      // never leave a previous day's handler on
   el.className = "summary-oc-status" + (state ? ` is-${state}` : "");
   el.textContent = text || "";
   el.title = title || "";
