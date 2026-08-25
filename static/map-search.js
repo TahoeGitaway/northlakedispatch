@@ -2067,6 +2067,12 @@ function _rcAutoHalt(note) {
 // when the timer was set would point at a detached node.
 function _rcBody() { return document.querySelector("[data-rc-body]"); }
 
+// The most recently built panel's chrome painter. The check settles outside the
+// closure that owns the button, so without this there is nothing to re-enable it:
+// a failed check left "Checking…" disabled forever, and the error telling you to
+// use Check again was advice you could not take.
+let _rcPaintChrome = null;
+
 // Repaint the panel from the data we already have — no server call. Used when
 // only the retry status line changed (scheduled / stopped / resumed). Returns
 // false when there's nothing cached to paint, so callers can say something else
@@ -2378,6 +2384,7 @@ function _appendRouteChanges(content) {
     _renderRouteChangesInto(rid, body, _hasResult());
   });
 
+  _rcPaintChrome = paintChrome;   // so a settled check can restore the button
   paintChrome();
   if (!_routeChangesUiState.collapsed) paintBody();
 }
@@ -2483,12 +2490,14 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
       // NOT throw away the comparison we already have on screen.
       if (retryFailed && _routeChangesCache.routeId === routeId && _routeChangesCache.data) {
         _rcAutoHalt(data.error);
-        body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+        (_rcBody() || body).innerHTML = _renderChangesHtml(_routeChangesCache.data);
+        if (_rcPaintChrome) _rcPaintChrome();
         return;
       }
       _rcAutoHalt(data.error);
-      body.innerHTML = `<span class="text-red-500">${_escHtml(data.error)} — reopen the sidebar or use Check again.</span>`;
+      (_rcBody() || body).innerHTML = `<span class="text-red-500">${_escHtml(data.error)} — reopen the sidebar or use Check again.</span>`;
       _invalidateRouteChanges();   // never cache an error — let a reopen/recheck retry
+      if (_rcPaintChrome) _rcPaintChrome();   // after invalidate: it clears the in-flight flag
       return;
     }
     if (data.failed_properties) {
@@ -2504,6 +2513,7 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
     // is the node currently on screen.
     (_rcBody() || body).innerHTML = html;
     _rcTick();
+    if (_rcPaintChrome) _rcPaintChrome();   // check is over — button back to "Check again"
     _routeChangesCache = { routeId, html, data };
     _reconcileFlagsFromScan(data);   // the live scan is the authority on check-in / PCI flags
     // Remember each house's Breezeway property_id from the live scan so the saved-route
@@ -2521,11 +2531,13 @@ function _renderRouteChangesInto(routeId, body, force, retryFailed, quiet) {
     // trying to improve, and just reports that the retrying has stopped.
     if (retryFailed && _routeChangesCache.routeId === routeId && _routeChangesCache.data) {
       _rcAutoHalt(`Couldn't reach Breezeway (${e.message})`);
-      body.innerHTML = _renderChangesHtml(_routeChangesCache.data);
+      (_rcBody() || body).innerHTML = _renderChangesHtml(_routeChangesCache.data);
+      if (_rcPaintChrome) _rcPaintChrome();
       return;
     }
-    body.innerHTML = `<span class="text-red-500">Could not check Breezeway: ${_escHtml(e.message)} — reopen the sidebar or use Check again.</span>`;
+    (_rcBody() || body).innerHTML = `<span class="text-red-500">Could not check Breezeway: ${_escHtml(e.message)} — reopen the sidebar or use Check again.</span>`;
     _invalidateRouteChanges();   // don't cache the failed promise, or every retry reuses it
+    if (_rcPaintChrome) _rcPaintChrome();   // MUST come after: it clears the in-flight flag
   });
 }
 
