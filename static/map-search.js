@@ -851,9 +851,17 @@ async function runBwImport() {
       // never answered. Untreated, that is indistinguishable from a correct import
       // of a day with no check-ins, which is how it went unnoticed.
       if (data.arrival_error) {
+        // Do NOT send her back through a re-import: that re-runs the whole ~442-call
+        // sweep and rebuilds the stop list she already has, to recover one thing —
+        // which arrivals exist that day. That answer is one cheap request away, and
+        // on any date the morning job has stored it costs no Breezeway calls at all.
         msg  += ` ⚠ Check-in ticks are missing: couldn't read the day's arrivals`
-              + ` (${data.arrival_error}). Set them by hand or re-import.`;
+              + ` (${data.arrival_error}). The ${added} stop${added === 1 ? " is" : "s are"} fine —`
+              + ` only the ticks are missing.`;
         color = "red";
+        _bwTicksFixDate = date;
+      } else {
+        _bwTicksFixDate = null;
       }
       _bwAutoReset();   // a fresh import gets a fresh retry budget, and Stop is forgotten
       if (data.failed_properties) {
@@ -885,6 +893,7 @@ async function runBwImport() {
       _bwImportMsg(msg, color);
       // Must follow _bwImportMsg — that sets textContent and so wipes the controls.
       if (retryCount) _bwAutoRepaintStatus();
+      if (_bwTicksFixDate) _bwPaintTicksFix();
       _bwShowTaskSidebar(date, data.matched || []);
       _bwRenderUncertain(date, uncertain);
       _bwPlaceMarkers();
@@ -1474,6 +1483,79 @@ function _bwImportFail(diag, humanMsg) {
   _bwSyncTick();   // the countdown's element went with the innerHTML wipe
   // Also log it, so it's recoverable from the console even if the box is dismissed.
   console.error("[bw-import] failed", diag);
+}
+
+/* ── RECOVER THE CHECK-IN TICKS WITHOUT RE-IMPORTING ──────────────────────
+   When the import's arrivals read times out, the stops are still correct — the
+   only thing missing is which of them is a check-in. Re-importing to get that
+   back re-runs the whole per-property sweep and rebuilds a list that was already
+   right, so it costs the most and risks the most to recover the least.
+
+   The day summary answers exactly this question, and prefers the snapshot the
+   5:30am job stored, so on a covered date it reaches Breezeway not at all. One
+   request, user-initiated, never on a render path. */
+let _bwTicksFixDate = null;
+
+function _bwPaintTicksFix() {
+  const el = document.getElementById("bwImportResult");
+  if (!el || !_bwTicksFixDate) return;
+  const b = document.createElement("button");
+  b.textContent = "\ud83d\udc49 Set the check-in ticks";
+  b.title = "Reads just the day's arrivals and ticks the matching stops. "
+          + "Leaves the stop list alone.";
+  b.style.cssText = "display:block;margin-top:6px;text-decoration:underline;font-weight:700;"
+                  + "color:inherit;background:none;border:none;padding:0;cursor:pointer;font:inherit;";
+  b.addEventListener("click", () => _bwFixCheckinTicks(b));
+  el.appendChild(b);
+}
+
+async function _bwFixCheckinTicks(btn) {
+  const date = _bwTicksFixDate;
+  if (!date) return;
+  btn.disabled = true;
+  const restore = btn.textContent;
+  btn.textContent = "Reading the day's arrivals\u2026";
+  try {
+    const res  = await fetch(`/briefing/day-summary?date=${encodeURIComponent(date)}`);
+    const data = await res.json();
+    const groups = (data && data.arrivals) || {};
+    // Every kind counts: an owner or lease arrival is still an arrival.
+    const byName = new Map(), pciNames = new Set();
+    for (const kind of Object.keys(groups)) {
+      for (const a of (groups[kind] || [])) {
+        const n = String(a.name || "").toLowerCase();
+        if (!n) continue;
+        byName.set(n, true);
+        if (a.pci) pciNames.add(n);
+      }
+    }
+    if (!byName.size) {
+      btn.textContent = "No arrivals found for that day \u2014 nothing to tick.";
+      return;
+    }
+    let ticked = 0;
+    const apply = list => {
+      for (const st of (list || [])) {
+        const n = String(st.name || "").toLowerCase();
+        if (!byName.has(n) || st.arrival) continue;
+        st.arrival = true;
+        if (pciNames.has(n)) st.priority_checkin = true;
+        ticked++;
+      }
+    };
+    apply(selectedStops);
+    apply(optimizedSchedule.filter(x => !x.isLunch && !x.isGap));
+    if (isOptimized) { recalculateTimes(); renderSchedule(); redrawRouteOnMap(); }
+    else             { renderStops(); }
+    if (typeof _syncSidebarToSchedule === "function") _syncSidebarToSchedule();
+    btn.textContent = ticked
+      ? `\u2713 Ticked ${ticked} check-in${ticked === 1 ? "" : "s"}.`
+      : "\u2713 Already correct \u2014 nothing needed ticking.";
+    _bwTicksFixDate = null;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = restore + " \u2014 that failed, try once more";
+  }
 }
 
 function _bwImportMsg(text, color) {
