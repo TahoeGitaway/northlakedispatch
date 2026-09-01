@@ -147,7 +147,10 @@ function _readCount(data) {
   return Math.max(0, (data.scanned_properties || 0) - (data.failed_properties || 0));
 }
 
-async function runScan() {
+// retryFailed: re-read ONLY the properties the last scan couldn't load. The
+// server holds them for 15 minutes; a full re-sweep is what produced the 429s
+// in the first place, so offering it as the fix made things worse.
+async function runScan(retryFailed = false) {
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('tableWrap').classList.add('hidden');
   document.getElementById('emptyBox').classList.add('hidden');
@@ -164,7 +167,7 @@ async function runScan() {
     const resp  = await fetch('/admin/bear-fence/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start, end }),
+      body: JSON.stringify({ start, end, retry_failed: retryFailed }),
     });
     const data = await resp.json();
     document.getElementById('loading').classList.add('hidden');
@@ -198,10 +201,16 @@ async function runScan() {
       warn.push(`<div>${f.text} — a mismatched Bear Fence date on those properties `
               + `would not appear below.</div>`
               + (f.retry
-                   ? `<div style="margin-top:3px;"><button onclick="runScan()" `
+                   ? `<div style="margin-top:3px;"><button onclick="runScan(${data.can_retry_failed ? 'true' : 'false'})" `
                      + `style="text-decoration:underline;font-weight:700;color:#b45309;`
                      + `background:none;border:none;padding:0;cursor:pointer;font:inherit;">`
-                     + `👉 Scan again</button>`
+                     + (data.can_retry_failed
+                          ? `\ud83d\udc49 Re-read just the ${data.failed_properties} that failed`
+                          : `\ud83d\udc49 Scan again`)
+                     + `</button>`
+                     + (data.can_retry_failed
+                          ? ` \u2014 the rest are kept, so this asks Breezeway for far less.`
+                          : '')
                      + (data.scanned_properties
                           ? ` (${_readCount(data)} of ${data.scanned_properties} properties were read.)` : '')
                      + `</div>`
