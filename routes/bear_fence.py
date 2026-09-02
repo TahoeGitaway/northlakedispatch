@@ -22,6 +22,7 @@ from flask_login import login_required
 from routes.auth import admin_required
 from routes.group_assign import _assignee_names
 from routes.bw_api_log import bw_get, bw_patch
+import time as _time
 
 bear_fence_bp = Blueprint("bear_fence", __name__)
 
@@ -57,9 +58,22 @@ def _get_property_name(pid):
 # which reports what it could not read, so this tool inherits those fixes instead of
 # needing them applied a third time.
 def _fetch_tasks_for_pids(token: str, pids: list, start: date, end: date) -> tuple:
-    """(tasks, failed_count, failure_statuses) — see briefing.fetch_tasks_for_pids."""
+    """(tasks, failed_count, failure_statuses, failed_pids) — see briefing."""
     from routes.briefing import fetch_tasks_for_pids
     return fetch_tasks_for_pids(token, pids, start, end)
+
+
+# The tasks that DID load plus the pids that did not, so "load just the missing N"
+# can ask about only those. Held per date range.
+#
+# Without this the only remedy on offer was "Scan again", which re-reads all ~211
+# properties — and that full sweep is what provokes the 429s in the first place.
+# So every retry recreated the failure: the same handful came back unread, and the
+# button could be clicked all morning without ever clearing them. Retrying 15
+# properties instead of 211 is a different proposition entirely.
+_scan_cache: dict = {}       # (start_iso, end_iso) -> (ts, result, tasks, failed_pids, arrival_pids)
+_SCAN_TTL     = 90           # a fresh scan is reused rather than re-run
+_RETRY_WINDOW = 900          # 15 min to retry the gaps before the held partial goes stale
 
 
 def _fetch_reservations_range(token: str, start: date, end: date) -> tuple:
@@ -157,19 +171,56 @@ def bear_fence_scan():
     except ValueError:
         start, end = today, today + timedelta(days=7)
 
+    ck           = (start.isoformat(), end.isoformat())
+    retry_failed = bool(body.get("retry_failed"))
+    force        = bool(body.get("force"))
+    cached       = _scan_cache.get(ck)
+
+    if cached and not force and not retry_failed and _time.time() - cached[0] < _SCAN_TTL:
+        return jsonify(cached[1])
+
+    held_tasks, retry_pids, arrival_pids = [], None, None
+    if retry_failed and cached and _time.time() - cached[0] < _RETRY_WINDOW:
+        # (ts, result, tasks, failed_pids, arrival_pids)
+        held_tasks   = list(cached[2])
+        retry_pids   = list(cached[3])
+        arrival_pids = cached[4]
+    if retry_failed and not retry_pids:
+        # Never let "just the missing ones" quietly become a full re-sweep — that is
+        # the expensive call this exists to avoid, and the one that causes the 429s.
+        return jsonify({"error": "The list of which properties failed has expired. "
+                                 "Scan again to do a full re-check."})
+
     # Fetch arrivals to narrow down which properties to scan. A short read here is
     # not a smaller day — it is a smaller SCAN, and every house it drops produces no
     # proposal at all, which reads as "nothing to change".
-    reservations, resv_error = _fetch_reservations_range(token, start, end + timedelta(days=1))
-    arrival_pids = list({
-        str(r.get("property_id") or r.get("home_id") or "")
-        for r in reservations
-        if r.get("checkin_date")
-    } - {""})
+    #
+    # Skipped on a retry: the arrival list is already held, and re-reading it would
+    # spend requests on the one part of the scan that did not fail.
+    resv_error = ""
+    if arrival_pids is None:
+        reservations, resv_error = _fetch_reservations_range(token, start, end + timedelta(days=1))
+        arrival_pids = list({
+            str(r.get("property_id") or r.get("home_id") or "")
+            for r in reservations
+            if r.get("checkin_date")
+        } - {""})
 
-    tasks, failed_props, failure_statuses = (
-        _fetch_tasks_for_pids(token, arrival_pids, start, end) if arrival_pids
-        else ([], 0, {}))
+    # A retry sweeps ONLY what failed; a normal scan sweeps everything.
+    sweep_pids = retry_pids if retry_pids else arrival_pids
+    new_tasks, failed_props, failure_statuses, failed_pids = (
+        _fetch_tasks_for_pids(token, sweep_pids, start, end) if sweep_pids
+        else ([], 0, {}, []))
+
+    # Merge what this pass read into what earlier passes already had, de-duplicating
+    # by task id so a retry cannot double-add.
+    tasks, _seen = list(held_tasks), {t.get("id") for t in held_tasks if t.get("id") is not None}
+    for t in new_tasks:
+        tid = t.get("id")
+        if tid is None or tid not in _seen:
+            if tid is not None:
+                _seen.add(tid)
+            tasks.append(t)
 
     # Index tasks by pid
     walk_thrus:  dict[str, list[dict]] = {}
@@ -264,7 +315,7 @@ def bear_fence_scan():
 
     # Sort: by property then current date
     proposals.sort(key=lambda x: (x["property"], x["current_date"]))
-    return jsonify({
+    result = {
         "proposals": proposals,
         # What this scan could NOT see. A proposal list is an argument from absence
         # twice over — a house with no bear fence task is skipped, and a house that
@@ -276,7 +327,17 @@ def bear_fence_scan():
         # Non-empty when the arrivals themselves came back short, so the candidate
         # list was already incomplete before a single task was read.
         "reservations_error": resv_error,
-    })
+        # True once a partial is held, which is what lets the page offer to re-read
+        # ONLY the houses that failed instead of all of them.
+        "can_retry_failed": bool(failed_pids),
+    }
+
+    # Hold the TASKS and the FAILED PIDS, not just the finished payload. Holding the
+    # payload alone leaves nothing to merge into and nothing to narrow to, which is
+    # why the only button on offer was a full re-sweep. A retry pass keeps the
+    # original arrival list so a later retry still knows the whole population.
+    _scan_cache[ck] = (_time.time(), result, tasks, failed_pids, arrival_pids)
+    return jsonify(result)
 
 
 @bear_fence_bp.route("/admin/bear-fence/apply", methods=["POST"])
