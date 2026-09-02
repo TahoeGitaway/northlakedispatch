@@ -117,6 +117,19 @@ async function optimizeRoute(useGoogleMatrix = false) {
     durationMatrix = data.duration_matrix || [];
     startMinutes   = data.start_minutes || hhmmToMinutes(document.getElementById("startTime").value);
 
+    // The server always sends `schedule` on success and `error` on failure, so a
+    // reply with neither means something else answered — a proxy page, a different
+    // handler, a truncated body. Reading .map off it threw "Cannot read properties
+    // of undefined (reading 'map')", which named the symptom and hid the cause.
+    // Say what actually came back instead.
+    if (!Array.isArray(data.schedule)) {
+      const keys = Object.keys(data || {});
+      throw new Error(
+        "the server replied without a schedule. It sent: "
+        + (keys.length ? keys.join(", ") : "(an empty response)")
+        + `. HTTP ${res.status}${res.redirected ? " (redirected)" : ""}.`);
+    }
+
     optimizedSchedule = data.schedule.map(entry => {
       const orig = selectedStops.find(s => s.name === entry.name);
       return { ...entry, _id: orig?._id || makeStopId() };
