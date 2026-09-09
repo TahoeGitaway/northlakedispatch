@@ -239,7 +239,9 @@ def bear_fence_delete_scan():
         if r.get("checkin_date")
     } - {""})
 
-    tasks = _fetch_tasks_for_pids(token, pids, day, day) if pids else []
+    # The sweeper reports WHICH properties failed as well as how many; this tool
+    # only needs the tasks, so the rest is discarded here rather than at the source.
+    tasks = _fetch_tasks_for_pids(token, pids, day, day)[0] if pids else []
 
     # Keep only tasks actually scheduled on the chosen day, grouped by property.
     day_iso = day.isoformat()

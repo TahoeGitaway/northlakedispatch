@@ -371,7 +371,14 @@ def fetch_property_tasks_range(token: str, pid: str, ref_id: str,
 
 def fetch_tasks_for_pids(token: str, pids: list, start, end,
                          max_workers: int = 16, budget_s: float = 45.0) -> tuple:
-    """Sweep many properties. Returns (tasks, failed_count, failure_statuses).
+    """Sweep many properties. Returns (tasks, failed_count, failure_statuses, failed_pids).
+
+    failed_pids is WHICH properties could not be read, not just how many. Without
+    it a caller's only remedy is a full re-sweep — and a full re-sweep of 200+
+    properties is precisely what provokes the 429s it is trying to recover from, so
+    the retry recreates the failure and never converges. walk_thru_rename has
+    returned this for exactly that reason; the callers here could not, and their
+    "Scan again" button could be clicked forever without clearing the last few.
 
     failure_statuses is the {"429": n, "timeout": n, "unreached": n} tally the UI
     needs in order to say WHY, via static/bw-failure.js — the same shape the map
@@ -393,6 +400,7 @@ def fetch_tasks_for_pids(token: str, pids: list, start, end,
     ref_cache = _get_live_ref_cache()
     all_tasks, seen_ids = [], set()
     failed, statuses = 0, {}
+    failed_pids: list = []
     deadline = time.monotonic() + budget_s
 
     ex = ThreadPoolExecutor(max_workers=max_workers)
@@ -413,10 +421,12 @@ def fetch_tasks_for_pids(token: str, pids: list, start, end,
                     tasks, ok, status = future.result()
                 except Exception:
                     failed += 1
+                    failed_pids.append(swept_pid)
                     statuses["timeout"] = statuses.get("timeout", 0) + 1
                     continue
                 if not ok:
                     failed += 1
+                    failed_pids.append(swept_pid)
                     k = "timeout" if status is None else str(status)
                     statuses[k] = statuses.get(k, 0) + 1
                     continue
@@ -443,11 +453,12 @@ def fetch_tasks_for_pids(token: str, pids: list, start, end,
             if not future.done():
                 future.cancel()
                 failed += 1
+                failed_pids.append(pid)
                 statuses["unreached"] = statuses.get("unreached", 0) + 1
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
 
-    return all_tasks, failed, statuses
+    return all_tasks, failed, statuses, failed_pids
 
 
 def _fetch_bw_endpoint(token: str, path: str, params: dict) -> tuple:

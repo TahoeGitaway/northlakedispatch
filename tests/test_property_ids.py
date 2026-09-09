@@ -381,10 +381,14 @@ class SiblingSweeperTests(unittest.TestCase):
         with mock.patch.object(briefing, "fetch_property_tasks_range",
                                return_value=([task], True, 200)), \
              mock.patch.object(briefing, "_get_live_ref_cache", return_value={}):
-            tasks, failed, _ = briefing.fetch_tasks_for_pids(
+            tasks, failed, _, failed_pids = briefing.fetch_tasks_for_pids(
                 "tok", ["858240"], date(2026, 8, 29), date(2026, 9, 5))
 
         self.assertEqual(failed, 0)
+        # Binding all four pins the arity. Bear Fence unpacks four here, and when
+        # this returned three the mismatch reached production as a 500 on every
+        # scan — nothing in the suite was holding the two halves together.
+        self.assertEqual(failed_pids, [])
         self.assertEqual(tasks[0]["_swept_pid"], "858240")
 
 
