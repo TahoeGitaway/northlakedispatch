@@ -392,10 +392,18 @@ scheduler.add_job(
     id="vip_scan",
     replace_existing=True,
 )
+# Once a day, not every half hour. The banner these rows feed is no longer on every
+# page — it lives on the My Bot page alone (templates/admin_my_bot.html) — so there
+# is nothing that needs them within thirty minutes of a comment being left. 48 polls
+# a day to fill a feed almost nobody opens is work for its own sake.
+#
+# 7:00 Pacific: after the day-summary catch-ups finish at 6:45 and before the lease
+# retry at 7:10, so it isn't sharing a thread with either, and the feed is current
+# before the morning starts. Timezone-aware for the same reason the other jobs are —
+# the server clock is UTC, and a naive hour would fire seven hours off.
 scheduler.add_job(
     _scheduled_asana_poll,
-    "interval",
-    minutes=30,
+    CronTrigger(hour=7, minute=0, timezone="America/Los_Angeles"),
     id="asana_poll",
     replace_existing=True,
 )

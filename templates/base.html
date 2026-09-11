@@ -68,20 +68,26 @@
                       {% if request.endpoint == 'lease_prep.lease_prep_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:text-gray-900 hover:bg-gray-50{% endif %}">
                 Lease Program
             </a>
-            <a href="{{ url_for('lease_stamp.lease_stamp_page') }}"
-               class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors
-                      {% if request.endpoint == 'lease_stamp.lease_stamp_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:text-gray-900 hover:bg-gray-50{% endif %}">
-                Stamp Tasks
-            </a>
+            {# HIDDEN: Stamp Tasks (/admin/lease-stamp). It sat here in the
+               authenticated block, so EVERY logged-in user saw the button while only
+               admins could open it — and the page itself is an Asana tool ("Renames
+               upcoming Asana lease tasks", lease_stamp.py), reading the shared
+               ASANA_TOKEN's My Tasks list. That made the Asana integration the most
+               visible thing in the app. The page and its routes are untouched and
+               still admin-gated; reach it by typing /admin/lease-stamp. To restore,
+               uncomment this block. #}
 
             {% if current_user.is_admin %}
             <div class="w-px h-5 bg-gray-200 mx-2"></div>
             {# HIDDEN: My Bot. This link used to open it, and it was the only way
                in — it now lands on Ops Bot, which is still live along with
                Knowledge. Nothing in my_bot.py was removed: the Asana notification
-               feed below (/api/asana-notifications) lives in that same module and
-               is unaffected. To restore, point this back at my_bot.my_bot_page and
-               uncomment the My Bot tab in the three sub-navs. #}
+               feed (/api/asana-notifications) lives in that same module and is
+               unaffected. Its banner is no longer rendered here — it now lives in
+               admin_my_bot.html, so it appears on the My Bot page only. Reaching
+               that page currently means typing /admin/my-bot directly. To restore,
+               point this back at my_bot.my_bot_page and uncomment the My Bot tab in
+               the three sub-navs. #}
             <a href="{{ url_for('ops_bot.chatbot_page') }}"
                class="px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
                       {% if request.endpoint in ('ops_bot.chatbot_page', 'admin.knowledge_list') %}bg-indigo-50 text-indigo-700{% else %}text-gray-400 hover:text-gray-700 hover:bg-gray-50{% endif %}">
@@ -228,56 +234,12 @@
     </script>
     {% endif %}
 
-    {% if my_bot_allowed %}
-    <!-- Asana comment notification banner — only for allowed users -->
-    <div id="asanaBanner" class="hidden border-b border-violet-200 bg-violet-50 px-6 py-3 space-y-1.5"></div>
-    <script>
-    (async function loadAsanaNotifications() {
-      try {
-        const res  = await fetch("/api/asana-notifications");
-        const data = await res.json();
-        const notes = data.notifications || [];
-        if (!notes.length) return;
-        const banner = document.getElementById("asanaBanner");
-        banner.innerHTML = "";
-        const header = document.createElement("div");
-        header.className = "flex items-center justify-between";
-        header.innerHTML = `
-          <span class="text-sm font-semibold text-violet-800">
-            💬 Asana comments on your tasks (${notes.length})
-          </span>
-          <a href="/admin/my-bot" class="text-xs text-violet-600 font-medium hover:underline">Open My Bot →</a>`;
-        banner.appendChild(header);
-        notes.forEach(n => {
-          const row = document.createElement("div");
-          row.className = "flex items-center justify-between gap-4 text-xs text-violet-700 pl-1";
-          // Asana's created_at already ends in "Z", so this was rendering correctly;
-          // fmtUtc leaves an offset-bearing string alone and pins the zone to Pacific
-          // rather than the viewer's device.
-          const when = fmtUtc(n.asana_created_at);
-          row.innerHTML = `
-            <span><strong>${n.commenter}</strong> on <em>${n.task_name}</em>${when ? " · " + when : ""}: ${n.comment_text.slice(0,120)}${n.comment_text.length > 120 ? "…" : ""}</span>
-            <button onclick="dismissAsanaNote('${n.item_key}', this.closest('div'))"
-                    class="flex-shrink-0 text-violet-400 hover:text-violet-700 font-bold text-base leading-none px-1"
-                    title="Dismiss">✕</button>`;
-          banner.appendChild(row);
-        });
-        banner.classList.remove("hidden");
-      } catch {}
-    })();
-
-    async function dismissAsanaNote(key, rowEl) {
-      rowEl.style.opacity = "0.4";
-      await fetch("/api/asana-notification/dismiss", {
-        method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({key}),
-      });
-      rowEl.remove();
-      const banner = document.getElementById("asanaBanner");
-      if (!banner.querySelector("button")) banner.classList.add("hidden");
-    }
-    </script>
-    {% endif %}
+    {# MOVED: the Asana comment banner used to live here, which meant it rendered on
+       EVERY page for EVERY admin — and because the feed filters out the account
+       owner's own comments (my_bot.py: `commenter <> _MY_NAME`), she was the one
+       person who never saw it while everyone else did. It now lives in
+       admin_my_bot.html so it only ever appears on the My Bot page itself.
+       The API it reads (/api/asana-notifications) is unchanged and still admin-gated. #}
 
     {% if current_user.is_authenticated %}
     <!-- Breezeway @mention banner — per-user; shows comments that matched your
