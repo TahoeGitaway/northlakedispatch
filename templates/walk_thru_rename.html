@@ -62,7 +62,10 @@
 
   <!-- Table -->
   <div id="tableWrap" class="hidden">
-    <div class="rounded-xl border border-gray-200 bg-white overflow-hidden mb-4">
+    {# overflow-x-auto, not overflow-hidden — a hidden overflow clips the last column
+       off a table too wide for the card instead of letting it scroll, with no
+       scrollbar to say so. Same fix as bear_fence.html, which is the tab next door. #}
+    <div class="rounded-xl border border-gray-200 bg-white overflow-x-auto mb-4">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-gray-100 bg-gray-50">

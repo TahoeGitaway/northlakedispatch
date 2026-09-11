@@ -73,7 +73,10 @@
 
   <!-- Table -->
   <div id="tableWrap" class="hidden">
-    <div class="rounded-xl border border-gray-200 bg-white overflow-hidden mb-4">
+    {# overflow-x-auto, not overflow-hidden. Fourteen columns never fit the card, so a
+       hidden overflow was clipping the rightmost ones away with no scrollbar to say
+       anything was there. Same fix as bear_fence.html. #}
+    <div class="rounded-xl border border-gray-200 bg-white overflow-x-auto mb-4">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-gray-100 bg-gray-50">

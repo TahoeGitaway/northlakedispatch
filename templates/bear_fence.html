@@ -72,7 +72,13 @@
 
   <!-- Table -->
   <div id="tableWrap" class="hidden">
-    <div class="rounded-xl border border-gray-200 bg-white overflow-hidden mb-4">
+    {# overflow-x-auto, not overflow-hidden. The date cells are whitespace-nowrap, so
+       this table has a minimum width the card cannot always give it — and a hidden
+       overflow CLIPS that, silently amputating the last column. "Move To" is the one
+       thing this tool exists to show, and it was the column being cut off, with no
+       scrollbar to say anything was missing. Scrolling keeps the rounded corners and
+       admits the table is wider than the frame. Same wrapper as task_changes.html. #}
+    <div class="rounded-xl border border-gray-200 bg-white overflow-x-auto mb-4">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-gray-100 bg-gray-50">
@@ -263,17 +269,29 @@ async function runScan(retryFailed = false) {
           <input type="checkbox" class="row-check rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                  data-index="${i}" checked onchange="updateCount()">
         </td>
-        <td class="px-4 py-3 font-medium text-gray-800">${esc(p.property)}</td>
+        <td class="px-4 py-3 font-medium text-gray-800">${p.property_id
+          ? `<a href="https://app.breezeway.io/property/${esc(String(p.property_id))}/calendar" target="_blank" rel="noopener"
+               class="text-gray-800 hover:text-indigo-600 hover:underline"
+               title="Open ${esc(p.property)}'s calendar in Breezeway">${esc(p.property)}</a>`
+          : esc(p.property)}</td>
         <td class="px-4 py-3">
           <span style="font-size:0.7rem;font-weight:600;padding:2px 7px;border-radius:99px;white-space:nowrap;${typeColor}">
             ${esc(p.task_type)}
           </span>
         </td>
-        <td class="px-4 py-3 text-gray-500">${esc(p.task_title)}</td>
+        <td class="px-4 py-3 text-gray-500">${p.task_id
+          ? `<a href="https://app.breezeway.io/task/${esc(String(p.task_id))}" target="_blank" rel="noopener"
+               class="text-gray-500 hover:text-indigo-600 hover:underline"
+               title="Open this task in Breezeway">${esc(p.task_title)}</a>`
+          : esc(p.task_title)}</td>
         <td class="px-4 py-3 text-gray-600">${p.assignees && p.assignees.length ? esc(p.assignees.join(', ')) : '<span class="text-gray-300">Unassigned</span>'}</td>
         <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${_fmtDate(p.current_date)}</td>
         <td class="px-4 py-3 text-gray-500" style="font-size:0.8rem;">
-          <div>${esc(p.bear_fence_title)}</div>
+          <div>${p.bear_fence_task_id
+            ? `<a href="https://app.breezeway.io/task/${esc(String(p.bear_fence_task_id))}" target="_blank" rel="noopener"
+                 class="text-gray-500 hover:text-indigo-600 hover:underline"
+                 title="Open the bear fence task in Breezeway">${esc(p.bear_fence_title)}</a>`
+            : esc(p.bear_fence_title)}</div>
           <div class="text-gray-700 font-semibold whitespace-nowrap" style="margin-top:2px;">${_fmtDate(p.bear_fence_date)}</div>
         </td>
         <td class="px-4 py-3 font-semibold text-indigo-600 whitespace-nowrap">${_fmtDate(p.bear_fence_date)}</td>

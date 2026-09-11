@@ -285,12 +285,19 @@ def bear_fence_scan():
             proposals.append({
                 "task_id":          wt["id"],
                 "property":         prop_name,
+                # The pid and the bear fence task's own id travel with the proposal so
+                # the page can link the property to its Breezeway calendar and each
+                # task to itself, the way every other check does. Reviewing a date move
+                # means looking at what else is on that house that day; without these
+                # the only route there was copying a house name into Breezeway's search.
+                "property_id":      pid,
                 "task_title":       wt["title"],
                 "task_type":        "Walk Thru",
                 "current_date":     wt["date"],
                 "assignees":        wt.get("assignees", []),
                 "bear_fence_title": bf_match["title"],
                 "bear_fence_date":  bf_match["date"],
+                "bear_fence_task_id": bf_match["id"],
             })
 
         # Arrival Hot Tub Service tasks
@@ -305,12 +312,14 @@ def bear_fence_scan():
             proposals.append({
                 "task_id":          hts["id"],
                 "property":         prop_name,
+                "property_id":      pid,
                 "task_title":       hts["title"],
                 "task_type":        "Arrival Hot Tub Service",
                 "current_date":     hts["date"],
                 "assignees":        hts.get("assignees", []),
                 "bear_fence_title": bf_match["title"],
                 "bear_fence_date":  bf_match["date"],
+                "bear_fence_task_id": bf_match["id"],
             })
 
     # Sort: by property then current date
