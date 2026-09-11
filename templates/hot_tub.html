@@ -39,10 +39,19 @@
   <div id="warnBox" class="hidden rounded-xl px-5 py-3 text-amber-700 text-sm mb-4"
        style="background:#fffbeb; border:1px solid #fde68a;"></div>
 
+  <!-- What the scan could NOT read. This page answers from ABSENCE twice over: a
+       property whose TAGS failed drops out of the tagged set entirely and looks
+       like a house with no hot tub, and a property whose TASKS failed has no
+       service history and used to be reported as overdue. Both had to be said
+       out loud before any of the numbers below can be trusted. -->
+  <div id="warnBox2" class="hidden rounded-xl px-5 py-3 text-sm mb-4 leading-snug"
+       style="background:#fef2f2; border:1px solid #fecaca; color:#b91c1c;"></div>
+
   <!-- Summary -->
-  <div id="summary" class="hidden rounded-xl border border-gray-200 bg-white px-5 py-3 mb-5 flex gap-6 text-sm">
+  <div id="summary" class="hidden rounded-xl border border-gray-200 bg-white px-5 py-3 mb-5 flex gap-6 text-sm flex-wrap">
     <div><span id="sumOverdue" class="font-bold text-red-600">—</span> <span class="text-gray-400">overdue</span></div>
     <div><span id="sumOk"      class="font-bold text-green-600">—</span> <span class="text-gray-400">up to date</span></div>
+    <div id="sumUnreadableWrap" class="hidden"><span id="sumUnreadable" class="font-bold text-amber-600">—</span> <span class="text-gray-400">couldn't be read</span></div>
     <div><span id="sumTotal"   class="font-bold text-gray-700">—</span> <span class="text-gray-400">total properties</span></div>
   </div>
 
@@ -193,17 +202,48 @@ function renderTooClose(items) {
   });
 }
 
-async function runScan() {
+/* "Re-read just the missing N" used to be a plain rescan. Those N failed because
+   Breezeway was refusing us, and asking again in the same second is the one thing
+   that cannot work — the retry comes straight back with the same count, which is
+   indistinguishable from the button doing nothing. Wait out a short cooldown
+   first, and say so while waiting. */
+const _RETRY_COOLDOWN_S = 6;
+
+async function retryMissing(btn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  for (let s = _RETRY_COOLDOWN_S; s > 0; s--) {
+    btn.textContent = `Waiting ${s}s for Breezeway to ease off…`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  btn.textContent = 'Re-reading the missing ones…';
+  try {
+    await runScan(true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function runScan(retryFailed = false) {
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('summary').classList.add('hidden');
   document.getElementById('errorBox').classList.add('hidden');
   document.getElementById('warnBox').classList.add('hidden');
+  // Clear the previous run's failure banner, or a clean scan inherits its alarm.
+  document.getElementById('warnBox2').classList.add('hidden');
+  document.getElementById('warnBox2').innerHTML = '';
   document.getElementById('results').innerHTML = '';
   document.getElementById('tooCloseSection').classList.add('hidden');
   document.getElementById('tooCloseResults').innerHTML = '';
 
   try {
-    const resp = await fetch('/admin/hot-tub/scan', { method: 'POST' });
+    const resp = await fetch('/admin/hot-tub/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ retry_failed: !!retryFailed }),
+    });
     const rawBody = await resp.text();
     document.getElementById('loading').classList.add('hidden');
 
@@ -234,56 +274,131 @@ async function runScan() {
       wb.classList.remove('hidden');
     }
 
-    const items   = data.results || [];
-    const overdue = items.filter(r => r.overdue).length;
+    // Say what could NOT be read BEFORE any of the counts below, because every
+    // one of them is understated by exactly the properties that failed.
+    if (data.failed_properties && typeof bwFailureCause === 'function') {
+      const f  = bwFailureCause(data);
+      const wb = document.getElementById('warnBox2');
+      // The two failures have different consequences, so name them separately —
+      // "couldn't be loaded" alone doesn't tell you a house may have dropped off
+      // SLA tracking entirely.
+      const parts = [];
+      if (data.tag_failed_properties) {
+        parts.push(`<li><b>${data.tag_failed_properties}</b> couldn't be checked for a hot tub tag — `
+                 + `if any of them have one, it is <b>not on this list at all</b>.</li>`);
+      }
+      if (data.task_failed_properties) {
+        parts.push(`<li><b>${data.task_failed_properties}</b> are known hot tub properties whose service `
+                 + `history couldn't be read — shown below as “couldn't be read”, not as overdue.</li>`);
+      }
+      wb.innerHTML =
+        `<div style="font-weight:700;">${f.text}</div>`
+        + (parts.length ? `<ul style="margin:6px 0 0 18px;list-style:disc;">${parts.join('')}</ul>` : '')
+        + (f.retry
+             ? `<div style="margin-top:6px;">`
+               + `<button onclick="retryMissing(this)" style="text-decoration:underline;font-weight:700;`
+               + `color:#b91c1c;background:none;border:none;padding:0;cursor:pointer;font:inherit;">`
+               + `👉 Re-read just the missing ${data.failed_properties}</button>`
+               + ` — asks about only those, and keeps what already loaded.`
+               + (data.scanned_properties ? ` (${data.scanned_properties} properties checked in total.)` : '')
+               + `</div>`
+             : `<div style="margin-top:6px;">Retrying won't help; this needs a fix in `
+               + `Breezeway or the app's settings.</div>`);
+      wb.classList.remove('hidden');
+    }
+
+    // A short lease list has no per-property remedy: the houses it dropped never
+    // reached the qualifying set, so "re-read just the missing" cannot ask about
+    // them. Only a fresh full scan can.
+    if (data.leases_incomplete) {
+      const wb = document.getElementById('warnBox2');
+      wb.innerHTML += `<div style="margin-top:6px;font-weight:700;">The current-lease list also came back `
+                    + `incomplete${data.leases_status ? ` (${data.leases_status})` : ''}.</div>`
+                    + `<div>Houses that qualify only via a lease plus a plain “Hot Tub” tag may be missing, `
+                    + `and this list can't tell you which. <b>Scan again</b> in a minute.</div>`;
+      wb.classList.remove('hidden');
+    }
+
+    const items      = data.results || [];
+    const unreadable = items.filter(r => r.unreadable);
+    const overdue    = items.filter(r => r.overdue).length;
     document.getElementById('sumOverdue').textContent = overdue;
-    document.getElementById('sumOk').textContent      = items.length - overdue;
+    document.getElementById('sumOk').textContent      = items.length - overdue - unreadable.length;
     document.getElementById('sumTotal').textContent   = items.length;
+    const uWrap = document.getElementById('sumUnreadableWrap');
+    document.getElementById('sumUnreadable').textContent = unreadable.length;
+    uWrap.classList.toggle('hidden', unreadable.length === 0);
     document.getElementById('summary').classList.remove('hidden');
 
     const handled   = _getHandled();
     const container = document.getElementById('results');
 
-    // Only show overdue properties — the up-to-date ones are just noise
-    // (their count is still in the summary above).
-    const overdueItems = items.filter(r => r.overdue);
-    if (!overdueItems.length) {
+    // Show overdue properties AND the ones we couldn't read — the up-to-date
+    // ones are just noise (their count is still in the summary above).
+    // Unreadable houses must never be filtered out here: they are precisely the
+    // ones whose status nobody knows, and hiding them is what let a throttled
+    // scan pass for a clean one.
+    const shownItems = items.filter(r => r.overdue || r.unreadable);
+    if (!shownItems.length) {
       container.innerHTML = `<div style="text-align:center;color:#16a34a;font-size:0.9rem;padding:32px;">✓ Nothing overdue — all ${items.length} properties are up to date.</div>`;
+    } else if (!overdue) {
+      // Every card below is an unreadable house, so don't let the page imply the
+      // portfolio is clean — nothing was actually judged.
+      container.innerHTML = `<div style="text-align:center;color:#b45309;font-size:0.9rem;padding:0 0 12px;">`
+        + `Nothing was found overdue, but ${unreadable.length} propert${unreadable.length === 1 ? 'y' : 'ies'} `
+        + `couldn't be read — this is not an all-clear.</div>`;
     }
-    overdueItems.forEach(r => {
+    shownItems.forEach(r => {
       const isOverdue = r.overdue;
-      const daysText  = r.days_since === null
-        ? 'No service found in last 45 days'
-        : `${r.days_since} day${r.days_since !== 1 ? 's' : ''} ago`;
+      const daysText  = r.unreadable
+        ? "Service history couldn't be read — status unknown"
+        : (r.days_since === null
+            ? 'No service found in last 45 days'
+            : `${r.days_since} day${r.days_since !== 1 ? 's' : ''} ago`);
+
+      // Three states, not two. An unreadable house is neither overdue nor OK, and
+      // painting it green with a "✓ OK" badge would assert exactly the thing the
+      // scan failed to establish.
+      const tone = r.unreadable
+        ? { border: '#fde68a', bg: '#fffbeb', fg: '#b45309', badge: '? UNKNOWN' }
+        : (isOverdue
+            ? { border: '#fecaca', bg: '#fef2f2', fg: '#dc2626', badge: '⚠ OVERDUE' }
+            : { border: '#bbf7d0', bg: '#f0fdf4', fg: '#16a34a', badge: '✓ OK' });
 
       const card = document.createElement('div');
       card.className = 'ht-card';
       card.style.cssText = `
         border-radius:10px; padding:14px 16px; transition:opacity 0.2s;
-        border:1px solid ${isOverdue ? '#fecaca' : '#bbf7d0'};
-        background:${isOverdue ? '#fef2f2' : '#f0fdf4'};
+        border:1px solid ${tone.border};
+        background:${tone.bg};
       `;
       card.innerHTML = `
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
           <div style="flex:1;min-width:0;">
             <div style="font-weight:600;font-size:0.9rem;color:#1f2937;">${esc(r.property)}${_calLink(r.property, r.property_id)}</div>
             <div style="font-size:0.78rem;color:#6b7280;margin-top:3px;">
-              Last: ${r.last_task ? esc(r.last_task) : '<em>none found</em>'}
+              ${r.unreadable
+                 ? 'Breezeway did not return this property&rsquo;s tasks — it may or may not be overdue.'
+                 : `Last: ${r.last_task ? esc(r.last_task) : '<em>none found</em>'}`}
             </div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
-            <div style="font-size:0.8rem;font-weight:600;color:${isOverdue ? '#dc2626' : '#16a34a'};">
-              ${isOverdue ? '⚠ OVERDUE' : '✓ OK'}
+            <div style="font-size:0.8rem;font-weight:600;color:${tone.fg};">
+              ${tone.badge}
             </div>
             <div style="font-size:0.75rem;color:#6b7280;text-align:right;">
-              ${_fmtDate(r.last_date)} · ${daysText}
+              ${r.unreadable ? daysText : `${_fmtDate(r.last_date)} · ${daysText}`}
             </div>
-            <button class="handled-btn" data-prop="${esc(r.property)}"
+            ${r.unreadable
+               // No "Mark handled" here: there is nothing to handle, and marking it
+               // would hide a house whose status is still unknown. It needs a retry.
+               ? ''
+               : `<button class="handled-btn" data-prop="${esc(r.property)}"
                     onclick="toggleHandled(this)"
                     style="font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:99px;cursor:pointer;
                            background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;">
               Mark handled
-            </button>
+            </button>`}
           </div>
         </div>
       `;
