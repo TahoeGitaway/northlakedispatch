@@ -173,8 +173,20 @@ async function runScan(retryFailed = false) {
     document.getElementById('loading').classList.add('hidden');
 
     if (data.error) {
+      // app.py's handler already sends the exception's file:line in
+      // diagnostics.where; this box showed only the message and dropped it. A
+      // bare "ValueError: not enough values to unpack (expected 4, got 3)" names
+      // the shape of the fault and not one thing about where it came from, so
+      // finding it meant grepping every four-value unpack in the app and guessing
+      // which one ran. occupancy_check.html surfaces the same field for the same
+      // reason — a wrong, confident explanation costs more time than no answer.
       const eb = document.getElementById('errorBox');
-      eb.textContent = data.error;
+      const d  = data.diagnostics || null;
+      eb.innerHTML = esc(data.error)
+        + (d && d.where ? `<div class="text-xs text-red-500" style="margin-top:6px;">`
+                          + `Raised in ${esc(d.where)}`
+                          + (d.endpoint ? ` · ${esc(d.endpoint)}` : ``)
+                          + `</div>` : ``);
       eb.classList.remove('hidden');
       return;
     }
