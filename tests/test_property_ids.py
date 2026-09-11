@@ -363,12 +363,18 @@ class SiblingSweeperTests(unittest.TestCase):
                 "scheduled_date": "2026-08-30",
                 "property_id": 326417, "home_id": 858240}
 
+        # Both helpers report failure alongside their payload now:
+        # _fetch_tasks_for_property gives (tasks, ok, status) and the sweeper
+        # gives (tasks, failed_pids, statuses). Binding all of it pins the arity,
+        # which is the half that silently drifted last time.
         with mock.patch.object(pri_rename, "_fetch_tasks_for_property",
-                               return_value=[task]), \
+                               return_value=([task], True, 200)), \
              mock.patch("routes.briefing._get_live_ref_cache", return_value={}):
-            tasks = pri_rename._fetch_tasks_for_pids(
+            tasks, failed_pids, statuses = pri_rename._fetch_tasks_for_pids(
                 "tok", ["858240"], date(2026, 8, 29), date(2026, 9, 5))
 
+        self.assertEqual(failed_pids, [])
+        self.assertEqual(statuses, {})
         self.assertEqual(tasks[0]["_swept_pid"], "858240")
 
     def test_the_shared_briefing_sweeper_stamps_too(self):

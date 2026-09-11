@@ -33,8 +33,17 @@ BW_BASE = "https://api.breezeway.io"
 # Per date-range scan cache — survives a proxy timeout so a retry is instant.
 import time as _time
 from routes.bw_api_log import bw_get, bw_patch
-_scan_cache: dict = {}      # (start_iso, end_iso) -> (timestamp, result_dict)
+# (start_iso, end_iso) -> (ts, result, tasks, failed_pids, owner_arrivals, pids)
+# The TASKS and the FAILED PIDS are held, not just the finished payload — that is
+# what makes "re-read just the missing N" possible. Holding only the payload left
+# nothing to merge into and nothing to narrow to, so the only available remedy
+# was re-reading every property.
+_scan_cache: dict = {}
 _SCAN_TTL = 90
+# How long the failed-pid list stays usable for a narrow retry. After this a
+# retry has nothing to narrow to and must fall back to a full sweep, which the
+# scan route refuses to do silently.
+_RETRY_WINDOW = 900         # 15 minutes
 
 # How far ahead to look for the next owner/hold/block arrival — it can be well
 # beyond the inspection's own date.
@@ -75,7 +84,22 @@ def _build_proposed_title(title: str, arrival: date) -> str:
     return f"{_strip_trailing_date(title)} for {arrival.month}/{arrival.day}"
 
 
-def _fetch_tasks_for_property(token, pid, ref_id, start, end):
+def _fetch_tasks_for_property(token, pid, ref_id, start, end) -> tuple:
+    """One property's tasks. Returns (tasks, ok, status).
+
+    ok=False means the lookup FAILED, and the empty list must not be read as
+    "this property has no PRI task". Every failure here — a 429, a timeout, a
+    rejected token — used to be swallowed by `except Exception: pass` and
+    returned as [], identical to a house that genuinely had nothing scheduled.
+    Under throttling this tool therefore proposed fewer renames than it should
+    and looked complete: a real inspection went un-renamed with nothing on
+    screen to say a third of the properties had never loaded.
+
+    `status` is the last failing HTTP status, or None for a timeout/transport
+    error, so the page can name the cause instead of guessing.
+    """
+    from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
+
     date_range = f"{start.isoformat()},{end.isoformat()}"
     id_pairs = []
     if ref_id:
@@ -85,7 +109,15 @@ def _fetch_tasks_for_property(token, pid, ref_id, start, end):
     # house a guaranteed-failed request before the one that works. Kept last
     # rather than deleted: cheap insurance if home_id ever fails too.
     id_pairs += [("home_id", pid), ("property_id", pid)]
+
+    saw_empty_200 = False
+    last_status = None
     for key, val in id_pairs:
+        # Pace it. This module has never gone through the gate, so its 16-worker
+        # sweep ignored the shared budget entirely and competed with every other
+        # Breezeway caller in the process.
+        if not gate.acquire():
+            return [], False, LOCAL_THROTTLE_STATUS
         try:
             r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/task/",
@@ -93,27 +125,73 @@ def _fetch_tasks_for_property(token, pid, ref_id, start, end):
                 params={"scheduled_date": date_range, key: val, "limit": 100},
                 timeout=15,
             )
+            gate.on_response(r.status_code)
+            last_status = r.status_code
+            # Trying the next id space after a 429 is pointless and actively
+            # harmful: the refusal is about RATE, not about which id we asked
+            # with, so the remaining attempts are guaranteed to be refused too.
+            # That tripled the cost of exactly the properties already being
+            # throttled, which is what makes a retry re-fail on contact.
+            if r.status_code == 429 or r.status_code >= 500:
+                return [], False, r.status_code
             if r.status_code == 200:
                 body = r.json()
                 results = body.get("results", body.get("data", body if isinstance(body, list) else []))
                 if results:
-                    return results
+                    return results, True, 200
+                # A 200 with nothing may just mean we asked in the wrong id
+                # space, so try the remaining keys — but remember something
+                # did answer, so an all-empty sweep is a real "nothing here".
+                saw_empty_200 = True
         except Exception:
-            pass
-    return []
+            # Also stop here. Each attempt carries a 15s timeout, so walking the
+            # remaining id spaces after one has already hung costs up to 45s on a
+            # single property — and a hanging API is not more likely to answer
+            # the same question asked a different way.
+            return [], False, None      # timeout / transport, not an HTTP status
+
+    if saw_empty_200:
+        return [], True, 200
+    return [], False, last_status
 
 
-def _fetch_tasks_for_pids(token, pids, start, end):
+def _fetch_tasks_for_pids(token, pids, start, end) -> tuple:
+    """Sweep many properties. Returns (tasks, failed_pids, failure_statuses).
+
+    failed_pids is WHICH properties could not be read, not just how many — that
+    is what lets a retry ask about only those instead of re-sweeping everything.
+    A full re-sweep of the owner-arrival set is precisely what provokes the 429s
+    it is trying to recover from, so without this the retry recreates the
+    failure and never converges.
+
+    failure_statuses is the {"429": n, "timeout": n} tally static/bw-failure.js
+    turns into a sentence — the same shape every other scan in the app returns.
+    """
     from routes.briefing import _get_live_ref_cache, _ref_for
     ref_cache = _get_live_ref_cache()
     all_tasks, seen = [], set()
+    failed_pids: list = []
+    statuses: dict = {}
     with ThreadPoolExecutor(max_workers=16) as ex:
         # _ref_for, not ref_cache.get — str pids against an int-keyed cache.
         futures = {ex.submit(_fetch_tasks_for_property, token, pid, _ref_for(ref_cache, pid), start, end): pid
                    for pid in pids}
         for fut in as_completed(futures):
             pid = futures[fut]
-            for t in (fut.result() or []):
+            try:
+                tasks, ok, status = fut.result()
+            except Exception:
+                # The helper catches its own errors, so this is a worker that
+                # died some other way. Record it rather than let it vanish.
+                failed_pids.append(pid)
+                statuses["timeout"] = statuses.get("timeout", 0) + 1
+                continue
+            if not ok:
+                failed_pids.append(pid)
+                key = "timeout" if status is None else str(status)
+                statuses[key] = statuses.get(key, 0) + 1
+                continue
+            for t in (tasks or []):
                 tid = t.get("id")
                 if tid is None or tid not in seen:
                     if tid is not None:
@@ -127,12 +205,30 @@ def _fetch_tasks_for_pids(token, pids, start, end):
                     # here; don't rediscover it. Same fix as walk_thru_rename.
                     t["_swept_pid"] = str(pid)
                     all_tasks.append(t)
-    return all_tasks
+    return all_tasks, failed_pids, statuses
 
 
-def _fetch_reservations_range(token, start, end):
+def _fetch_reservations_range(token, start, end) -> tuple:
+    """Every owner/hold/block arrival in the window. Returns
+    (reservations, complete, status).
+
+    complete=False means pagination stopped early — a throttle, a bad status or
+    a timeout — and the list is SHORT by an unknown amount. That is a different
+    failure from a property whose tasks wouldn't load, and it has no
+    per-property remedy: the houses it lost never make it into the pid list, so
+    "re-read just the failed ones" cannot ask about them. The caller has to say
+    the arrival list itself is incomplete.
+
+    Every `break` below used to be indistinguishable from a clean end of
+    pagination, so a throttled first page produced an empty arrival map and the
+    scan cheerfully reported nothing to rename.
+    """
+    from routes.bw_ratelimit import gate, LOCAL_THROTTLE_STATUS
+
     all_results, page = [], 1
     while True:
+        if not gate.acquire():
+            return all_results, False, LOCAL_THROTTLE_STATUS
         try:
             r = bw_get(
                 f"{BW_BASE}/public/inventory/v1/reservation",
@@ -142,19 +238,20 @@ def _fetch_reservations_range(token, start, end):
                         "limit": 100, "page": page},
                 timeout=20,
             )
+            gate.on_response(r.status_code)
             if r.status_code != 200:
-                break
+                return all_results, False, r.status_code
             body = r.json()
             results = body.get("results", body.get("data", []))
             if not results:
-                break
+                break                      # genuine end of pagination
             all_results.extend(results)
             if len(results) < 100:
-                break
+                break                      # last (partial) page — complete
             page += 1
         except Exception:
-            break
-    return all_results
+            return all_results, False, None
+    return all_results, True, 200
 
 
 def _patch_task_name(token, task_id, new_name, meta: dict = None):
@@ -210,30 +307,67 @@ def pri_rename_scan():
         start, end = today, today + timedelta(days=30)
 
     ck     = (start.isoformat(), end.isoformat())
+    force  = bool(body.get("force"))
+    # "Re-read just the missing N" — ask about ONLY the properties that failed
+    # last time and merge them into what already loaded. A plain rescan re-reads
+    # every property, which is the expensive thing the user is trying to avoid
+    # and the thing most likely to earn another round of 429s.
+    retry_failed = bool(body.get("retry_failed"))
     cached = _scan_cache.get(ck)
-    if cached and not body.get("force") and _time.time() - cached[0] < _SCAN_TTL:
+    if cached and not force and not retry_failed and _time.time() - cached[0] < _SCAN_TTL:
         return jsonify(cached[1])
 
-    # Homeowner / hold / block arrivals across a wide forward window (the next such
-    # arrival can be well past the inspection date). Holds fold into "block".
-    reservations = _fetch_reservations_range(token, start, end + timedelta(days=LOOKAHEAD_DAYS))
-    owner_arrivals = {}    # pid -> sorted [date]
-    for r in reservations:
-        if _classify_reservation(r) not in ("owner", "block"):
-            continue
-        pid     = str(r.get("property_id") or r.get("home_id") or "")
-        checkin = r.get("checkin_date") or ""
-        if pid and checkin:
-            try:
-                owner_arrivals.setdefault(pid, []).append(date.fromisoformat(checkin[:10]))
-            except ValueError:
-                pass
-    for pid in owner_arrivals:
-        owner_arrivals[pid].sort()
+    held_tasks, retry_pids, owner_arrivals, pids = [], None, None, None
+    if retry_failed and cached and _time.time() - cached[0] < _RETRY_WINDOW:
+        # cached = (ts, result, tasks, failed_pids, owner_arrivals, pids)
+        held_tasks     = list(cached[2])
+        retry_pids     = list(cached[3])
+        owner_arrivals = cached[4]
+        pids           = cached[5]
+    if retry_failed and not retry_pids:
+        # Never let "just the missing ones" silently become a full re-sweep —
+        # that is the expensive call this exists to avoid. Say so instead.
+        return jsonify({"error": "The list of which properties failed has expired. "
+                                 "Scan again to do a full re-check."})
 
-    # Only scan properties that actually have an upcoming owner/hold/block arrival.
-    pids  = list(owner_arrivals.keys())
-    tasks = _fetch_tasks_for_pids(token, pids, start, end) if pids else []
+    # True unless THIS run fetched the reservations and came up short. A cached
+    # arrival map is complete by construction — an incomplete one is never cached.
+    reso_complete, reso_status = True, 200
+    if owner_arrivals is None:
+        # Homeowner / hold / block arrivals across a wide forward window (the next
+        # such arrival can be well past the inspection date). Holds fold into "block".
+        reservations, reso_complete, reso_status = _fetch_reservations_range(
+            token, start, end + timedelta(days=LOOKAHEAD_DAYS))
+        owner_arrivals = {}    # pid -> sorted [date]
+        for r in reservations:
+            if _classify_reservation(r) not in ("owner", "block"):
+                continue
+            pid     = str(r.get("property_id") or r.get("home_id") or "")
+            checkin = r.get("checkin_date") or ""
+            if pid and checkin:
+                try:
+                    owner_arrivals.setdefault(pid, []).append(date.fromisoformat(checkin[:10]))
+                except ValueError:
+                    pass
+        for pid in owner_arrivals:
+            owner_arrivals[pid].sort()
+        # Only scan properties that actually have an upcoming owner/hold/block arrival.
+        pids = list(owner_arrivals.keys())
+
+    # A retry sweeps ONLY what failed; a normal scan sweeps them all.
+    sweep_pids = retry_pids if retry_pids else pids
+    new_tasks, failed_pids, failure_statuses = (
+        _fetch_tasks_for_pids(token, sweep_pids, start, end) if sweep_pids
+        else ([], [], {}))
+
+    # Merge, de-duplicating by task id so a retry cannot double-add.
+    tasks, _seen = list(held_tasks), {t.get("id") for t in held_tasks if t.get("id") is not None}
+    for t in new_tasks:
+        tid = t.get("id")
+        if tid is None or tid not in _seen:
+            if tid is not None:
+                _seen.add(tid)
+            tasks.append(t)
 
     # Where the tasks went. Without this, "no PRIs to rename" and "every task was
     # silently discarded" are the same sentence on screen — which is exactly how
@@ -285,9 +419,30 @@ def pri_rename_scan():
         })
 
     proposals.sort(key=lambda x: x["task_date"])
-    # funnel travels with the result so an empty list can explain itself.
-    result = {"proposals": proposals, "funnel": funnel}
-    _scan_cache[ck] = (_time.time(), result)
+    # funnel travels with the result so an empty list can explain itself, and the
+    # failure fields travel with it so an empty list cannot be MISTAKEN for one.
+    # Without these the page can only ever say "here are your proposals" — never
+    # "and 57 properties never loaded", which is how a real inspection went
+    # un-renamed without a trace.
+    result = {"proposals":          proposals,
+              "funnel":             funnel,
+              "failed_properties":  len(failed_pids),
+              "failure_statuses":   failure_statuses,
+              "scanned_properties": len(pids)}
+    # A short reservation list is a DIFFERENT failure and has no per-property
+    # remedy — the houses it lost never reached the pid list, so a narrow retry
+    # cannot ask about them. Report it separately so the page can say the
+    # arrival list itself is incomplete.
+    if not reso_complete:
+        result["reservations_incomplete"] = True
+        result["reservations_status"]     = reso_status
+    # Never cache a run built on a short arrival list: caching it would pin the
+    # truncated pid set for the next 90 seconds, so scanning again — the one move
+    # that could recover the missing houses — would replay the same gap instantly
+    # and look like confirmation.
+    if reso_complete:
+        _scan_cache[ck] = (_time.time(), result, tasks, failed_pids,
+                           owner_arrivals, pids)
     return jsonify(result)
 
 
