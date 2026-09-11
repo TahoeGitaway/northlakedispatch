@@ -1,7 +1,7 @@
 """
 routes/bw_comments.py — Breezeway task-comment @mention alerts.
 
-Receives Breezeway 'task' webhooks (which fire on task-comment-created among
+Receives Breezeway 'task' webhooks (which fire on task-comment-updated among
 other task events), matches each new comment against a set of name/keyword
 rules, and drops a per-user banner alert for every matched recipient. Surfaced
 in base.html via /api/bw-mentions — same shape as the PRI and Asana banners.
@@ -13,6 +13,13 @@ pushes the whole task — with its comments — on each comment event, so we
 subscribe once (POST /public/webhook/v1/subscribe, webhook_type "task") and do
 all matching here.
 
+WHY EVENT NAMES DON'T MATTER HERE: we subscribe by webhook_type and never branch
+on the event name in the payload — event_type is recorded in
+bw_comment_webhook_log for inspection only. So Breezeway's 2026-09-02 correction
+to their documented event names (task-comment-created -> task-comment-updated,
+task-supplies-updated -> task-supply-updated, and task-completed never being sent
+at all — completion arrives as task-updated) needed no handler changes here.
+
 WHY IT'S DEFENSIVE: Breezeway documents the TaskComment fields (comment / id /
 created_at / comment_by) but ships no real example of the delivered envelope,
 and the observer webhook re-sends the ENTIRE task (all its comments) on every
@@ -21,7 +28,10 @@ event. So:
     single top-level comment / data.comments).
   - every raw payload is logged to bw_comment_webhook_log for inspection.
   - a freshness guard drops comments older than FRESH_DAYS so a new comment on
-    an old task doesn't backfill its whole history as "new" alerts.
+    an old task doesn't backfill its whole history as "new" alerts. It keys off
+    created_at, so an EDIT that adds a mention to a comment older than
+    FRESH_DAYS won't alert (task-comment-updated fires on edits as well as new
+    comments).
   - item_key "<comment_id>::<user_id>" + ON CONFLICT DO NOTHING dedupes
     re-delivery and never resurrects a dismissed alert.
 

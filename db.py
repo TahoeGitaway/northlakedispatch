@@ -285,7 +285,7 @@ def init_db():
                 "ON bw_comment_alerts (recipient_user_id, dismissed_at)")
 
     # Raw webhook payload capture (capped to the newest ~100 rows). The exact
-    # task-comment-created envelope isn't documented with a real example, so we
+    # task-comment-updated envelope isn't documented with a real example, so we
     # keep the raw bodies to inspect real shapes and tighten extraction/matching.
     cur.execute("""CREATE TABLE IF NOT EXISTS bw_comment_webhook_log (
         id          SERIAL PRIMARY KEY,
