@@ -764,9 +764,31 @@ def chatbot_chat():
         else:
             knowledge_section = ""
 
-        system_prompt = (
-            f"You are the TG Operations Bot for Tahoe Getaways, a vacation rental company in Lake Tahoe. "
-            f"You are talking to {user_name}. Today's date is {today_str}.\n\n"
+        # ── Split into two system blocks so the expensive half can be cached ──
+        #
+        # Prompt caching is a PREFIX match: everything up to the cache_control
+        # breakpoint is reused, and a single changed byte BEFORE it invalidates the
+        # whole thing. So the stable half goes first and carries the breakpoint, and
+        # anything that varies per request lands after it, uncached.
+        #
+        # The knowledge base is the entire point. It is ~42K tokens rebuilt from the
+        # DB and re-sent on EVERY message, and it was being charged at full input
+        # price every single time — about $0.04 a message on Haiku, paid again on
+        # each turn of the same conversation.
+        #
+        # Deliberately NOT in the cached block, though they read naturally at the top:
+        #   user_name  — varies per person, so caching it would split the cache per user
+        #   today_str  — rolls at midnight, invalidating the prefix for everyone
+        # Both moved below the breakpoint. They cost a handful of tokens uncached;
+        # in the cached block they would cost the whole 42K.
+        #
+        # ttl "1h" rather than the 5m default: the TTL refreshes on every hit, so an
+        # active conversation keeps renewing its own hour and never expires mid-chat.
+        # A write costs 2x base input against 1.25x for 5m, and a read is 0.1x — so it
+        # pays for itself on the second message and saves ~10x from there. The only
+        # fresh writes are a full idle hour, or an edit to the knowledge base.
+        system_stable = (
+            "You are the TG Operations Bot for Tahoe Getaways, a vacation rental company in Lake Tahoe.\n\n"
             "HOW TO ANSWER:\n"
             "- For questions about specific properties, reservations, schedules, or company SOPs: "
             "use the knowledge base and loaded Breezeway data below as your primary source.\n"
@@ -830,12 +852,23 @@ def chatbot_chat():
             "POST RENTAL INSPECTION (PRI):\n"
             "Required when a short-term GUEST (<30 days) checks out AND the next reservation at that "
             "property is OWNER or BLOCK. Also required if no upcoming reservation within 60 days (vacancy PRI).\n"
-            "Flagged in Breezeway by adding 'owner next' tag to the incoming OWNER/BLOCK booking.\n\n"
+            "Flagged in Breezeway by adding 'owner next' tag to the incoming OWNER/BLOCK booking.\n"
+        )
+
+        # Everything below the breakpoint: changes per request, so it is never cached.
+        system_volatile = (
+            f"You are talking to {user_name}. Today's date is {today_str}.\n\n"
             "LOADED DATA (routes + arrivals + departures for selected dates):\n"
             + "\n".join(context_blocks)
             + "\n\nYou also have a tool — fetch_reservation_data — to look up Breezeway data "
             "for any other date range the user asks about."
         )
+
+        system_prompt = [
+            {"type": "text", "text": system_stable,
+             "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": system_volatile},
+        ]
 
         def _trunc_for_history(content, limit=6000):
             # Was 800 — far too small for a multi-property task result, so the model lost the
@@ -852,6 +885,12 @@ def chatbot_chat():
         trimmed           = _safe_trim(messages, 12)
         history_additions = []
         reply_text        = ""
+        # Cache accounting, summed across every turn of this request. Reported in the
+        # "done" event so the cache can be verified from the browser's network tab
+        # instead of waiting on the Console: cache_read should be ~0 on the first
+        # message of a conversation and roughly the knowledge-base size on each one
+        # after. If it stays 0, something above the breakpoint is changing per request.
+        cache_usage       = {"cache_read": 0, "cache_write": 0, "uncached_in": 0}
         # Scope signatures we've already challenged this request. A confirmed=true that reuses
         # one is the model self-approving without a fresh user reply — we re-challenge it.
         pending_confirm   = set()
@@ -874,6 +913,14 @@ def chatbot_chat():
                         yield sse({"type": "delta", "text": chunk})
 
                     final_msg = stream.get_final_message()
+
+                try:
+                    _u = final_msg.usage
+                    cache_usage["cache_read"]  += getattr(_u, "cache_read_input_tokens", 0) or 0
+                    cache_usage["cache_write"] += getattr(_u, "cache_creation_input_tokens", 0) or 0
+                    cache_usage["uncached_in"] += getattr(_u, "input_tokens", 0) or 0
+                except Exception:
+                    pass
 
                 if final_msg.stop_reason == "tool_use":
                     for b in final_msg.content:
@@ -989,6 +1036,7 @@ def chatbot_chat():
                 "history_additions": history_additions,
                 "context_summary":   context_summary,
                 "kb_count":          len(knowledge_rows),
+                "cache":             cache_usage,
             })
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
