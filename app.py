@@ -73,6 +73,7 @@ from routes.bw_comments           import bw_comments_bp
 from routes.bw_probe              import bw_probe_bp   # admin-only Breezeway capability probe
 from routes.bw_audit              import bw_audit_bp   # log of every write this app makes to Breezeway
 from routes.bw_api_log            import bw_api_log_bp # log of every Breezeway request, ok or failed
+from routes.bw_task_events        import bw_task_events_bp # raw task-webhook capture (temporary diagnostic)
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(admin_bp)
@@ -105,6 +106,7 @@ app.register_blueprint(bw_comments_bp)
 app.register_blueprint(bw_probe_bp)
 app.register_blueprint(bw_audit_bp)
 app.register_blueprint(bw_api_log_bp)
+app.register_blueprint(bw_task_events_bp)
 
 # ── Init DB ───────────────────────────────────────────────────────
 with app.app_context():

@@ -285,7 +285,7 @@ def init_db():
                 "ON bw_comment_alerts (recipient_user_id, dismissed_at)")
 
     # Raw webhook payload capture (capped to the newest ~100 rows). The exact
-    # task-comment-updated envelope isn't documented with a real example, so we
+    # task-comment-created envelope isn't documented with a real example, so we
     # keep the raw bodies to inspect real shapes and tighten extraction/matching.
     cur.execute("""CREATE TABLE IF NOT EXISTS bw_comment_webhook_log (
         id          SERIAL PRIMARY KEY,
@@ -293,6 +293,42 @@ def init_db():
         event_type  TEXT DEFAULT '',
         payload     TEXT NOT NULL DEFAULT ''
     )""")
+
+    # Raw Breezeway 'task' webhook capture — a TEMPORARY DIAGNOSTIC, not a
+    # feature (see routes/bw_task_events.py). Purpose: learn the real delivered
+    # envelope, above all the shape of `status` — documented as a TypeTaskStatus
+    # object with code/id/name, while spi.py assumes a bare string.
+    #
+    # Deliberately NOT shared with bw_comment_webhook_log: that table belongs to
+    # the comment @mention receiver, and this capture must not compete with it,
+    # evict its rows, or give anyone a reason to touch that feature.
+    #
+    # WHY A PER-EVENT QUOTA rather than one global cap: this account's task feed
+    # is already consumed by a third-party vendor and task-updated dominates it,
+    # so a newest-N cap would evict the rare events we most want (task-started,
+    # task-paused, task-cost-updated) within minutes of them arriving.
+    #
+    # status_raw_type records the observed type of the status node
+    # (object|string|int|missing|other:<t>) — that one column is the answer this
+    # table exists to collect. payload_bytes is the TRUE body length before
+    # truncation, so a truncated sample is visibly truncated rather than
+    # mistaken for a whole envelope.
+    cur.execute("""CREATE TABLE IF NOT EXISTS bw_task_event_log (
+        id              SERIAL PRIMARY KEY,
+        received_at     TEXT NOT NULL,
+        event_name      TEXT NOT NULL DEFAULT '',
+        task_id         TEXT NOT NULL DEFAULT '',
+        status_raw_type TEXT NOT NULL DEFAULT '',
+        status_code     TEXT NOT NULL DEFAULT '',
+        status_name     TEXT NOT NULL DEFAULT '',
+        status_id       INTEGER,
+        payload_bytes   INTEGER NOT NULL DEFAULT 0,
+        truncated       BOOLEAN NOT NULL DEFAULT FALSE,
+        payload         TEXT NOT NULL DEFAULT ''
+    )""")
+    # Makes the per-event prune bounded instead of a full scan.
+    cur.execute("CREATE INDEX IF NOT EXISTS bw_task_event_log_event_idx "
+                "ON bw_task_event_log (event_name, id DESC)")
 
     # Temporary VIP reservation tracker — checklist + notes per reservation.
     cur.execute("""CREATE TABLE IF NOT EXISTS vip_tracker (
